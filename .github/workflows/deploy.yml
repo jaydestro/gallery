@@ -4,45 +4,50 @@ on:
   push:
     branches:
       - main
+      - feature/gallery-content-automation
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
-  deployments: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: https://azurecosmosdb.github.io/gallery/
     steps:
-      # Checkout source repo
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # Setup Node.js
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: yarn
+          cache: npm
 
-      # Install dependencies
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: npm ci
 
-      # Build the site
       - name: Build website
-        run: yarn build
+        run: npm run build
 
-      # Deploy to gh-pages branch using PAT
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          personal_token: ${{ secrets.GH_PAT }}
-          publish_dir: ./build
-          publish_branch: gh-pages
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
+          path: build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

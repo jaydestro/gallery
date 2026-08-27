@@ -5,14 +5,18 @@
 
 import React from 'react';
 import Head from '@docusaurus/Head';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
 export default function StructuredData() {
+  const {siteConfig} = useDocusaurusContext();
+  const siteUrl = siteConfig.customFields.absoluteSiteUrl as string;
+
   const websiteStructuredData = {
     "@context": "https://schema.org",
     "@type": "WebSite",
     "name": "Azure Cosmos DB Gallery",
     "alternateName": "Cosmos DB Gallery",
-    "url": "https://azurecosmosdb.github.io/gallery/",
+    "url": siteUrl,
     "description": "Your best source for patterns and content for Azure Cosmos DB. Discover 100+ code samples, tutorials, and resources for building AI applications.",
     "publisher": {
       "@type": "Organization",
@@ -20,7 +24,7 @@ export default function StructuredData() {
       "url": "https://microsoft.com",
       "logo": {
         "@type": "ImageObject",
-        "url": "https://azurecosmosdb.github.io/gallery/img/logo.png",
+        "url": `${siteUrl}img/logo.png`,
         "width": 32,
         "height": 32
       }
@@ -29,7 +33,7 @@ export default function StructuredData() {
       "@type": "SearchAction",
       "target": {
         "@type": "EntryPoint",
-        "urlTemplate": "https://azurecosmosdb.github.io/gallery/?tags={search_term_string}"
+        "urlTemplate": `${siteUrl}?tags={search_term_string}`
       },
       "query-input": "required name=search_term_string"
     },
@@ -60,7 +64,7 @@ export default function StructuredData() {
     "@type": "CollectionPage",
     "name": "Azure Cosmos DB Gallery - Code Samples",
     "description": "A curated collection of 100+ code samples for building AI applications with Azure Cosmos DB",
-    "url": "https://azurecosmosdb.github.io/gallery/",
+    "url": siteUrl,
     "about": [
       {
         "@type": "Thing",

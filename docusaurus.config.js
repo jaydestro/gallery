@@ -4,10 +4,22 @@
 import { themes as prismThemes } from "prism-react-renderer";
 import { manageCookieLabel } from "./constants.js";
 
+const repository = process.env.GITHUB_REPOSITORY || "AzureCosmosDB/gallery";
+const [repositoryOwner, repositoryName] = repository.split("/");
+const siteUrl = process.env.SITE_URL || `https://${repositoryOwner.toLowerCase()}.github.io`;
+const baseUrl = process.env.BASE_URL ||
+  (repositoryName.toLowerCase() === `${repositoryOwner.toLowerCase()}.github.io`
+    ? "/"
+    : `/${repositoryName}/`);
+const absoluteSiteUrl = `${siteUrl.replace(/\/$/, "")}${baseUrl}`;
+const repositoryUrl = `https://github.com/${repositoryOwner}/${repositoryName}`;
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   customFields: {
     env: process.env.REACT_APP_GITHUB_TOKEN,
+    absoluteSiteUrl,
+    repositoryUrl,
     description:
       "Your one-stop for everything Azure Cosmos DB. Code samples, docs, videos, decks, etc. Everything in one location. Community contributions are welcome.",
     keywords:
@@ -16,11 +28,11 @@ const config = {
 
   title: "Azure Cosmos DB Gallery",
   tagline: "Discover - Create - Contribute",
-  url: "https://azurecosmosdb.github.io",
-  baseUrl: "/gallery/",
+  url: siteUrl,
+  baseUrl,
   favicon: "img/favicon.ico",
-  organizationName: "azurecosmosdb",
-  projectName: "gallery",
+  organizationName: repositoryOwner,
+  projectName: repositoryName,
   deploymentBranch: "gh-pages",
 
   onBrokenLinks: "throw",
@@ -63,7 +75,7 @@ const config = {
         logo: {
           alt: "Azure Cosmos DB logo",
           src: "img/logo.png",
-          href: "/",
+          href: baseUrl,
           target: "_self",
           width: 32,
           height: 32,
@@ -75,7 +87,7 @@ const config = {
           },
           {
             type: "custom-NavbarButtonGithub",
-            href: "https://github.com/NucleoidJS/Nucleoid",
+            href: repositoryUrl,
             position: "right",
           },
         ],

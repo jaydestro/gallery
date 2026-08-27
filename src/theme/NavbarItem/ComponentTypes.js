@@ -7,6 +7,7 @@ import ComponentTypes from "@theme-original/NavbarItem/ComponentTypes";
 import React from "react";
 import { Button, Image } from "@fluentui/react-components";
 import useBaseUrl from "@docusaurus/useBaseUrl";
+import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import style from "./styles.module.css";
 import { useColorMode } from "@docusaurus/theme-common";
 
@@ -41,6 +42,9 @@ const submitFeedbackButton = () => {
 
 
 const submitStarButton = () => {
+  const {siteConfig} = useDocusaurusContext();
+  const repositoryUrl = siteConfig.customFields.repositoryUrl;
+
    return (
     <Button
       appearance="secondary"
@@ -58,7 +62,7 @@ const submitStarButton = () => {
       className={style.button}
       onClick={() => {
         window.open(
-          "https://github.com/AzureCosmosDB/gallery/",
+          repositoryUrl,
           "_blank"
         );
       }}

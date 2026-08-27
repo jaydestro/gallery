@@ -22,6 +22,7 @@ import { TagList } from "@site/src/data/users";
 import { useLocation } from "@docusaurus/router";
 import { Helmet } from "react-helmet";
 import StructuredData from "@site/src/components/StructuredData";
+import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 
 initializeIcons();
 
@@ -109,6 +110,9 @@ const App = () => {
 
 
 export default function Showcase(): JSX.Element {
+  const {siteConfig} = useDocusaurusContext();
+  const siteUrl = siteConfig.customFields.absoluteSiteUrl as string;
+
   return (
     <>
       <StructuredData />
@@ -120,23 +124,23 @@ export default function Showcase(): JSX.Element {
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://azurecosmosdb.github.io/gallery/" />
+        <meta property="og:url" content={siteUrl} />
         <meta property="og:title" content="Azure Cosmos DB Gallery | AI Apps & Vector Search" />
         <meta property="og:description" content="Discover 100+ code samples and resources for building AI applications with Azure Cosmos DB, featuring RAG patterns, vector search, and multi-agent systems." />
-        <meta property="og:image" content="https://azurecosmosdb.github.io/gallery/img/gallery-social.png" />
+        <meta property="og:image" content={`${siteUrl}img/gallery-social.png`} />
         <meta property="og:site_name" content="Azure Cosmos DB Gallery" />
         
         {/* Twitter */}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:site" content="@AzureCosmosDB" />
         <meta name="twitter:creator" content="@AzureCosmosDB" />
-        <meta name="twitter:url" content="https://azurecosmosdb.github.io/gallery/" />
+        <meta name="twitter:url" content={siteUrl} />
         <meta name="twitter:title" content="Azure Cosmos DB Gallery | AI Apps & Vector Search" />
         <meta name="twitter:description" content="Discover 100+ code samples for building AI applications with Azure Cosmos DB" />
-        <meta name="twitter:image" content="https://azurecosmosdb.github.io/gallery/img/gallery-social.png" />
+        <meta name="twitter:image" content={`${siteUrl}img/gallery-social.png`} />
         
         {/* Additional SEO */}
-        <link rel="canonical" href="https://azurecosmosdb.github.io/gallery/" />
+        <link rel="canonical" href={siteUrl} />
         <meta name="robots" content="index, follow" />
         <meta name="theme-color" content="#0078d4" />
       </Helmet>
