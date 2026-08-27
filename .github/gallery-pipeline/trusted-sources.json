@@ -1,0 +1,114 @@
+{
+  "$schema": "./trusted-sources.schema.json",
+  "version": "1.0.0",
+  "sources": [
+    {
+      "id": "github-org-azurecosmosdb",
+      "type": "github-organization",
+      "endpoint": "https://api.github.com/orgs/AzureCosmosDB",
+      "organization": "AzureCosmosDB",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Azure Cosmos DB",
+      "includeRules": [
+        "require-one-strong-code-or-infrastructure-signal",
+        "or-require-two-independent-metadata-content-signals"
+      ],
+      "excludeRules": [
+        "private-repositories",
+        "disabled-repositories",
+        "empty-repositories"
+      ]
+    },
+    {
+      "id": "github-org-azure-samples",
+      "type": "github-organization",
+      "endpoint": "https://api.github.com/orgs/Azure-Samples",
+      "organization": "Azure-Samples",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Azure Samples",
+      "includeRules": [
+        "require-one-strong-code-or-infrastructure-signal",
+        "or-require-two-independent-metadata-content-signals"
+      ],
+      "excludeRules": [
+        "private-repositories",
+        "disabled-repositories",
+        "empty-repositories"
+      ]
+    },
+    {
+      "id": "github-org-azure",
+      "type": "github-organization",
+      "endpoint": "https://api.github.com/orgs/Azure",
+      "organization": "Azure",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Microsoft Azure",
+      "includeRules": [
+        "require-one-strong-code-or-infrastructure-signal",
+        "or-require-two-independent-metadata-content-signals"
+      ],
+      "excludeRules": [
+        "private-repositories",
+        "disabled-repositories",
+        "empty-repositories"
+      ]
+    },
+    {
+      "id": "github-org-microsoft",
+      "type": "github-organization",
+      "endpoint": "https://api.github.com/orgs/microsoft",
+      "organization": "microsoft",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Microsoft",
+      "includeRules": [
+        "require-one-strong-code-or-infrastructure-signal",
+        "or-require-two-independent-metadata-content-signals"
+      ],
+      "excludeRules": [
+        "private-repositories",
+        "disabled-repositories",
+        "empty-repositories"
+      ]
+    },
+    {
+      "id": "learn-cosmos-db",
+      "type": "documentation-root",
+      "endpoint": "https://learn.microsoft.com/azure/cosmos-db/",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Microsoft Learn",
+      "includeRules": [
+        "within-canonical-root",
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "outside-canonical-root"
+      ]
+    },
+    {
+      "id": "devblogs-cosmos-db-rss",
+      "type": "rss-feed",
+      "endpoint": "https://devblogs.microsoft.com/cosmosdb/feed/",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "Azure Cosmos DB Blog",
+      "includeRules": [
+        "require-stable-feed-entry-id",
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "entries-without-canonical-url"
+      ]
+    }
+  ]
+}

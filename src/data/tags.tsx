@@ -65,7 +65,12 @@ export type TagType =
   | "video"
   | "documentation"
   | "generativeai"
+  | "ai"
+  | "agent-skills"
+  | "best-practices"
+  | "copilot"
   | "architecturedesign"
+  | "event-driven"
   | "tools"
   | "infrastructure"
   | "migration"
@@ -402,9 +407,34 @@ export const Tags: { [type in TagType]: Tag } = {
     icon: "",
     type: "ContentType"
   },
+  ai: {
+    label: "AI",
+    description: "Artificial intelligence content and resources",
+    type: "GenerativeAI"
+  },
+  "agent-skills": {
+    label: "Agent Skills",
+    description: "Reusable skills and instructions for AI coding agents",
+    type: "GenerativeAI"
+  },
+  "best-practices": {
+    label: "Best Practices",
+    description: "Recommended practices and implementation guidance",
+    type: "ContentType"
+  },
+  copilot: {
+    label: "Copilot",
+    description: "Content that supports AI coding assistants such as GitHub Copilot",
+    type: "GenerativeAI"
+  },
   architecturedesign: {
     label: "Architecture",
     description: "Architecture and design patterns",
+    type: "ContentType"
+  },
+  "event-driven": {
+    label: "Event-Driven",
+    description: "Event-driven architecture and application patterns",
     type: "ContentType"
   },
   tools: {

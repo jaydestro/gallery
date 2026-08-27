@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gallery deprecation rules",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "version",
+    "rules"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "ecosystem",
+        "pattern",
+        "disposition",
+        "message"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "category": {
+          "const": "legacy-sdk"
+        },
+        "ecosystem": {
+          "enum": [
+            "nuget",
+            "maven",
+            "npm",
+            "pypi"
+          ]
+        },
+        "pattern": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value",
+            "flags"
+          ],
+          "properties": {
+            "kind": {
+              "const": "regex"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "flags": {
+              "type": "string",
+              "pattern": "^[gimsuy]*$"
+            }
+          }
+        },
+        "disposition": {
+          "const": "flag"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

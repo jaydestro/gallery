@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gallery-pipeline:schema:catalog:2.0.0",
+  "title": "Gallery catalog",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/catalogRecord"
+  },
+  "$defs": {
+    "catalogRecord": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/legacyRecord"
+        },
+        {
+          "$ref": "#/$defs/v2Record"
+        }
+      ]
+    },
+    "legacyRecord": {
+      "title": "Legacy gallery record",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "description",
+        "preview",
+        "website",
+        "author",
+        "source",
+        "date",
+        "tags"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preview": {
+          "type": "string"
+        },
+        "website": {
+          "type": "string",
+          "format": "uri"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "tags": {
+          "$ref": "#/$defs/tags"
+        },
+        "video": {
+          "type": "string",
+          "format": "uri"
+        },
+        "previewTags": {
+          "$ref": "#/$defs/tags"
+        }
+      }
+    },
+    "v2Record": {
+      "title": "Gallery record v2",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "summary",
+        "preview",
+        "canonicalSource",
+        "sourceType",
+        "author",
+        "sourceOwner",
+        "tags",
+        "dateAdded",
+        "lastVerified",
+        "lifecycleStatus"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preview": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonicalSource": {
+          "type": "string",
+          "format": "uri"
+        },
+        "sourceType": {
+          "enum": [
+            "github-repository",
+            "github-path",
+            "learn-document",
+            "blog-post",
+            "video",
+            "tool",
+            "other"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceOwner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "$ref": "#/$defs/tags"
+        },
+        "dateAdded": {
+          "type": "string",
+          "format": "date"
+        },
+        "lastVerified": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lifecycleStatus": {
+          "enum": [
+            "active",
+            "needs-review",
+            "quarantined",
+            "retired"
+          ]
+        },
+        "supersededBy": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}

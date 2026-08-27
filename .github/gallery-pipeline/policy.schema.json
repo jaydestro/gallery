@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gallery pipeline policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "version",
+    "contractVersions",
+    "http",
+    "thresholds",
+    "evaluationThresholds",
+    "healthThresholds",
+    "lifecycle",
+    "freshness",
+    "batching",
+    "exemptions",
+    "audit",
+    "automation"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "contractVersions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trustedSources",
+        "policy",
+        "catalog",
+        "analysis",
+        "health",
+        "retiredEntries",
+        "deprecations",
+        "exemptions",
+        "evaluationSet"
+      ],
+      "properties": {
+        "trustedSources": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "policy": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "catalog": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "analysis": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "health": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "retiredEntries": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "deprecations": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "exemptions": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "evaluationSet": {
+          "$ref": "#/$defs/semanticVersion"
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retryDelaySeconds",
+        "timeoutSeconds",
+        "maxRedirects"
+      ],
+      "properties": {
+        "retryDelaySeconds": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": 0
+            },
+            {
+              "const": 5
+            },
+            {
+              "const": 30
+            },
+            {
+              "const": 120
+            }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "timeoutSeconds": {
+          "const": 30
+        },
+        "maxRedirects": {
+          "const": 5
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "materialRelevance",
+        "summaryGrounding",
+        "semanticDuplicate",
+        "semanticDuplicateIndeterminate"
+      ],
+      "properties": {
+        "materialRelevance": {
+          "const": 0.95
+        },
+        "summaryGrounding": {
+          "const": 0.95
+        },
+        "semanticDuplicate": {
+          "const": 0.92
+        },
+        "semanticDuplicateIndeterminate": {
+          "const": 0.85
+        }
+      }
+    },
+    "evaluationThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relevancePrecision",
+        "semanticDuplicatePrecision",
+        "exactDuplicateRejectionRate",
+        "unsupportedSummaryClaimCount"
+      ],
+      "properties": {
+        "relevancePrecision": {
+          "const": 0.99
+        },
+        "semanticDuplicatePrecision": {
+          "const": 0.99
+        },
+        "exactDuplicateRejectionRate": {
+          "const": 1
+        },
+        "unsupportedSummaryClaimCount": {
+          "const": 0
+        }
+      }
+    },
+    "healthThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "healthyMinimum",
+        "needsReviewMinimum",
+        "quarantineMinimum"
+      ],
+      "properties": {
+        "healthyMinimum": {
+          "const": 80
+        },
+        "needsReviewMinimum": {
+          "const": 60
+        },
+        "quarantineMinimum": {
+          "const": 40
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredConfirmations",
+        "retirementGraceDays"
+      ],
+      "properties": {
+        "requiredConfirmations": {
+          "const": 2
+        },
+        "retirementGraceDays": {
+          "const": 30
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewAfterDays",
+        "highSeverityAfterDays"
+      ],
+      "properties": {
+        "reviewAfterDays": {
+          "const": 365
+        },
+        "highSeverityAfterDays": {
+          "const": 730
+        }
+      }
+    },
+    "batching": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxCandidatesPerRun",
+        "maxEntriesPerPullRequest"
+      ],
+      "properties": {
+        "maxCandidatesPerRun": {
+          "const": 200
+        },
+        "maxEntriesPerPullRequest": {
+          "const": 25
+        }
+      }
+    },
+    "exemptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defaultDurationDays",
+        "maximumDurationDays"
+      ],
+      "properties": {
+        "defaultDurationDays": {
+          "const": 30
+        },
+        "maximumDurationDays": {
+          "const": 90
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retentionDays"
+      ],
+      "properties": {
+        "retentionDays": {
+          "const": 365
+        }
+      }
+    },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emergencyDisable",
+        "mutationMode",
+        "ai",
+        "mutation"
+      ],
+      "properties": {
+        "emergencyDisable": {
+          "const": true
+        },
+        "mutationMode": {
+          "const": "dry-run"
+        },
+        "ai": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relevanceClassification",
+            "summaryGeneration",
+            "summaryGroundingVerification",
+            "semanticDuplicateDetection",
+            "freshnessAnalysis"
+          ],
+          "properties": {
+            "relevanceClassification": {
+              "const": false
+            },
+            "summaryGeneration": {
+              "const": false
+            },
+            "summaryGroundingVerification": {
+              "const": false
+            },
+            "semanticDuplicateDetection": {
+              "const": false
+            },
+            "freshnessAnalysis": {
+              "const": false
+            }
+          }
+        },
+        "mutation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "catalogPublication",
+            "metadataUpdate",
+            "quarantine",
+            "retirement",
+            "restoration",
+            "automaticMerge"
+          ],
+          "properties": {
+            "catalogPublication": {
+              "const": false
+            },
+            "metadataUpdate": {
+              "const": false
+            },
+            "quarantine": {
+              "const": false
+            },
+            "retirement": {
+              "const": false
+            },
+            "restoration": {
+              "const": false
+            },
+            "automaticMerge": {
+              "const": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

@@ -20,7 +20,7 @@
     ]
   },
   {
-    "title": " Vector Search in Azure Cosmos DB for NoSQL",
+    "title": "Vector Search in Azure Cosmos DB for NoSQL",
     "description": "Learn the basics for how vector search works and how to use vector search in Azure Cosmos DB for NoSQL to build AI applications.",
     "preview": "coming soon",
     "website": "https://learn.microsoft.com/azure/cosmos-db",
@@ -160,27 +160,6 @@
       "jupyternotebook",
       "langchain",
       "vectorcosmosnosql",
-      "microsoft",
-      "example"
-    ]
-  },
-  {
-    "title": "Serverless AI Chat with RAG using Langchain and Azure Cosmos DB for MongoDB",
-    "description": "This sample shows ingesting PDF's into Azure Cosmos DB for NoSQL and doing vector similarity search (RAG Pattern) using Langchain.",
-    "preview": "coming soon",
-    "website": "https://github.com/sinedied",
-    "author": "Yohan Lasorsa",
-    "source": "https://github.com/microsoft/AzureDataRetrievalAugmentedGenerationSamples/blob/main/Python/CosmosDB-NoSQL-Integrations/LangChain-CosmosDBNoSQL-AzureOpenAI.ipynb",
-    "date": "2024-07-01",
-    "tags": [
-      "generativeai",
-      "typescript",
-      "gpt4",
-      "openai",
-      "functions",
-      "chat",
-      "langchain",
-      "vectorcosmosmongo",
       "microsoft",
       "example"
     ]
@@ -860,7 +839,7 @@
     "preview": "coming soon",
     "website": "https://microsoft.github.io/promptflow/index.html",
     "author": "Promotflow Team",
-    "source": "https://docs.llamaindex.ai/en/stable/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
+    "source": "https://github.com/microsoft/promptflow-rag-project-template",
     "date": "2024-09-01",
     "tags": [
       "documentation",
@@ -1306,7 +1285,7 @@
     ]
   },
   {
-    "title": "Build and Modernize Intelligent Apps Prsentation - Level 100",
+    "title": "Build and Modernize Intelligent Apps Presentation - Level 100",
     "description": "A 100 level pitch deck on building and modernizing intelligent applications with Azure Cosmos DB for NoSQL and Azure OpenAI services.",
     "preview": "coming soon",
     "website": "https://github.com/AzureCosmosDB",
@@ -1331,7 +1310,7 @@
     ]
   },
   {
-    "title": "Build and Modernize Intelligent Apps Prsentation - Level 200 Technical Deck",
+    "title": "Build and Modernize Intelligent Apps Presentation - Level 200 Technical Deck",
     "description": "A 200 level deck for technical teams and decision makers on building and modernizing intelligent applications with Azure Cosmos DB for NoSQL and Azure OpenAI services.",
     "preview": "coming soon",
     "website": "https://github.com/AzureCosmosDB",
@@ -1437,7 +1416,7 @@
       "agent",
       "ragPattern",
       "openai",
-      "Microsoft",
+      "microsoft",
       "vectorcosmosnosql",
       "serverless",
       "example"
@@ -1457,7 +1436,7 @@
       "jupyternotebook",
       "embedding-text-3",
       "openai",
-      "Microsoft",
+      "microsoft",
       "vectorcosmosnosql",
       "example"
     ]
@@ -1477,7 +1456,7 @@
       "analytics",
       "embedding-text-3",
       "openai",
-      "Microsoft",
+      "microsoft",
       "vectorcosmosnosql",
       "example"
     ]
@@ -1539,9 +1518,9 @@
       "agent",
       "ragPattern",
       "openai",
-      "azurevision",
+      "azure-vision",
       "functions",
-      "Microsoft",
+      "microsoft",
       "vectorcosmosnosql",
       "example"
     ]
@@ -1563,9 +1542,9 @@
       "chat",
       "ragPattern",
       "openai",
-      "azurevision",
+      "azure-vision",
       "functions",
-      "Microsoft",
+      "microsoft",
       "vectorcosmosnosql",
       "vectorcosmosmongo",
       "example"
@@ -1752,25 +1731,6 @@
       "microsoft",
       "vectorcosmosnosql",
       "functions",
-      "example"
-    ]
-  },
-  {
-    "title": "Multi-agent AI sample with Azure Cosmos DB",
-    "description": "A sample exploring ergonomic, lightweight multi-agent orchestration in Python using Azure Cosmos DB with OpenAI Swarm.",
-    "preview": "coming soon",
-    "website": "https://github.com/TheovanKraay",
-    "author": "Theo van Kraay",
-    "source": "https://github.com/AzureCosmosDB/multi-agent-swarm",
-    "date": "2025-01-28",
-    "tags": [
-      "generativeai",
-      "python",
-      "analytics",
-      "embedding-text-3",
-      "openai",
-      "Microsoft",
-      "vectorcosmosnosql",
       "example"
     ]
   },

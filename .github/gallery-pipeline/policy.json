@@ -1,0 +1,80 @@
+{
+  "$schema": "./policy.schema.json",
+  "version": "1.0.0",
+  "contractVersions": {
+    "trustedSources": "1.0.0",
+    "policy": "1.0.0",
+    "catalog": "2.0.0",
+    "analysis": "1.0.0",
+    "health": "1.0.0",
+    "retiredEntries": "1.0.0",
+    "deprecations": "1.0.0",
+    "exemptions": "1.0.0",
+    "evaluationSet": "1.0.0"
+  },
+  "http": {
+    "retryDelaySeconds": [
+      0,
+      5,
+      30,
+      120
+    ],
+    "timeoutSeconds": 30,
+    "maxRedirects": 5
+  },
+  "thresholds": {
+    "materialRelevance": 0.95,
+    "summaryGrounding": 0.95,
+    "semanticDuplicate": 0.92,
+    "semanticDuplicateIndeterminate": 0.85
+  },
+  "evaluationThresholds": {
+    "relevancePrecision": 0.99,
+    "semanticDuplicatePrecision": 0.99,
+    "exactDuplicateRejectionRate": 1,
+    "unsupportedSummaryClaimCount": 0
+  },
+  "healthThresholds": {
+    "healthyMinimum": 80,
+    "needsReviewMinimum": 60,
+    "quarantineMinimum": 40
+  },
+  "lifecycle": {
+    "requiredConfirmations": 2,
+    "retirementGraceDays": 30
+  },
+  "freshness": {
+    "reviewAfterDays": 365,
+    "highSeverityAfterDays": 730
+  },
+  "batching": {
+    "maxCandidatesPerRun": 200,
+    "maxEntriesPerPullRequest": 25
+  },
+  "exemptions": {
+    "defaultDurationDays": 30,
+    "maximumDurationDays": 90
+  },
+  "audit": {
+    "retentionDays": 365
+  },
+  "automation": {
+    "emergencyDisable": true,
+    "mutationMode": "dry-run",
+    "ai": {
+      "relevanceClassification": false,
+      "summaryGeneration": false,
+      "summaryGroundingVerification": false,
+      "semanticDuplicateDetection": false,
+      "freshnessAnalysis": false
+    },
+    "mutation": {
+      "catalogPublication": false,
+      "metadataUpdate": false,
+      "quarantine": false,
+      "retirement": false,
+      "restoration": false,
+      "automaticMerge": false
+    }
+  }
+}
