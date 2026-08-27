@@ -235,6 +235,52 @@ Automated retirement process:
 6. Retired metadata remains in the audit file for at least 90 days, including reason, evidence, replacement, and decision timestamp.
 7. A version-controlled exemption may pause retirement when it has an owner, rationale, and expiration date. Recovered sources are restored automatically after passing the complete publication gate set.
 
+## Azure Services Architecture
+
+GitHub Actions remains the compute, scheduler, and orchestration platform. The pipeline requires Azure only for model inference and passwordless identity; it does not require an always-on application host or database.
+
+### Required Azure Services
+
+| Service | Purpose | Configuration |
+| --- | --- | --- |
+| Microsoft Foundry resource and project with model deployments | Run Cosmos DB relevance classification, summary generation, summary-grounding verification, and optional embedding-based duplicate detection | Deploy one approved instruction-following model. Deploy an embedding model only if semantic deduplication uses embeddings rather than the same evaluator model. Set quotas and token limits for scheduled batch volume. An existing Azure OpenAI resource may be used instead when it is the organizational standard. |
+| Microsoft Entra ID workload identity federation | Authenticate GitHub Actions to Azure without a stored Azure client secret | Create an app registration or user-assigned managed identity with a federated credential restricted to this repository, branch or GitHub environment, and workflow subject. Grant only model-inference access, such as the least-privilege inference role supported by the selected Foundry or Azure OpenAI resource. |
+
+GitHub's `GITHUB_TOKEN` provides GitHub API access, branch creation, pull requests, and automatic merge; it is not an Azure service. The YouTube Data API key, when needed, remains a GitHub Actions secret because it is not an Azure credential.
+
+### Optional Azure Services
+
+| Service | Add when | Default decision |
+| --- | --- | --- |
+| Azure Monitor and Application Insights | Actions summaries and retained artifacts are insufficient for long-term queryable telemetry, alerts, latency, token usage, or cross-run trends | Optional after the pilot; emit OpenTelemetry from the Node.js scripts when enabled |
+| Azure Key Vault | Policy requires centralized storage or rotation of the YouTube API key or another non-OIDC secret | Optional; GitHub environment secrets are sufficient for the initial pipeline |
+| Azure AI Content Safety | The team requires a dedicated safety classifier in addition to source validation and model-based checks | Optional defense in depth |
+| Azure Storage account | Evidence or audit retention must exceed GitHub Actions artifact limits or organizational retention policy requires Azure storage | Optional; repository audit files and time-limited Actions artifacts are sufficient initially |
+
+### Services Not Required Initially
+
+- Azure Functions, Container Apps, App Service, and AKS: GitHub-hosted Actions runners execute the scheduled jobs.
+- Azure Cosmos DB: the pipeline discovers Cosmos DB content but does not need Cosmos DB for its own state; version-controlled JSON and Actions artifacts are sufficient at current catalog scale.
+- Azure AI Search: exact matching plus in-process embedding similarity is sufficient for the current catalog. Add AI Search only if corpus size or retrieval requirements outgrow bounded in-memory comparison.
+- Service Bus, Event Grid, and Logic Apps: workflow sequencing and retries are handled by GitHub Actions.
+
+### Authentication and Data Flow
+
+```mermaid
+flowchart LR
+    A[GitHub Actions workflow] -->|OIDC token| B[Microsoft Entra ID]
+    B -->|Short-lived Azure token| A
+    A --> C[GitHub and trusted content APIs]
+    A -->|Public source evidence| D[Microsoft Foundry model endpoint]
+    D -->|Schema-constrained analysis| A
+    A --> E[GitHub Actions artifacts]
+    A --> F[Bot pull request]
+    F --> G[Protected validation and auto-merge]
+    A -. Optional telemetry .-> H[Azure Monitor and Application Insights]
+```
+
+Only public source excerpts and required metadata are sent to the model endpoint. Azure credentials use short-lived OIDC tokens. Model responses, evidence, and decision records are redacted before artifact upload and are never treated as trusted instructions.
+
 ## Automation Surfaces
 
 All components run as GitHub Actions workflows using least-privilege `GITHUB_TOKEN` permissions. External API and approved AI-service credentials are stored as GitHub Actions secrets or environment-scoped credentials. No continuously running service is required.
@@ -456,6 +502,16 @@ Define `catalog.schema.json` as the contract for every gallery record, including
 
 Run schema and policy validation before any network or AI work. An invalid or missing policy must stop the workflow without changing the catalog.
 
+Provision the required Azure dependencies before enabling AI gates:
+
+1. Create or select a Microsoft Foundry project and deploy the approved analysis model. Add an embedding deployment only if the chosen duplicate detector requires it.
+2. Create a Microsoft Entra app registration or user-assigned managed identity for GitHub Actions.
+3. Add a federated credential whose subject is restricted to this repository and the production GitHub environment or bot branch workflow.
+4. Assign the identity only the model-inference role required by the selected Foundry or Azure OpenAI endpoint. Do not grant Contributor or Owner.
+5. Store Azure tenant, client, subscription, project endpoint, and deployment names as GitHub repository or environment variables; these identifiers are not secrets.
+6. Validate OIDC login and one schema-constrained inference call from a non-mutating GitHub Actions job.
+7. Set model quota, per-run candidate limits, token ceilings, retry policy, and Actions budget controls before scheduled discovery begins.
+
 ### 4. Implement Deterministic Discovery Adapters
 
 Use a separate adapter for each endpoint class and emit one common candidate shape.
@@ -536,14 +592,14 @@ Set `concurrency` by workflow purpose, with `cancel-in-progress: false` for cata
 
 ### 10. Configure Credentials and Permissions
 
-Prefer GitHub OpenID Connect for the approved AI service when supported. Otherwise store the minimum required API credentials as Actions secrets. Typical configuration includes:
+Use GitHub OpenID Connect for Azure authentication. Do not store an Azure client secret. Typical configuration includes:
 
-- `AI_ENDPOINT` as a repository variable.
-- AI deployment/model name as a repository variable.
-- AI credential as an environment secret only when OIDC is unavailable.
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as repository or environment variables.
+- `AI_PROJECT_ENDPOINT` or `AZURE_OPENAI_ENDPOINT` as a repository or environment variable.
+- Analysis and embedding deployment names as repository or environment variables.
 - `YOUTUBE_API_KEY` as a secret if the YouTube adapter requires it.
 
-Use job-level permissions. Discovery and validation jobs receive `contents: read`; pull-request creation receives `contents: write` and `pull-requests: write`; merge receives only the permissions required to merge a previously validated bot pull request. Do not expose write tokens or secrets to pull requests from forks.
+Set `id-token: write` only on jobs that request an Azure token. Use job-level permissions. Discovery and validation jobs receive `contents: read`; pull-request creation receives `contents: write` and `pull-requests: write`; merge receives only the permissions required to merge a previously validated bot pull request. Do not expose write tokens, Azure tokens, or secrets to pull requests from forks.
 
 ### 11. Configure Protected Automatic Merge
 
@@ -600,6 +656,9 @@ Review aggregate precision, rejection reasons, source yield, health distribution
 
 ### Completion Checklist
 
+- [ ] A Foundry or Azure OpenAI model endpoint and required deployments are available within quota.
+- [ ] GitHub Actions authenticates to Azure through a repository-scoped Entra federated credential.
+- [ ] The workload identity has inference access only and no Azure resource-management role.
 - [ ] Trusted endpoints are exact, allowlisted, and schema-valid.
 - [ ] Discovery adapters emit the common candidate schema.
 - [ ] Identity normalization blocks duplicates across active and retired catalogs.
