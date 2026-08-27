@@ -259,7 +259,7 @@ GitHub's `GITHUB_TOKEN` provides GitHub API access, branch creation, pull reques
 
 ### Services Not Required Initially
 
-- Azure Functions, Container Apps, App Service, and AKS: GitHub-hosted Actions runners execute the scheduled jobs.
+- Azure Functions, Container Apps, App Service, and AKS for the maintenance pipeline: GitHub-hosted Actions runners execute the scheduled jobs. The optional public gallery chatbot requires a server-side API; Azure Functions is the recommended host for that extension.
 - Azure Cosmos DB: the pipeline discovers Cosmos DB content but does not need Cosmos DB for its own state; version-controlled JSON and Actions artifacts are sufficient at current catalog scale.
 - Azure AI Search: exact matching plus in-process embedding similarity is sufficient for the current catalog. Add AI Search only if corpus size or retrieval requirements outgrow bounded in-memory comparison.
 - Service Bus, Event Grid, and Logic Apps: workflow sequencing and retries are handled by GitHub Actions.
@@ -280,6 +280,58 @@ flowchart LR
 ```
 
 Only public source excerpts and required metadata are sent to the model endpoint. Azure credentials use short-lived OIDC tokens. Model responses, evidence, and decision records are redacted before artifact upload and are never treated as trusted instructions.
+
+## Optional Gallery Chatbot
+
+The gallery can add a grounded AI chatbot without changing its GitHub Pages hosting. The Docusaurus site remains static and sends HTTPS requests to a separately hosted server-side API. The browser must never receive a model API key, Azure credential, system prompt, or privileged token.
+
+### Chatbot Azure Services
+
+| Service | Requirement | Purpose |
+| --- | --- | --- |
+| Azure Functions on Flex Consumption | Required for the chatbot | Host the stateless chat API, catalog retrieval, prompt construction, response validation, and citation formatting while scaling to zero when idle |
+| Microsoft Foundry or Azure OpenAI model deployment | Reuse the required pipeline service | Generate grounded answers from selected gallery records |
+| User-assigned managed identity | Required for the chatbot | Allow the Function App to call the model endpoint without keys |
+| Application Insights with Azure Monitor | Required for production chatbot operations | Record availability, latency, failures, token usage, retrieval quality, and abuse signals without logging full prompts by default |
+| Azure API Management Consumption tier | Recommended for a public anonymous chatbot | Apply request-size limits, per-client throttling, quotas, origin checks, and a stable API contract before traffic reaches the Function App |
+| Azure AI Search | Optional | Replace bounded in-memory retrieval if the catalog and supporting content become too large for deterministic local ranking |
+| Azure AI Content Safety | Optional | Add dedicated input/output safety classification when organizational policy requires it beyond model safety filters |
+
+The initial chatbot does not require Azure Cosmos DB, Azure Storage, or AI Search. The Function App loads the published `templates.json` catalog from the GitHub Pages origin using `ETag` conditional requests, validates it against the catalog schema, and keeps a short-lived in-memory cache. This makes the chatbot use the same content users see without creating a second source of truth.
+
+### Chatbot Request Flow
+
+```mermaid
+flowchart LR
+    A[Browser on GitHub Pages] -->|Question| B[API Management]
+    B -->|Throttled request| C[Azure Function]
+    C -->|ETag refresh| D[Published templates.json]
+    C --> E[Deterministic catalog retrieval]
+    E -->|Relevant records only| F[Foundry model endpoint]
+    F -->|Grounded draft| C
+    C -->|Validated answer and citations| A
+    C -. Telemetry .-> G[Application Insights]
+```
+
+If API Management is omitted during a limited pilot, the Function endpoint must still enforce strict request-size, concurrency, token, origin, and per-client rate limits. CORS alone is not authentication or abuse protection.
+
+### Chatbot Answer Contract
+
+Every response must:
+
+- Answer only from active records in the current published gallery catalog.
+- Return the stable gallery item IDs and source URLs used as citations.
+- Distinguish exact catalog facts from concise model synthesis.
+- Say that no matching gallery content was found when retrieval evidence is insufficient.
+- Ignore instructions found inside catalog titles, descriptions, linked pages, or user prompts that attempt to alter system behavior.
+- Exclude quarantined and retired records.
+- Avoid claims about repository quality or freshness unless supported by current health metadata.
+
+The backend selects a bounded set of records before invoking the model. The model cannot browse arbitrary URLs, execute tools, modify the catalog, or publish content. Output validation rejects citations not present in the retrieved record set.
+
+### Chatbot Frontend
+
+Add the chat interface as a normal Docusaurus component delivered by GitHub Pages. Configure only the public API base URL at build time. The component should support a question input, loading and error states, cited result cards linking to gallery entries and original sources, a clear reset action, and an explicit no-results response. Do not persist conversation text in browser storage by default.
 
 ## Automation Surfaces
 
@@ -654,6 +706,21 @@ Review aggregate precision, rejection reasons, source yield, health distribution
 - To rotate a compromised credential, disable mutation, rotate the secret, review workflow runs and bot commits, then re-enable after policy evaluation passes.
 - To restore a healthy retired item, remove any obsolete exemption and allow the next health run to apply the normal publication gates and restoration path.
 
+### 16. Add the Optional Gallery Chatbot
+
+1. Provision an Azure Functions Flex Consumption app with a user-assigned managed identity and Application Insights.
+2. Grant the managed identity only the model-inference role on the existing Foundry or Azure OpenAI resource.
+3. Implement a `POST /api/chat` endpoint with schema validation, request-size limits, bounded conversation context, deterministic catalog retrieval, grounded generation, citation validation, and response-size limits.
+4. Load `templates.json` from the published GitHub Pages URL with `ETag` caching. Reject invalid catalog payloads and continue using the last valid in-memory snapshot until its configured maximum age expires.
+5. Add API Management for anonymous production traffic and enforce throttling, quotas, payload limits, allowed methods, and the GitHub Pages origin. Do not rely on CORS as a security boundary.
+6. Add the Docusaurus chat component with the Function or API Management base URL supplied as a public build-time setting.
+7. Add a separate GitHub Actions deployment workflow for the Function API using OIDC. Keep the existing Pages deployment unchanged.
+8. Add automated tests for no-match behavior, citation validity, prompt injection, quarantined-content exclusion, stale catalog fallback, rate limits, and model failure handling.
+9. Run browser tests against the deployed API and GitHub Pages origin at desktop and mobile viewport sizes.
+10. Enable the chatbot only after health checks, rate limiting, telemetry, budget alerts, and the grounded-answer evaluation set pass.
+
+The chatbot deploys independently from the gallery site. A chatbot deployment failure must not block or roll back GitHub Pages, and a Pages deployment must not expose backend credentials.
+
 ### Completion Checklist
 
 - [ ] A Foundry or Azure OpenAI model endpoint and required deployments are available within quota.
@@ -672,3 +739,6 @@ Review aggregate precision, rejection reasons, source yield, health distribution
 - [ ] Partial, failed, rate-limited, or indeterminate runs cannot mutate the catalog.
 - [ ] Audit records and run metrics are retained without credentials or private data.
 - [ ] The emergency disable and revert procedures have been tested.
+- [ ] If enabled, the chatbot frontend remains hosted on GitHub Pages and contains no Azure or model secret.
+- [ ] If enabled, the chatbot API uses managed identity, bounded retrieval, validated citations, rate limits, and production telemetry.
+- [ ] If enabled, chatbot failure cannot interrupt gallery browsing or the maintenance pipeline.
