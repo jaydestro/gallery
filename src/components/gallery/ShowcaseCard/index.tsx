@@ -9,7 +9,6 @@ import ShowcaseCardTag from "../ShowcaseTag/index";
 import ShowcaseCardIcon from "../ShowcaseIcon/index";
 import useBaseUrl from "@docusaurus/useBaseUrl";
 import { useColorMode } from "@docusaurus/theme-common";
-import siteConfig from "@generated/docusaurus.config";
 import { useHistory, useLocation } from "@docusaurus/router";
 
 type GitHubRepoInfo = {
@@ -17,6 +16,22 @@ type GitHubRepoInfo = {
   stars: number;
   updatedOn: Date;
 } | null;
+
+const getGitHubRepository = (source: string | null) => {
+  if (!source) return null;
+
+  try {
+    const url = new URL(source);
+    if (url.hostname.toLowerCase() !== "github.com") return null;
+
+    const [owner, repository] = url.pathname.split("/").filter(Boolean);
+    if (!owner || !repository) return null;
+
+    return {owner, repository: repository.replace(/\.git$/i, "")};
+  } catch {
+    return null;
+  }
+};
 
 function ShowcaseCard({
   user,
@@ -135,15 +150,8 @@ function ShowcaseCard({
   }, [location.search, cardSlug, isOpen, openPanel, dismissPanel, title, user.author]);
 
   const fetchGitHubData = async (owner: string, repo: string) => {
-    const token = siteConfig.customFields.REACT_APP_GITHUB_TOKEN;
     try {
-      const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-        headers: token
-          ? {
-              Authorization: `Bearer ${token}`,
-            }
-          : undefined,
-      });
+      const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
 
       if (response.status === 429) {
         console.error("Rate limit exceeded. Please try again later.");
@@ -168,10 +176,12 @@ function ShowcaseCard({
   };
 
   useEffect(() => {
-    const repoSlug = user.source.toLowerCase().replace("https://github.com/", "");
-    const slugParts = repoSlug.split("/");
-    const owner = slugParts[0];
-    const repo = slugParts[1];
+    if (!isOpen || githubData) return;
+
+    const repository = getGitHubRepository(user.source);
+    if (!repository) return;
+
+    const {owner, repository: repo} = repository;
 
     // Check if data is already in local storage
     const cachedData = localStorage.getItem(`${owner}/${repo}`);
@@ -180,7 +190,7 @@ function ShowcaseCard({
     } else {
       fetchGitHubData(owner, repo);
     }
-  }, [user.source]);
+  }, [isOpen, githubData, user.source]);
 
   return (
     <Card

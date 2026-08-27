@@ -17,7 +17,6 @@ const repositoryUrl = `https://github.com/${repositoryOwner}/${repositoryName}`;
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   customFields: {
-    env: process.env.REACT_APP_GITHUB_TOKEN,
     absoluteSiteUrl,
     repositoryUrl,
     description:
