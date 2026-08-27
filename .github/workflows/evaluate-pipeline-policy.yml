@@ -1,0 +1,61 @@
+name: Evaluate pipeline policy
+
+on:
+  pull_request:
+    paths:
+      - ".github/gallery-pipeline/**"
+      - "scripts/gallery-pipeline/**"
+      - "package.json"
+      - "package-lock.json"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evaluate-pipeline-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: Run static policy tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect policy changes in merge group
+        id: changes
+        if: github.event_name == 'merge_group'
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1 && git diff --quiet HEAD^ HEAD -- \
+            .github/gallery-pipeline \
+            scripts/gallery-pipeline \
+            package.json \
+            package-lock.json; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.changes.outputs.should_run != 'false'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.changes.outputs.should_run != 'false'
+        run: npm ci
+
+      - name: Run static policy tests
+        if: steps.changes.outputs.should_run != 'false'
+        run: npm run gallery:test

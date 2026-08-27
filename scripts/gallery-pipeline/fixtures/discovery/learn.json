@@ -1,0 +1,27 @@
+{
+  "discoveredAt": "2026-08-27T12:00:00Z",
+  "source": {
+    "id": "learn-cosmos-db",
+    "endpoint": "https://learn.microsoft.com/azure/cosmos-db/",
+    "trustTier": "first-party",
+    "enabled": true,
+    "ownerLabel": "Microsoft Learn"
+  },
+  "documents": [
+    {
+      "id": "cosmos-db-nosql-vector-search",
+      "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search/?utm_source=fixture",
+      "title": "Vector search in Azure Cosmos DB for NoSQL",
+      "description": "Configure vector indexing and queries.",
+      "lastModified": "2026-08-10T08:00:00Z",
+      "sectionText": "Azure Cosmos DB for NoSQL supports integrated vector search."
+    },
+    {
+      "id": "outside-root",
+      "url": "https://learn.microsoft.com/azure/storage/blobs/",
+      "title": "Azure Blob Storage",
+      "description": "Storage documentation.",
+      "sectionText": "This page is outside the configured root."
+    }
+  ]
+}

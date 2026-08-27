@@ -1,0 +1,36 @@
+{
+  "discoveredAt": "2026-08-27T12:00:00Z",
+  "source": {
+    "id": "youtube-cosmos-playlist",
+    "trustTier": "first-party",
+    "enabled": true,
+    "channelIds": ["UC1234567890abcdefghijkl"],
+    "playlistIds": ["PL1234567890abcdefghijkl"]
+  },
+  "videos": [
+    {
+      "id": "6IIUtEFKJec",
+      "title": "Build with Azure Cosmos DB",
+      "description": "Create a data application with Azure Cosmos DB for NoSQL.",
+      "publishedAt": "2026-08-24T15:00:00Z",
+      "channelId": "UC1234567890abcdefghijkl",
+      "channelTitle": "Microsoft Developer",
+      "playlistIds": ["PL1234567890abcdefghijkl"],
+      "transcript": "This demonstration creates an Azure Cosmos DB database and container."
+    },
+    {
+      "id": "3T0K61VbnFw",
+      "title": "Azure Cosmos DB from an unconfigured channel",
+      "description": "This must not be emitted.",
+      "channelId": "UC9999999999abcdefghijkl",
+      "channelTitle": "Unknown channel"
+    },
+    {
+      "id": "not-a-video-id",
+      "title": "Invalid immutable ID",
+      "description": "Azure Cosmos DB content.",
+      "channelId": "UC1234567890abcdefghijkl",
+      "channelTitle": "Microsoft Developer"
+    }
+  ]
+}

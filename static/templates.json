@@ -340,7 +340,7 @@
   },
   {
     "title": "BUILD 2024: Scalable RAG with Azure Cosmos DB and DiskANN | Studio15",
-    "description": "Build low-latency recommendation engines with Azure Cosmos DB and Azure OpenAI Service. Elevate user experience with vector-based semantic search, going beyond traditional keyword limitations to deliver personalized recommendations in real-time. With pre-trained models stored in Azure Cosmos DB, tailor product predictions based on user interactions and preferences. Explore the power of augmented vector search for optimized results prioritized by relevance. ",
+    "description": "Build low-latency recommendation engines with Azure Cosmos DB and Azure OpenAI Service. Elevate user experience with vector-based semantic search, going beyond traditional keyword limitations to deliver personalized recommendations in real-time. With pre-trained models stored in Azure Cosmos DB, tailor product predictions based on user interactions and preferences. Explore the power of augmented vector search for optimized results prioritized by relevance.",
     "preview": "coming soon",
     "website": "https://www.youtube.com/@MicrosoftDeveloper",
     "author": "Microsoft Developer Team",
@@ -409,7 +409,7 @@
     ]
   },
   {
-    "title": "How to design and build AI applications with vector search using Azure OpenAI & Azure Cosmos DB | SQLBits",
+    "title": "Azure Cosmos DB NoSQL and OpenAI: Building Robust Applications with RAG pattern",
     "description": "Watch this session at SQLBits 2024 to learn about LLMs and how they work and how to use them with Azure Cosmos DB to build Generative AI applications.",
     "preview": "coming soon",
     "website": "https://www.youtube.com/@SQLBits",

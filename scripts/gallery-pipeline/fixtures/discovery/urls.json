@@ -1,0 +1,14 @@
+{
+  "github": {
+    "input": "http://www.github.com/AzureCosmosDB/Sample.git/tree/main/QuickStart/?utm_source=test#readme",
+    "expected": "https://github.com/azurecosmosdb/sample/tree/main/QuickStart"
+  },
+  "learn": {
+    "input": "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/?view=azure-dotnet&utm_campaign=test#overview",
+    "expected": "https://learn.microsoft.com/azure/cosmos-db/nosql?view=azure-dotnet"
+  },
+  "youtube": {
+    "input": "https://youtu.be/6IIUtEFKJec?si=tracking&t=42",
+    "expected": "https://www.youtube.com/watch?v=6IIUtEFKJec"
+  }
+}
