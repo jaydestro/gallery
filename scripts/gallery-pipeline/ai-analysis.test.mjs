@@ -437,7 +437,7 @@ test("strict final validation rejects undeclared fields", () => {
 });
 
 test("fixture catalog positives correspond to checked-in verified catalog sources", () => {
-  const verifiedSources = new Set(activeCatalog.map((record) => record.source ?? record.canonicalSource));
+  const verifiedSources = new Set(activeCatalog.map((record) => record.launchUrl));
   for (const record of fixtureCatalog) {
     assert.equal(verifiedSources.has(record.source), true, `Missing verified source ${record.source}`);
   }

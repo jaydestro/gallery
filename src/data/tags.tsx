@@ -15,14 +15,43 @@ export type Tag = {
   date?: string; // ISO 8601 format ("2024-09-23")
 };
 
-export type User = {
+export type SourceType =
+  | "github-repository"
+  | "github-path"
+  | "learn-document"
+  | "blog-post"
+  | "video"
+  | "tool"
+  | "other";
+
+export type LifecycleStatus =
+  | "active"
+  | "needs-review"
+  | "quarantined"
+  | "retired";
+
+export type CatalogUser = {
+  id: string;
   title: string;
-  description: string;
+  summary: string;
   preview: string;
-  website: string;
+  launchUrl: string;
+  canonicalSource: string;
+  sourceType: SourceType;
   author: string;
-  source: string | null;
+  sourceOwner: string | null;
+  website: string;
   tags: TagType[];
+  publishedAt: string;
+  dateAdded: string | null;
+  lastVerified: string | null;
+  lifecycleStatus: LifecycleStatus;
+  supersededBy?: string | null;
+};
+
+export type User = CatalogUser & {
+  description: string;
+  source: string;
   video?: string;
   previewTags?: TagType[];
 };

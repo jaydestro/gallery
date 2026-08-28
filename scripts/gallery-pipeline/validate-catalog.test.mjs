@@ -38,33 +38,58 @@ function issueCodes(catalog, overrides = {}) {
   return new Set(validateCatalogData(context, { catalog, ...overrides }).map((issue) => issue.code));
 }
 
-test("validates a copy of the real legacy catalog and its three explicit source-sharing groups", () => {
+test("validates a copy of the real v2 catalog and its three explicit source-sharing groups", () => {
   assert(context.catalog.length > 0);
   assert.equal(SOURCE_SHARING_POLICY.length, 3);
   validCatalogCopy();
 });
 
-test("the catalog schema accepts a v2 record and source type inference is deterministic", () => {
+test("the catalog schema accepts exact launch URLs and nullable unknown v2 metadata", () => {
   const catalog = validCatalogCopy();
   catalog.push({
     id: "v2-example",
     title: "V2 example",
     summary: "A schema-valid v2 gallery record.",
     preview: "coming soon",
+    launchUrl: "https://github.com/Example/Repository/?utm_source=gallery#read-me",
     canonicalSource: "https://github.com/example/repository",
     sourceType: "github-repository",
     author: "Example",
-    sourceOwner: "Example",
+    sourceOwner: null,
+    website: "https://example.com",
     tags: ["example"],
-    dateAdded: "2026-08-27",
-    lastVerified: "2026-08-27T12:00:00.000Z",
+    publishedAt: "2026-08-27",
+    dateAdded: null,
+    lastVerified: null,
     lifecycleStatus: "active",
   });
 
+  assert.deepEqual(validateCatalogData(context, { catalog }), []);
+});
+
+test("source type inference is deterministic", () => {
   assert.equal(inferSourceType("https://github.com/example/repository"), "github-repository");
   assert.equal(inferSourceType("https://github.com/example/repository/tree/main"), "github-path");
   assert.equal(inferSourceType("https://learn.microsoft.com/en-us/azure/cosmos-db/"), "learn-document");
-  assert.deepEqual(validateCatalogData(context, { catalog }), []);
+});
+
+test("rejects legacy and incomplete v2 records", () => {
+  const legacyCatalog = validCatalogCopy();
+  legacyCatalog[0] = {
+    title: "Legacy record",
+    description: "Legacy records are no longer accepted.",
+    preview: "coming soon",
+    website: "https://example.com",
+    author: "Example",
+    source: "https://example.com/legacy",
+    date: "2026-08-27",
+    tags: ["example"],
+  };
+  const incompleteCatalog = validCatalogCopy();
+  delete incompleteCatalog[0].launchUrl;
+
+  assert(issueCodes(legacyCatalog).has("SCHEMA_VALIDATION"));
+  assert(issueCodes(incompleteCatalog).has("SCHEMA_VALIDATION"));
 });
 
 test("canonicalization preserves non-default HTTPS ports", () => {
@@ -104,7 +129,7 @@ test("rejects duplicate exact titles", () => {
 
 test("rejects duplicate canonical sources outside the explicit policy", () => {
   const catalog = validCatalogCopy();
-  catalog[1].source = catalog[0].source ?? catalog[0].website;
+  catalog[1].canonicalSource = catalog[0].canonicalSource ?? catalog[0].source;
 
   assert(issueCodes(catalog).has("CANONICAL_SOURCE_DUPLICATE"));
 });
@@ -125,13 +150,16 @@ test("rejects a declared source type that conflicts with the canonical URL", () 
     title: "Source type mismatch",
     summary: "A record used to test source type inference.",
     preview: "coming soon",
+    launchUrl: "https://github.com/example/repository",
     canonicalSource: "https://github.com/example/repository",
     sourceType: "video",
     author: "Example",
-    sourceOwner: "Example",
+    sourceOwner: null,
+    website: "https://example.com",
     tags: ["example"],
-    dateAdded: "2026-08-27",
-    lastVerified: "2026-08-27T12:00:00.000Z",
+    publishedAt: "2026-08-27",
+    dateAdded: null,
+    lastVerified: null,
     lifecycleStatus: "active",
   });
 
@@ -151,18 +179,22 @@ test("rejects active and retired v2 records with the same ID", () => {
     title: "Active v2 record",
     summary: "An active record used to test identity disjointness.",
     preview: "coming soon",
+    launchUrl: "https://github.com/example/active-record",
     canonicalSource: "https://github.com/example/active-record",
     sourceType: "github-repository",
     author: "Example",
-    sourceOwner: "Example",
+    sourceOwner: null,
+    website: "https://example.com",
     tags: ["example"],
-    dateAdded: "2026-08-27",
-    lastVerified: "2026-08-27T12:00:00.000Z",
+    publishedAt: "2026-08-27",
+    dateAdded: null,
+    lastVerified: null,
     lifecycleStatus: "active",
   };
   const retiredRecord = {
     ...record,
     title: "Retired v2 record",
+    launchUrl: "https://github.com/example/retired-record",
     canonicalSource: "https://github.com/example/retired-record",
     lifecycleStatus: "retired",
   };

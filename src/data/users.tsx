@@ -6,8 +6,8 @@
 /* eslint-disable global-require */
 
 import { sortBy } from '../utils/jsUtils';
-import { TagType, User, Tags } from './tags';
-import templates from '../../static/templates.json'
+import { CatalogUser, TagType, User, Tags } from './tags';
+import templates from '../../static/templates.json';
 
 // *** ADDING DATA TO AZD GALLERY ****/
 
@@ -17,7 +17,15 @@ import templates from '../../static/templates.json'
 // Add your site to this list
 // prettier-ignore
 
-export const unsortedUsers: User[] = templates as User[]
+const catalogUsers = templates as CatalogUser[];
+
+export const unsortedUsers: User[] = catalogUsers
+  .filter((user) => user.lifecycleStatus === "active" || user.lifecycleStatus === "needs-review")
+  .map((user) => ({
+    ...user,
+    description: user.summary,
+    source: user.launchUrl,
+  }));
 
 export const TagList = Object.keys(Tags) as TagType[];
 function sortUsers() {

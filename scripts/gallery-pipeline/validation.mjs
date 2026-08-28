@@ -13,6 +13,7 @@ const HTTPS_FIELDS = new Set([
   "decisionPullRequestUrl",
   "decisionRunUrl",
   "endpoint",
+  "launchUrl",
   "source",
   "url",
   "video",
