@@ -261,7 +261,7 @@
       ],
       "properties": {
         "emergencyDisable": {
-          "const": true
+          "type": "boolean"
         },
         "mutationMode": {
           "const": "dry-run"
@@ -278,19 +278,19 @@
           ],
           "properties": {
             "relevanceClassification": {
-              "const": false
+              "type": "boolean"
             },
             "summaryGeneration": {
-              "const": false
+              "type": "boolean"
             },
             "summaryGroundingVerification": {
-              "const": false
+              "type": "boolean"
             },
             "semanticDuplicateDetection": {
-              "const": false
+              "type": "boolean"
             },
             "freshnessAnalysis": {
-              "const": false
+              "type": "boolean"
             }
           }
         },
@@ -307,22 +307,22 @@
           ],
           "properties": {
             "catalogPublication": {
-              "const": false
+              "type": "boolean"
             },
             "metadataUpdate": {
-              "const": false
+              "type": "boolean"
             },
             "quarantine": {
-              "const": false
+              "type": "boolean"
             },
             "retirement": {
-              "const": false
+              "type": "boolean"
             },
             "restoration": {
-              "const": false
+              "type": "boolean"
             },
             "automaticMerge": {
-              "const": false
+              "type": "boolean"
             }
           }
         }

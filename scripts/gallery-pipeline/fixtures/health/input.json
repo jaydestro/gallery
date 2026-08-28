@@ -8,6 +8,7 @@
     }
   ],
   "previousHealth": {
+    "$schema": "../.github/gallery-pipeline/health.schema.json",
     "version": "1.0.0",
     "entries": [
       {

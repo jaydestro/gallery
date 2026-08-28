@@ -15,8 +15,7 @@ concurrency:
 jobs:
   scan:
     name: Scan health without mutation
-    if: vars.GALLERY_PIPELINE_DRY_RUN_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -34,15 +33,27 @@ jobs:
         run: npm ci
 
       - name: Scan gallery health in dry-run mode
+        id: health
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/gallery-pipeline/scan-health.mjs --dry-run > gallery-health-report.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_directory="${RUNNER_TEMP}/gallery-health-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node scripts/gallery-pipeline/scan-health.mjs \
+            --dry-run \
+            --output-directory "$artifact_directory" \
+            > /dev/null
+          printf 'artifact_directory=%s\n' "$artifact_directory" >> "$GITHUB_OUTPUT"
 
-      - name: Upload health report
+      - name: Upload health report and proposed state
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gallery-health-${{ github.run_id }}-${{ github.run_attempt }}
-          path: gallery-health-report.json
+          path: |
+            ${{ steps.health.outputs.artifact_directory }}/gallery-health-report.json
+            ${{ steps.health.outputs.artifact_directory }}/proposed-gallery-health.json
+            ${{ steps.health.outputs.artifact_directory }}/gallery-health-receipt.json
           if-no-files-found: error
           retention-days: 30

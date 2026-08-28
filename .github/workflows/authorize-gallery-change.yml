@@ -1,0 +1,549 @@
+name: Authorize gallery automation change
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+
+permissions: {}
+
+concurrency:
+  group: authorize-gallery-change-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: Authorize gallery automation change
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      EXPECTED_APP_SLUG: ${{ vars.GALLERY_PUBLISHER_APP_SLUG }}
+    steps:
+      - name: Authorize only exact same-repository automation changes
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          event_json="$GITHUB_EVENT_PATH"
+          pr_number="$(jq -er '.pull_request.number | tostring' "$event_json")"
+          event_base_repository="$(jq -er '.pull_request.base.repo.full_name' "$event_json")"
+          event_head_repository="$(jq -er '.pull_request.head.repo.full_name' "$event_json")"
+          event_head_ref="$(jq -er '.pull_request.head.ref' "$event_json")"
+
+          if [ "$event_base_repository" != "$GH_REPO" ]; then
+            echo "The pull request base repository does not match the workflow repository." >&2
+            exit 1
+          fi
+          if [ "$event_head_repository" != "$GH_REPO" ]; then
+            printf '### Gallery automation authorization\n\nNot applicable: pull request #%s is not from a same-repository branch.\n' \
+              "$pr_number" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$event_head_ref" != automation/gallery* ]]; then
+            printf '### Gallery automation authorization\n\nNot applicable: pull request #%s is an ordinary same-repository change.\n' \
+              "$pr_number" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ ! "$event_head_ref" =~ ^automation/gallery/([1-9][0-9]*)-([1-9][0-9]*)$ ]]; then
+            echo "A same-repository automation/gallery lookalike branch is not authorized." >&2
+            exit 1
+          fi
+          proposal_run_id="${BASH_REMATCH[1]}"
+          proposal_run_attempt="${BASH_REMATCH[2]}"
+
+          if [[ ! "$EXPECTED_APP_SLUG" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]]; then
+            echo "GALLERY_PUBLISHER_APP_SLUG must identify the authorized publisher App." >&2
+            exit 1
+          fi
+          expected_app_login="${EXPECTED_APP_SLUG}[bot]"
+          encoded_app_login="$(jq -rn --arg value "$expected_app_login" '$value | @uri')"
+          app_user_json="$(gh api "/users/${encoded_app_login}")"
+          app_user_id="$(jq -er '.id | tostring' <<< "$app_user_json")"
+          if [ "$(jq -er '.login' <<< "$app_user_json")" != "$expected_app_login" ] || \
+             [ "$(jq -er '.type' <<< "$app_user_json")" != "Bot" ] || \
+             [[ ! "$app_user_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The configured publisher App bot identity is invalid." >&2
+            exit 1
+          fi
+
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          encoded_default_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          default_sha="$(gh api "repos/${GH_REPO}/branches/${encoded_default_branch}" --jq '.commit.sha')"
+          if [[ ! "$default_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "The current default-branch SHA is invalid." >&2
+            exit 1
+          fi
+          pr_json="$(gh api "repos/${GH_REPO}/pulls/${pr_number}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg defaultBranch "$default_branch" \
+            --arg headRef "$event_head_ref" \
+            --arg appLogin "$expected_app_login" \
+            --argjson appUserId "$app_user_id" '
+              .state == "open" and
+              .draft == false and
+              .maintainer_can_modify == false and
+              .base.repo.full_name == $repository and
+              .base.ref == $defaultBranch and
+              .head.repo.full_name == $repository and
+              .head.ref == $headRef and
+              .commits == 1 and
+              .user.login == $appLogin and
+              .user.id == $appUserId and
+              .user.type == "Bot"
+            ' <<< "$pr_json" > /dev/null; then
+            echo "The pull request failed repository, ref, state, commit-count, or publisher App-bot validation." >&2
+            exit 1
+          fi
+          base_sha="$(jq -er '.base.sha' <<< "$pr_json")"
+          head_sha="$(jq -er '.head.sha' <<< "$pr_json")"
+          if [[ ! "$base_sha" =~ ^[a-f0-9]{40}$ ]] || [[ ! "$head_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "The pull request has an invalid base or head SHA." >&2
+            exit 1
+          fi
+          if [ "$base_sha" != "$default_sha" ]; then
+            echo "The automation pull request is not based on the current default-branch SHA." >&2
+            exit 1
+          fi
+
+          encoded_head_ref="$(jq -rn --arg value "$event_head_ref" '$value | @uri')"
+          ref_json="$(gh api "repos/${GH_REPO}/git/ref/heads/${encoded_head_ref}")"
+          if [ "$(jq -er '.object.type' <<< "$ref_json")" != "commit" ] || \
+             [ "$(jq -er '.object.sha' <<< "$ref_json")" != "$head_sha" ]; then
+            echo "The automation branch ref does not resolve to the pull request head SHA." >&2
+            exit 1
+          fi
+
+          workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/propose-gallery-changes.yml")"
+          workflow_id="$(jq -er '.id | tostring' <<< "$workflow_json")"
+          if [ "$(jq -er '.name' <<< "$workflow_json")" != "Propose gallery changes (report only)" ] || \
+             [ "$(jq -er '.path' <<< "$workflow_json")" != ".github/workflows/propose-gallery-changes.yml" ]; then
+            echo "The proposal workflow identity is not trusted." >&2
+            exit 1
+          fi
+          run_json="$(gh api "repos/${GH_REPO}/actions/runs/${proposal_run_id}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$workflow_id" \
+            --arg defaultBranch "$default_branch" \
+            --arg baseSha "$base_sha" \
+            --argjson attempt "$proposal_run_attempt" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/propose-gallery-changes.yml" and
+              (.event == "schedule" or .event == "workflow_dispatch") and
+              .head_branch == $defaultBranch and
+              .head_sha == $baseSha and
+              .run_attempt == $attempt and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$run_json" > /dev/null; then
+            echo "The proposal run failed workflow, repository, base SHA, attempt, or success validation." >&2
+            exit 1
+          fi
+
+          expected_artifact_name="gallery-proposal-${proposal_run_id}-${proposal_run_attempt}"
+          artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${proposal_run_id}/artifacts?per_page=100")"
+          artifact_count="$(jq --arg name "$expected_artifact_name" \
+            '[.artifacts[] | select(.name == $name)] | length' <<< "$artifacts_json")"
+          if [ "$artifact_count" -ne 1 ]; then
+            echo "The proposal run must have exactly one attempt-bound proposal artifact." >&2
+            exit 1
+          fi
+          artifact_json="$(jq -c --arg name "$expected_artifact_name" \
+            '.artifacts[] | select(.name == $name)' <<< "$artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type == "string") and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$artifact_json" > /dev/null; then
+            echo "The proposal artifact is expired or lacks a valid ID and digest." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -er '.id | tostring' <<< "$artifact_json")"
+          artifact_digest="$(jq -er '.digest' <<< "$artifact_json")"
+
+          pr_body="$(jq -er '.body' <<< "$pr_json")"
+          marker_json="$(
+            PR_BODY="$pr_body" \
+            EXPECTED_RUN_ID="$proposal_run_id" \
+            EXPECTED_ATTEMPT="$proposal_run_attempt" \
+            EXPECTED_ARTIFACT_ID="$artifact_id" \
+            EXPECTED_ARTIFACT_DIGEST="$artifact_digest" \
+            EXPECTED_BASE_SHA="$base_sha" \
+            node --input-type=module <<'NODE'
+          const pattern = /<!-- gallery-publication:v1 run=([1-9][0-9]*) attempt=([1-9][0-9]*) artifact=([1-9][0-9]*) digest=(sha256:[a-f0-9]{64}) base=([a-f0-9]{40}) batch=1\/([1-9][0-9]*) -->/g;
+          const matches = [...process.env.PR_BODY.matchAll(pattern)];
+          const fail = (message) => {
+            process.stderr.write(`${message}\n`);
+            process.exit(1);
+          };
+          if (matches.length !== 1) fail("The pull request must contain one exact publication marker.");
+          const [, runId, attempt, artifactId, digest, baseSha, total] = matches[0];
+          if (
+            runId !== process.env.EXPECTED_RUN_ID ||
+            attempt !== process.env.EXPECTED_ATTEMPT ||
+            artifactId !== process.env.EXPECTED_ARTIFACT_ID ||
+            digest !== process.env.EXPECTED_ARTIFACT_DIGEST ||
+            baseSha !== process.env.EXPECTED_BASE_SHA
+          ) {
+            fail("The publication marker does not bind the verified proposal artifact and base SHA.");
+          }
+          process.stdout.write(JSON.stringify({ total: Number(total) }));
+          NODE
+          )"
+          batch_total="$(jq -er '.total' <<< "$marker_json")"
+          expected_title="chore(gallery): publish proposal ${proposal_run_id} (batch 1/${batch_total})"
+          if [ "$(jq -er '.title' <<< "$pr_json")" != "$expected_title" ]; then
+            echo "The automation pull request title does not match its verified proposal." >&2
+            exit 1
+          fi
+
+          commit_json="$(gh api "repos/${GH_REPO}/commits/${head_sha}")"
+          if ! jq -e \
+            --arg baseSha "$base_sha" \
+            --arg message "$expected_title" \
+            --arg appLogin "$expected_app_login" \
+            --argjson appUserId "$app_user_id" '
+              (.parents | length) == 1 and
+              .parents[0].sha == $baseSha and
+              .commit.message == $message and
+              .author.login == $appLogin and
+              .author.id == $appUserId and
+              .author.type == "Bot" and
+              .committer.login == $appLogin and
+              .committer.id == $appUserId and
+              .committer.type == "Bot"
+            ' <<< "$commit_json" > /dev/null; then
+            echo "The automation commit failed parent, message, or publisher App-bot validation." >&2
+            exit 1
+          fi
+
+          files_json="$(gh api --paginate "repos/${GH_REPO}/pulls/${pr_number}/files?per_page=100" | jq -s 'add')"
+          if ! jq -e '
+            length >= 2 and length <= 5 and
+            (map(.filename) | unique | length) == length and
+            any(.[]; .filename == ".github/gallery-pipeline/catalog-change-plan.json") and
+            any(.[]; .filename | startswith("static/")) and
+            all(.[].filename;
+              . == ".github/gallery-pipeline/catalog-change-plan.json" or
+              . == "static/templates.json" or
+              . == "static/gallery-health.json" or
+              . == "static/retired-templates.json" or
+              . == "static/catalog-audit.json"
+            ) and
+            all(.[]; (.status == "added" or .status == "modified") and (.previous_filename == null))
+          ' <<< "$files_json" > /dev/null; then
+            echo "The automation pull request contains missing, duplicate, removed, renamed, or unauthorized paths." >&2
+            exit 1
+          fi
+
+          echo "applicable=true" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+          echo "head_ref=${event_head_ref}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "default_branch=${default_branch}" >> "$GITHUB_OUTPUT"
+          echo "default_sha=${default_sha}" >> "$GITHUB_OUTPUT"
+          echo "workflow_id=${workflow_id}" >> "$GITHUB_OUTPUT"
+          echo "producer_event=$(jq -er '.event' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+          echo "run_started_at=$(jq -er '.run_started_at' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+          echo "run_updated_at=$(jq -er '.updated_at' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+          echo "proposal_run_id=${proposal_run_id}" >> "$GITHUB_OUTPUT"
+          echo "proposal_run_attempt=${proposal_run_attempt}" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=${artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${expected_artifact_name}" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=${artifact_digest}" >> "$GITHUB_OUTPUT"
+          echo "batch_total=${batch_total}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact API-verified default-branch SHA only
+        if: steps.metadata.outputs.applicable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.metadata.outputs.default_sha }}
+          persist-credentials: false
+
+      - name: Confirm trusted default-branch checkout
+        if: steps.metadata.outputs.applicable == 'true'
+        env:
+          TRUSTED_SHA: ${{ steps.metadata.outputs.default_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$TRUSTED_SHA" ]; then
+            echo "The checkout does not match the API-verified default-branch SHA." >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        if: steps.metadata.outputs.applicable == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install trusted default-branch dependencies
+        if: steps.metadata.outputs.applicable == 'true'
+        run: npm ci
+
+      - name: Rebuild the expected batch from the verified proposal artifact
+        if: steps.metadata.outputs.applicable == 'true'
+        env:
+          DEFAULT_BRANCH: ${{ steps.metadata.outputs.default_branch }}
+          DEFAULT_SHA: ${{ steps.metadata.outputs.default_sha }}
+          WORKFLOW_ID: ${{ steps.metadata.outputs.workflow_id }}
+          PRODUCER_EVENT: ${{ steps.metadata.outputs.producer_event }}
+          PROPOSAL_RUN_ID: ${{ steps.metadata.outputs.proposal_run_id }}
+          PROPOSAL_RUN_ATTEMPT: ${{ steps.metadata.outputs.proposal_run_attempt }}
+          RUN_STARTED_AT: ${{ steps.metadata.outputs.run_started_at }}
+          RUN_UPDATED_AT: ${{ steps.metadata.outputs.run_updated_at }}
+          ARTIFACT_ID: ${{ steps.metadata.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.metadata.outputs.artifact_name }}
+          ARTIFACT_DIGEST: ${{ steps.metadata.outputs.artifact_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p authorization-input/artifact
+          gh api "repos/${GH_REPO}/actions/artifacts/${ARTIFACT_ID}/zip" > authorization-input/proposal.zip
+          actual_digest="sha256:$(sha256sum authorization-input/proposal.zip | cut -d ' ' -f 1)"
+          if [ "$actual_digest" != "$ARTIFACT_DIGEST" ]; then
+            echo "The downloaded proposal artifact digest does not match the API." >&2
+            exit 1
+          fi
+
+          mapfile -t archive_entries < <(zipinfo -1 authorization-input/proposal.zip)
+          if [ "${#archive_entries[@]}" -eq 0 ] || [ "${#archive_entries[@]}" -gt 40 ]; then
+            echo "The proposal archive has an invalid entry count." >&2
+            exit 1
+          fi
+          declare -A seen_entries=()
+          for entry in "${archive_entries[@]}"; do
+            if [ -z "$entry" ] || [[ "$entry" == /* ]] || [[ "$entry" == *\\* ]] || \
+               [[ "/$entry/" == *"/../"* ]] || [[ "/$entry/" == *"/./"* ]] || \
+               [ -n "${seen_entries[$entry]:-}" ]; then
+              echo "The proposal archive contains an unsafe or duplicate path." >&2
+              exit 1
+            fi
+            seen_entries[$entry]=1
+            if [[ "$entry" == */ ]]; then
+              if [[ ! "$entry" =~ ^(plans|proposed)/$ ]]; then
+                echo "The proposal archive contains an unexpected directory." >&2
+                exit 1
+              fi
+            elif [[ ! "$entry" =~ ^(proposal-report\.json|proposal-receipt\.json|upstream-artifact-diagnostics\.json|proposed/(templates|gallery-health|retired-templates|catalog-audit)\.json|plans/catalog-change-plan-[0-9]{3}\.json)$ ]]; then
+              echo "The proposal archive contains an unexpected file path." >&2
+              exit 1
+            fi
+          done
+          if zipinfo -l authorization-input/proposal.zip | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The proposal archive contains a symbolic link." >&2
+            exit 1
+          fi
+          uncompressed_bytes="$(unzip -l authorization-input/proposal.zip | tail -n 1 | awk '{print $1}')"
+          if [[ ! "$uncompressed_bytes" =~ ^[0-9]+$ ]] || [ "$uncompressed_bytes" -gt 104857600 ]; then
+            echo "The proposal archive exceeds its uncompressed size limit." >&2
+            exit 1
+          fi
+          unzip -q authorization-input/proposal.zip -d authorization-input/artifact
+
+          jq -n \
+            --arg repository "$GH_REPO" \
+            --arg defaultBranch "$DEFAULT_BRANCH" \
+            --arg defaultSha "$DEFAULT_SHA" \
+            --arg workflowId "$WORKFLOW_ID" \
+            --arg producerEvent "$PRODUCER_EVENT" \
+            --arg runId "$PROPOSAL_RUN_ID" \
+            --argjson runAttempt "$PROPOSAL_RUN_ATTEMPT" \
+            --arg runStartedAt "$RUN_STARTED_AT" \
+            --arg updatedAt "$RUN_UPDATED_AT" \
+            --arg artifactId "$ARTIFACT_ID" \
+            --arg artifactName "$ARTIFACT_NAME" \
+            --arg artifactDigest "$ARTIFACT_DIGEST" '
+              {
+                schemaVersion: "1.0.0",
+                repository: $repository,
+                defaultBranch: $defaultBranch,
+                defaultSha: $defaultSha,
+                producerWorkflow: {
+                  id: $workflowId,
+                  name: "Propose gallery changes (report only)",
+                  path: ".github/workflows/propose-gallery-changes.yml"
+                },
+                producerRun: {
+                  id: $runId,
+                  attempt: $runAttempt,
+                  event: $producerEvent,
+                  status: "completed",
+                  conclusion: "success",
+                  workflowId: $workflowId,
+                  workflowPath: ".github/workflows/propose-gallery-changes.yml",
+                  repository: $repository,
+                  headRepository: $repository,
+                  headBranch: $defaultBranch,
+                  headSha: $defaultSha,
+                  runStartedAt: $runStartedAt,
+                  updatedAt: $updatedAt
+                },
+                artifact: {
+                  id: $artifactId,
+                  name: $artifactName,
+                  digest: $artifactDigest,
+                  expired: false
+                }
+              }
+            ' > authorization-input/api-metadata.json
+
+          node scripts/gallery-pipeline/verify-publication-artifact.mjs \
+            --artifact-directory authorization-input/artifact \
+            --artifact-archive authorization-input/proposal.zip \
+            --api-metadata authorization-input/api-metadata.json \
+            --repository-root . \
+            --output-directory authorization-payload
+
+      - name: Verify exact pull request paths and Git blob bytes
+        if: steps.metadata.outputs.applicable == 'true'
+        env:
+          PR_NUMBER: ${{ steps.metadata.outputs.pr_number }}
+          EXPECTED_HEAD_REF: ${{ steps.metadata.outputs.head_ref }}
+          EXPECTED_HEAD_SHA: ${{ steps.metadata.outputs.head_sha }}
+          EXPECTED_DEFAULT_BRANCH: ${{ steps.metadata.outputs.default_branch }}
+          EXPECTED_DEFAULT_SHA: ${{ steps.metadata.outputs.default_sha }}
+          PROPOSAL_RUN_ID: ${{ steps.metadata.outputs.proposal_run_id }}
+          PROPOSAL_RUN_ATTEMPT: ${{ steps.metadata.outputs.proposal_run_attempt }}
+          EXPECTED_ARTIFACT_ID: ${{ steps.metadata.outputs.artifact_id }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ steps.metadata.outputs.artifact_digest }}
+          EXPECTED_BATCH_TOTAL: ${{ steps.metadata.outputs.batch_total }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="authorization-payload/publication-manifest.json"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg headRef "$EXPECTED_HEAD_REF" \
+            --arg defaultBranch "$EXPECTED_DEFAULT_BRANCH" \
+            --arg defaultSha "$EXPECTED_DEFAULT_SHA" \
+            --arg runId "$PROPOSAL_RUN_ID" \
+            --argjson runAttempt "$PROPOSAL_RUN_ATTEMPT" \
+            --arg artifactId "$EXPECTED_ARTIFACT_ID" \
+            --arg artifactDigest "$EXPECTED_ARTIFACT_DIGEST" \
+            --argjson batchTotal "$EXPECTED_BATCH_TOTAL" '
+              .publishable == true and
+              .repository == $repository and
+              .branch == $headRef and
+              .baseRef == ("refs/heads/" + $defaultBranch) and
+              .baseSha == $defaultSha and
+              .proposal.runId == $runId and
+              .proposal.runAttempt == $runAttempt and
+              .proposal.artifactId == $artifactId and
+              .proposal.artifactDigest == $artifactDigest and
+              .batch.number == 1 and
+              .batch.total == $batchTotal
+            ' "$manifest" > /dev/null; then
+            echo "The pull request metadata does not match the verified publication manifest." >&2
+            exit 1
+          fi
+          current_pr="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg headRef "$EXPECTED_HEAD_REF" \
+            --arg headSha "$EXPECTED_HEAD_SHA" \
+            --arg defaultBranch "$EXPECTED_DEFAULT_BRANCH" \
+            --arg defaultSha "$EXPECTED_DEFAULT_SHA" '
+              .state == "open" and
+              .commits == 1 and
+              .changed_files >= 2 and .changed_files <= 5 and
+              .head.repo.full_name == $repository and
+              .head.ref == $headRef and
+              .head.sha == $headSha and
+              .base.repo.full_name == $repository and
+              .base.ref == $defaultBranch and
+              .base.sha == $defaultSha
+            ' <<< "$current_pr" > /dev/null; then
+            echo "The pull request changed during authorization." >&2
+            exit 1
+          fi
+          current_default_sha="$(gh api "repos/${GH_REPO}/branches/$(jq -rn --arg value "$EXPECTED_DEFAULT_BRANCH" '$value | @uri')" --jq '.commit.sha')"
+          if [ "$current_default_sha" != "$EXPECTED_DEFAULT_SHA" ]; then
+            echo "The default branch advanced during authorization." >&2
+            exit 1
+          fi
+          current_ref_sha="$(gh api "repos/${GH_REPO}/git/ref/heads/$(jq -rn --arg value "$EXPECTED_HEAD_REF" '$value | @uri')" --jq '.object.sha')"
+          if [ "$current_ref_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "The automation branch changed during authorization." >&2
+            exit 1
+          fi
+
+          commit_json="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_HEAD_SHA}")"
+          tree_sha="$(jq -er '.commit.tree.sha' <<< "$commit_json")"
+          tree_json="$(gh api "repos/${GH_REPO}/git/trees/${tree_sha}?recursive=1")"
+          if [ "$(jq -r '.truncated' <<< "$tree_json")" != "false" ]; then
+            echo "The automation commit tree response was truncated." >&2
+            exit 1
+          fi
+
+          files_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/files?per_page=6")"
+          if [ "$(jq 'length' <<< "$files_json")" -gt 5 ]; then
+            echo "The automation pull request exceeds the bounded path limit." >&2
+            exit 1
+          fi
+          blob_lines="$(mktemp)"
+          : > "$blob_lines"
+          while IFS= read -r file_json; do
+            file_path="$(jq -er '.filename' <<< "$file_json")"
+            file_sha="$(jq -er '.sha' <<< "$file_json")"
+            if [[ ! "$file_sha" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "The pull request file has an invalid Git blob SHA." >&2
+              exit 1
+            fi
+            tree_entry="$(jq -c --arg path "$file_path" \
+              '[.tree[] | select(.path == $path and .type == "blob")] | if length == 1 then .[0] else error("path mismatch") end' \
+              <<< "$tree_json")"
+            if [ "$(jq -er '.sha' <<< "$tree_entry")" != "$file_sha" ] || \
+               [ "$(jq -er '.size' <<< "$tree_entry")" -gt 26214400 ]; then
+              echo "The pull request file is absent from the commit tree or exceeds its size limit." >&2
+              exit 1
+            fi
+            blob_json="$(gh api "repos/${GH_REPO}/git/blobs/${file_sha}")"
+            jq -nc --argjson file "$file_json" --argjson blob "$blob_json" '
+              {
+                filename: $file.filename,
+                status: $file.status,
+                previousFilename: ($file.previous_filename // null),
+                sha: $file.sha,
+                blob: {
+                  sha: $blob.sha,
+                  size: $blob.size,
+                  encoding: $blob.encoding,
+                  content: $blob.content
+                }
+              }
+            ' >> "$blob_lines"
+          done < <(jq -c '.[]' <<< "$files_json")
+          jq -s '.' "$blob_lines" > authorization-input/pr-files.json
+          rm -f "$blob_lines"
+
+          node scripts/gallery-pipeline/verify-publication-artifact-pr.mjs \
+            --manifest "$manifest" \
+            --pr-files authorization-input/pr-files.json
+
+          final_pr="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
+          final_ref_sha="$(gh api "repos/${GH_REPO}/git/ref/heads/$(jq -rn --arg value "$EXPECTED_HEAD_REF" '$value | @uri')" --jq '.object.sha')"
+          if [ "$(jq -er '.head.sha' <<< "$final_pr")" != "$EXPECTED_HEAD_SHA" ] || \
+             [ "$final_ref_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "The automation branch changed after byte verification." >&2
+            exit 1
+          fi
+          printf '### Gallery automation authorization\n\nAuthorized pull request #%s from verified proposal run %s attempt %s with exact artifact bytes.\n' \
+            "$PR_NUMBER" "$PROPOSAL_RUN_ID" "$PROPOSAL_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"

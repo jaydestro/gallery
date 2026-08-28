@@ -15,6 +15,7 @@
     "gallery:evaluate:model": "node scripts/gallery-pipeline/evaluate-model.mjs",
     "gallery:evaluate:model:test": "node --test scripts/gallery-pipeline/evaluate-model.test.mjs",
     "gallery:propose": "node scripts/gallery-pipeline/propose-catalog-changes.mjs",
+    "gallery:portfolio": "node scripts/gallery-pipeline/generate-portfolio-report.mjs",
     "ci:gallery": "npm run gallery:test && npm run gallery:validate",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",

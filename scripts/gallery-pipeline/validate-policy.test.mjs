@@ -42,6 +42,31 @@ test("rejects an invalid policy through its strict schema", () => {
   assert(issueCodes(validatePolicyData(context, { policy }, { now })).has("SCHEMA_VALIDATION"));
 });
 
+test("keeps publication disabled by default while permitting explicit reviewed activation", () => {
+  const defaults = context.configs.policy.automation;
+  assert.equal(defaults.emergencyDisable, true);
+  assert.equal(defaults.mutationMode, "dry-run");
+  assert.ok(Object.values(defaults.ai).every((value) => value === false));
+  assert.ok(Object.values(defaults.mutation).every((value) => value === false));
+
+  const activated = clone(context.configs.policy);
+  activated.automation.emergencyDisable = false;
+  for (const name of Object.keys(activated.automation.ai)) {
+    activated.automation.ai[name] = true;
+  }
+  for (const name of Object.keys(activated.automation.mutation)) {
+    activated.automation.mutation[name] = true;
+  }
+  assert.deepEqual(validatePolicyData(context, { policy: activated }, { now }), []);
+});
+
+test("rejects non-boolean automation activation values", () => {
+  const policy = clone(context.configs.policy);
+  policy.automation.mutation.automaticMerge = "true";
+
+  assert(issueCodes(validatePolicyData(context, { policy }, { now })).has("SCHEMA_VALIDATION"));
+});
+
 test("rejects an invalid evaluation set through its strict schema", () => {
   const evaluationSet = clone(context.configs.evaluationSet);
   evaluationSet.unexpected = true;

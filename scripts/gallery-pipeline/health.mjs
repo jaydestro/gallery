@@ -103,28 +103,44 @@ export async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-function previousEntryFor(previousHealth, galleryId, canonicalSource) {
+function previousEntryFor(previousHealth, galleryId) {
   const entries = Array.isArray(previousHealth?.entries) ? previousHealth.entries : [];
-  return entries.find((entry) => entry.galleryId === galleryId) ??
-    entries.find((entry) => {
-      try {
-        return canonicalizeUrl(entry.canonicalSource) === canonicalSource;
-      } catch {
-        return false;
-      }
-    }) ?? null;
+  return entries.find((entry) => entry.galleryId === galleryId) ?? null;
 }
 
-function isContinuingFinding(previous, result, checkedAt, canonicalSource) {
-  if (!previous || previous.sourceState?.availability !== "broken") return false;
-  if (!previous.healthReasons?.includes(result.reason)) return false;
+function hasSameSource(previous, canonicalSource) {
   try {
-    if (canonicalizeUrl(previous.canonicalSource) !== canonicalSource) return false;
+    return canonicalizeUrl(previous?.canonicalSource) === canonicalSource;
   } catch {
     return false;
   }
+}
+
+function hasPendingFailure(previous) {
+  return (
+    ["broken", "indeterminate"].includes(previous?.sourceState?.availability) &&
+    Number.isSafeInteger(previous?.consecutiveFindings) &&
+    previous.consecutiveFindings > 0 &&
+    typeof previous.gracePeriodStartedAt === "string" &&
+    Array.isArray(previous.healthReasons)
+  );
+}
+
+function findingRelation(previous, result, checkedAt, canonicalSource) {
+  if (!previous) return "new";
   const previousCheck = new Date(previous.checkedAt);
-  return !Number.isNaN(previousCheck.getTime()) && previousCheck.getTime() < checkedAt.getTime();
+  if (Number.isNaN(previousCheck.getTime())) return "new";
+  if (previousCheck.getTime() > checkedAt.getTime()) {
+    throw new TypeError("Previous health checkedAt cannot be after the current observation");
+  }
+  if (!hasPendingFailure(previous)) return "new";
+  if (!previous.healthReasons?.includes(result.reason)) return "new";
+  try {
+    if (canonicalizeUrl(previous.canonicalSource) !== canonicalSource) return "new";
+  } catch {
+    return "new";
+  }
+  return previousCheck.getTime() === checkedAt.getTime() ? "replay" : "continuing";
 }
 
 function evidenceFor(result, canonicalSource, checkedAt) {
@@ -149,7 +165,7 @@ export function evaluateHealthFinding({
 }) {
   const observedAt = asDate(checkedAt, "checkedAt");
   const normalizedSource = canonicalizeUrl(canonicalSource);
-  const previous = previousEntryFor(previousHealth, galleryId, normalizedSource);
+  const previous = previousEntryFor(previousHealth, galleryId);
   const requiredConfirmations = policy?.lifecycle?.requiredConfirmations;
   const retirementGraceDays = policy?.lifecycle?.retirementGraceDays;
   if (!Number.isSafeInteger(requiredConfirmations) || requiredConfirmations < 1) {
@@ -166,20 +182,29 @@ export function evaluateHealthFinding({
   let consecutiveFindings;
   let gracePeriodStartedAt;
   let availability;
+  let healthReasons;
   if (result.classification === "healthy") {
     status = "healthy";
     consecutiveFindings = 0;
     gracePeriodStartedAt = null;
     availability = "available";
+    healthReasons = [];
   } else if (result.classification === "indeterminate") {
+    const preservePendingFailure = hasSameSource(previous, normalizedSource) &&
+      hasPendingFailure(previous);
     status = "indeterminate";
-    consecutiveFindings = previous?.consecutiveFindings ?? 0;
-    gracePeriodStartedAt = previous?.gracePeriodStartedAt ?? null;
+    consecutiveFindings = preservePendingFailure ? previous.consecutiveFindings : 0;
+    gracePeriodStartedAt = preservePendingFailure ? previous.gracePeriodStartedAt : null;
     availability = "indeterminate";
+    healthReasons = preservePendingFailure
+      ? [...previous.healthReasons]
+      : (result.reason ? [result.reason] : []);
   } else {
-    const continuing = isContinuingFinding(previous, result, observedAt, normalizedSource);
-    consecutiveFindings = continuing ? previous.consecutiveFindings + 1 : 1;
-    gracePeriodStartedAt = continuing && previous.gracePeriodStartedAt
+    const relation = findingRelation(previous, result, observedAt, normalizedSource);
+    consecutiveFindings = relation === "replay"
+      ? previous.consecutiveFindings
+      : (relation === "continuing" ? previous.consecutiveFindings + 1 : 1);
+    gracePeriodStartedAt = relation !== "new" && previous.gracePeriodStartedAt
       ? previous.gracePeriodStartedAt
       : observedAt.toISOString();
     const graceStarted = asDate(gracePeriodStartedAt, "gracePeriodStartedAt");
@@ -189,11 +214,11 @@ export function evaluateHealthFinding({
       ? "quarantined"
       : "needs-review";
     availability = "broken";
+    healthReasons = result.reason ? [result.reason] : [];
   }
 
   const availabilityIntegrity = result.classification === "healthy" ? 25 : 0;
   const components = { ...AVAILABLE_COMPONENTS, availabilityIntegrity };
-  const healthReasons = result.reason ? [result.reason] : [];
   return {
     galleryId,
     canonicalSource: normalizedSource,
@@ -223,9 +248,22 @@ export function createHealthSnapshot(records, sourceResults, {
   if (!(sourceResults instanceof Map)) {
     throw new TypeError("sourceResults must be a Map keyed by canonical source");
   }
+  const groups = groupCatalogSources(records);
+  const expectedSources = new Set(groups.map((group) => group.canonicalSource));
+  const normalizedResults = new Map();
+  for (const [source, result] of sourceResults) {
+    const canonicalSource = canonicalizeUrl(source);
+    if (normalizedResults.has(canonicalSource)) {
+      throw new TypeError(`Duplicate health observation for ${canonicalSource}`);
+    }
+    if (!expectedSources.has(canonicalSource)) {
+      throw new TypeError(`Stale health source identity ${canonicalSource}`);
+    }
+    normalizedResults.set(canonicalSource, result);
+  }
   const entries = [];
-  for (const group of groupCatalogSources(records)) {
-    const result = sourceResults.get(group.canonicalSource);
+  for (const group of groups) {
+    const result = normalizedResults.get(group.canonicalSource);
     if (!result) throw new TypeError(`Missing health result for ${group.canonicalSource}`);
     for (const { galleryId } of group.records) {
       entries.push(evaluateHealthFinding({

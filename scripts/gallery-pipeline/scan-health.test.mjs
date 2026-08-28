@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,21 +9,47 @@ import { fileURLToPath } from "node:url";
 import {
   checkGitHubSource,
   checkHttpSource,
+  main,
   mapAvailabilityChecks,
   parseArguments,
   runHealthScan,
 } from "./scan-health.mjs";
+import { HEALTH_ARTIFACT_FILES } from "./persist-health.mjs";
 import { loadValidationContext } from "./validation.mjs";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(TEST_DIRECTORY, "../..");
 const FIXTURE = path.join(TEST_DIRECTORY, "fixtures", "health");
+const HEALTH_SCHEMA = "../.github/gallery-pipeline/health.schema.json";
 const publicLookup = async () => [{ address: "20.12.34.56", family: 4 }];
 const policy = {
   contractVersions: { health: "1.0.0" },
   http: { timeoutSeconds: 1, maxRedirects: 2 },
   lifecycle: { requiredConfirmations: 2, retirementGraceDays: 30 },
 };
+
+function emptyHealth() {
+  return {
+    $schema: HEALTH_SCHEMA,
+    version: "1.0.0",
+    entries: [],
+  };
+}
+
+function runIdentity(runId, observedAt) {
+  return {
+    repository: "example/gallery",
+    runId,
+    runAttempt: 1,
+    sourceRef: "refs/heads/main",
+    sourceSha: "0123456789abcdef0123456789abcdef01234567",
+    observedAt,
+  };
+}
+
+function exactHash(bytes) {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
 
 function responseFetch(definitions, calls = []) {
   return async (input, init = {}) => {
@@ -37,15 +64,15 @@ function responseFetch(definitions, calls = []) {
   };
 }
 
-test("argument parsing is dry-run by default and rejects fixture writes", () => {
+test("argument parsing is read-only and exposes no direct persistence mode", () => {
   assert.deepEqual(parseArguments([]), {
-    write: false,
     fixturePath: null,
     rootDir: process.cwd(),
     checkedAt: null,
     concurrency: 6,
+    outputDirectory: null,
   });
-  assert.throws(() => parseArguments(["--fixtures", "--write"]), /cannot be combined/);
+  assert.throws(() => parseArguments(["--write"]), /Unknown option/);
   assert.throws(() => parseArguments(["--concurrency", "0"]), /positive integer/);
 });
 
@@ -296,7 +323,7 @@ test("GitHub sources without a token use one bounded URL check", async () => {
     context,
     records: [{ id: "public-repo", canonicalSource: "https://github.com/example/repo" }],
     policy,
-    previousHealth: { entries: [] },
+    previousHealth: emptyHealth(),
     checkedAt: "2026-01-01T00:00:00.000Z",
     token: null,
     lookup: publicLookup,
@@ -355,6 +382,7 @@ test("a partial GitHub path check is indeterminate and proposes no lifecycle act
     records: [{ id: "partial", canonicalSource: source }],
     policy,
     previousHealth: {
+      $schema: HEALTH_SCHEMA,
       version: "1.0.0",
       entries: [{
         galleryId: "partial",
@@ -402,13 +430,69 @@ test("a partial GitHub path check is indeterminate and proposes no lifecycle act
   assert.equal(report.summary.quarantined, 0);
 });
 
+test("two scan runs confirm from exact persisted state and same-run replay does not increment", async () => {
+  const context = await loadValidationContext(ROOT);
+  const records = [{ id: "two-run", canonicalSource: "https://example.com/two-run" }];
+  const catalogBytes = Buffer.from(`${JSON.stringify(records)}\n`);
+  const firstPrior = emptyHealth();
+  const firstPriorBytes = Buffer.from(`${JSON.stringify(firstPrior)}\n`);
+  const scan = ({ previousHealth, previousHealthBytes, checkedAt, runId }) => runHealthScan({
+    context,
+    records,
+    catalogBytes,
+    policy,
+    previousHealth,
+    previousHealthBytes,
+    checkedAt,
+    run: runIdentity(runId, checkedAt),
+    now: "2026-02-02T00:00:00.000Z",
+    token: null,
+    lookup: publicLookup,
+    fetchImpl: responseFetch({
+      "HEAD https://example.com/two-run": { status: 404 },
+    }),
+  });
+
+  const first = await scan({
+    previousHealth: firstPrior,
+    previousHealthBytes: firstPriorBytes,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    runId: "run-1",
+  });
+  assert.equal(first.proposedHealth.entries[0].consecutiveFindings, 1);
+  assert.equal(first.receipt.inputs.priorHealth.sha256, exactHash(firstPriorBytes));
+  assert.equal(first.receipt.inputs.catalog.sha256, exactHash(catalogBytes));
+
+  const firstProposedBytes = first.artifactBytes[HEALTH_ARTIFACT_FILES.proposedHealth];
+  const second = await scan({
+    previousHealth: first.proposedHealth,
+    previousHealthBytes: firstProposedBytes,
+    checkedAt: "2026-02-01T00:00:00.000Z",
+    runId: "run-2",
+  });
+  assert.equal(second.proposedHealth.entries[0].consecutiveFindings, 2);
+  assert.equal(second.proposedHealth.entries[0].status, "quarantined");
+
+  const secondProposedBytes = second.artifactBytes[HEALTH_ARTIFACT_FILES.proposedHealth];
+  const replayed = await scan({
+    previousHealth: second.proposedHealth,
+    previousHealthBytes: secondProposedBytes,
+    checkedAt: "2026-02-01T00:00:00.000Z",
+    runId: "run-2",
+  });
+  assert.equal(replayed.proposedHealth.entries[0].consecutiveFindings, 2);
+  assert.equal(replayed.proposedHealth.entries[0].status, "quarantined");
+});
+
 test("shared sources are checked once and dry-run never writes catalog or health files", async () => {
   const context = await loadValidationContext(ROOT);
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), "gallery-health-"));
   const staticDirectory = path.join(temporaryRoot, "static");
   await mkdir(staticDirectory);
   const templatesPath = path.join(staticDirectory, "templates.json");
+  const healthPath = path.join(staticDirectory, "gallery-health.json");
   await writeFile(templatesPath, "unchanged\n", "utf8");
+  await writeFile(healthPath, "unchanged health\n", "utf8");
   const calls = [];
   try {
     const options = {
@@ -419,7 +503,7 @@ test("shared sources are checked once and dry-run never writes catalog or health
         { id: "second", canonicalSource: "https://example.com/shared/" },
       ],
       policy,
-      previousHealth: { entries: [] },
+      previousHealth: emptyHealth(),
       checkedAt: "2026-01-01T00:00:00.000Z",
       token: null,
       lookup: publicLookup,
@@ -431,14 +515,11 @@ test("shared sources are checked once and dry-run never writes catalog or health
     assert.equal(dryRun.dryRun, true);
     assert.equal(dryRun.healthSnapshot.entries.length, 2);
     assert.equal(calls.length, 1);
-    await assert.rejects(readFile(path.join(staticDirectory, "gallery-health.json")), /ENOENT/);
     assert.equal(await readFile(templatesPath, "utf8"), "unchanged\n");
-
-    const written = await runHealthScan({ ...options, write: true });
-    const persisted = JSON.parse(await readFile(written.writtenPath, "utf8"));
+    assert.equal(await readFile(healthPath, "utf8"), "unchanged health\n");
+    assert.deepEqual(dryRun.proposedHealth, dryRun.healthSnapshot);
     const validate = context.schemas.validators.get("health.schema.json");
-    assert.equal(validate(persisted), true, JSON.stringify(validate.errors));
-    assert.equal(await readFile(templatesPath, "utf8"), "unchanged\n");
+    assert.equal(validate(dryRun.proposedHealth), true, JSON.stringify(validate.errors));
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -457,4 +538,53 @@ test("fixture mode is fully offline and emits a schema-valid recovery snapshot",
   assert.equal(report.summary.healthy, 1);
   assert.equal(report.healthSnapshot.entries[0].status, "healthy");
   assert.equal(validate(report.healthSnapshot), true, JSON.stringify(validate.errors));
+});
+
+test("CLI emits report, proposed state, and receipt outside the workspace without source writes", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "gallery-health-cli-"));
+  const outputDirectory = path.join(temporaryDirectory, "artifacts");
+  const healthPath = path.join(ROOT, "static", "gallery-health.json");
+  const healthBefore = await readFile(healthPath);
+  const output = [];
+  const errors = [];
+  try {
+    const exitCode = await main([
+      "--root", ROOT,
+      "--fixtures", FIXTURE,
+      "--output-directory", outputDirectory,
+    ], {
+      stdout: { write: (chunk) => output.push(Buffer.from(chunk)) },
+      stderr: { write: (chunk) => errors.push(String(chunk)) },
+    });
+    assert.equal(exitCode, 0, errors.join(""));
+    const reportBytes = await readFile(path.join(outputDirectory, HEALTH_ARTIFACT_FILES.report));
+    const proposedBytes = await readFile(
+      path.join(outputDirectory, HEALTH_ARTIFACT_FILES.proposedHealth),
+    );
+    const receiptBytes = await readFile(path.join(outputDirectory, HEALTH_ARTIFACT_FILES.receipt));
+    const receipt = JSON.parse(receiptBytes);
+    assert.deepEqual(Buffer.concat(output), reportBytes);
+    assert.equal(receipt.outputs.report.sha256, exactHash(reportBytes));
+    assert.equal(receipt.outputs.proposedHealth.sha256, exactHash(proposedBytes));
+    assert.deepEqual(await readFile(healthPath), healthBefore);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("workflow is unconditional, read-only, pinned, and uploads all health artifacts", async () => {
+  const workflow = await readFile(
+    path.join(ROOT, ".github", "workflows", "scan-gallery-health.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /permissions:\s*\n\s*contents: read/);
+  assert.doesNotMatch(workflow, /GALLERY_PIPELINE_DRY_RUN_ENABLED|contents: write|git (commit|push)/);
+  assert.match(workflow, /runs-on: ubuntu-24\.04/);
+  assert.match(workflow, /--output-directory "\$artifact_directory"/);
+  for (const fileName of Object.values(HEALTH_ARTIFACT_FILES)) {
+    assert.match(workflow, new RegExp(fileName.replaceAll(".", "\\.")));
+  }
+  for (const reference of workflow.matchAll(/uses:\s*[^\s@]+@([^\s]+)/g)) {
+    assert.match(reference[1], /^[a-f0-9]{40}$/);
+  }
 });

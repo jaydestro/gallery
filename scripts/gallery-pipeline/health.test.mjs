@@ -55,6 +55,22 @@ test("rerunning the same observation does not manufacture a confirmation", () =>
   assert.equal(repeated.status, "needs-review");
 });
 
+test("a same-observation replay preserves an already confirmed count", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const confirmed = evaluate(deletion, "2026-02-01T00:00:00.000Z", first);
+  const repeated = evaluate(deletion, "2026-02-01T00:00:00.000Z", confirmed);
+  assert.equal(confirmed.consecutiveFindings, 2);
+  assert.equal(repeated.consecutiveFindings, 2);
+  assert.equal(repeated.gracePeriodStartedAt, first.gracePeriodStartedAt);
+});
+
+test("two distinct runs confirm after the grace period", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const second = evaluate(deletion, "2026-02-01T00:00:00.000Z", first);
+  assert.equal(second.consecutiveFindings, 2);
+  assert.equal(second.status, "quarantined");
+});
+
 test("a changed canonical source starts a new confirmation sequence", () => {
   const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
   const changed = evaluateHealthFinding({
@@ -69,6 +85,20 @@ test("a changed canonical source starts a new confirmation sequence", () => {
   assert.equal(changed.status, "needs-review");
 });
 
+test("a source change does not preserve confirmation state through an indeterminate check", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const changed = evaluateHealthFinding({
+    galleryId: record.id,
+    canonicalSource: "https://github.com/example/replacement",
+    result: { classification: "indeterminate", reason: "SOURCE_HTTP_429" },
+    previousHealth: { entries: [first] },
+    policy,
+    checkedAt: "2026-02-01T00:00:00.000Z",
+  });
+  assert.equal(changed.consecutiveFindings, 0);
+  assert.equal(changed.gracePeriodStartedAt, null);
+});
+
 test("indeterminate checks take no action and preserve prior confirmation state", () => {
   const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
   const partial = evaluate({
@@ -80,7 +110,60 @@ test("indeterminate checks take no action and preserve prior confirmation state"
   assert.equal(partial.status, "indeterminate");
   assert.equal(partial.consecutiveFindings, 1);
   assert.equal(partial.gracePeriodStartedAt, first.gracePeriodStartedAt);
+  assert.deepEqual(partial.healthReasons, [deletion.reason]);
   assert.equal(partial.sourceState.availability, "indeterminate");
+  assert.equal(partial.evidence[0].value, "SOURCE_HTTP_429");
+});
+
+test("a matching definitive failure continues across an indeterminate observation", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const partial = evaluate({
+    classification: "indeterminate",
+    reason: "SOURCE_HTTP_429",
+    statusCode: 429,
+  }, "2026-01-15T00:00:00.000Z", first);
+  const confirmed = evaluate(deletion, "2026-02-01T00:00:00.000Z", partial);
+
+  assert.equal(confirmed.consecutiveFindings, 2);
+  assert.equal(confirmed.gracePeriodStartedAt, first.gracePeriodStartedAt);
+  assert.equal(confirmed.status, "quarantined");
+});
+
+test("a different definitive reason starts a new chain after an indeterminate observation", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const partial = evaluate({
+    classification: "indeterminate",
+    reason: "SOURCE_HTTP_429",
+  }, "2026-01-15T00:00:00.000Z", first);
+  const changed = evaluate({
+    classification: "definitive-failure",
+    reason: "SOURCE_HTTP_410",
+    statusCode: 410,
+  }, "2026-02-01T00:00:00.000Z", partial);
+
+  assert.equal(changed.consecutiveFindings, 1);
+  assert.equal(changed.gracePeriodStartedAt, "2026-02-01T00:00:00.000Z");
+  assert.equal(changed.status, "needs-review");
+});
+
+test("a different canonical source starts a new chain after an indeterminate observation", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const partial = evaluate({
+    classification: "indeterminate",
+    reason: "SOURCE_HTTP_429",
+  }, "2026-01-15T00:00:00.000Z", first);
+  const changed = evaluateHealthFinding({
+    galleryId: record.id,
+    canonicalSource: "https://github.com/example/replacement",
+    result: deletion,
+    previousHealth: { entries: [partial] },
+    policy,
+    checkedAt: "2026-02-01T00:00:00.000Z",
+  });
+
+  assert.equal(changed.consecutiveFindings, 1);
+  assert.equal(changed.gracePeriodStartedAt, "2026-02-01T00:00:00.000Z");
+  assert.equal(changed.status, "needs-review");
 });
 
 test("authoritative archive state quarantines while deletion remains confirmation-gated", () => {
@@ -97,9 +180,13 @@ test("authoritative archive state quarantines while deletion remains confirmatio
   assert.equal(deleted.status, "needs-review");
 });
 
-test("a healthy check clears prior failure state", () => {
+test("a healthy check clears failure state preserved through an indeterminate observation", () => {
   const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
-  const recovered = evaluate({ classification: "healthy" }, "2026-02-01T00:00:00.000Z", first);
+  const partial = evaluate({
+    classification: "indeterminate",
+    reason: "SOURCE_HTTP_429",
+  }, "2026-01-15T00:00:00.000Z", first);
+  const recovered = evaluate({ classification: "healthy" }, "2026-02-01T00:00:00.000Z", partial);
 
   assert.equal(recovered.status, "healthy");
   assert.equal(recovered.healthScore, 100);
@@ -124,6 +211,38 @@ test("shared canonical sources are grouped once but retain one health entry per 
   });
   assert.deepEqual(snapshot.entries.map((entry) => entry.galleryId), ["first", "second"]);
   assert.ok(snapshot.entries.every((entry) => entry.status === "healthy"));
+});
+
+test("new gallery identities do not inherit findings from another record sharing a source", () => {
+  const first = evaluate(deletion, "2026-01-01T00:00:00.000Z");
+  const next = evaluateHealthFinding({
+    galleryId: "replacement-id",
+    canonicalSource: record.canonicalSource,
+    result: deletion,
+    previousHealth: { entries: [first] },
+    policy,
+    checkedAt: "2026-02-01T00:00:00.000Z",
+  });
+  assert.equal(next.consecutiveFindings, 1);
+  assert.equal(next.gracePeriodStartedAt, "2026-02-01T00:00:00.000Z");
+});
+
+test("snapshot creation rejects duplicate observations and stale source identities", () => {
+  const records = [{ id: "example", canonicalSource: "https://example.com/source" }];
+  assert.throws(() => createHealthSnapshot(records, new Map([
+    ["https://example.com/source", { classification: "healthy" }],
+    ["https://EXAMPLE.com/source/", { classification: "healthy" }],
+  ]), {
+    policy,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+  }), /Duplicate health observation/);
+  assert.throws(() => createHealthSnapshot(records, new Map([
+    ["https://example.com/source", { classification: "healthy" }],
+    ["https://example.com/stale", { classification: "healthy" }],
+  ]), {
+    policy,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+  }), /Stale health source identity/);
 });
 
 test("bounded mapping preserves input order and never exceeds its concurrency", async () => {

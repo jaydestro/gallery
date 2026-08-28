@@ -1,4 +1,4 @@
-import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -8,6 +8,11 @@ import {
   githubSourceCoordinates,
   groupCatalogSources,
 } from "./health.mjs";
+import {
+  HEALTH_ARTIFACT_FILES,
+  createHealthPersistenceArtifacts,
+  writeHealthScanArtifacts,
+} from "./persist-health.mjs";
 import { safeFetch } from "./shared/safe-fetch.mjs";
 import { loadValidationContext } from "./validation.mjs";
 
@@ -21,6 +26,7 @@ const HOST_INTER_REQUEST_DELAYS_MILLISECONDS = new Map([
   [LEARN_HOSTNAME, LEARN_INTER_REQUEST_DELAY_MILLISECONDS],
 ]);
 const DEFAULT_FIXTURE = fileURLToPath(new URL("./fixtures/health/input.json", import.meta.url));
+const CATALOG_PATH = path.join("static", "templates.json");
 const HEALTH_PATH = path.join("static", "gallery-health.json");
 const FALLBACK_TO_GET_STATUSES = new Set([405, 501]);
 const TRANSIENT_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -101,18 +107,14 @@ function argumentValue(argv, index, option) {
 
 export function parseArguments(argv = []) {
   const options = {
-    write: false,
     fixturePath: null,
     rootDir: process.cwd(),
     checkedAt: null,
     concurrency: DEFAULT_CONCURRENCY,
+    outputDirectory: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--write") {
-      options.write = true;
-      continue;
-    }
     if (argument === "--dry-run") continue;
     if (argument === "--fixtures") {
       const candidate = argv[index + 1];
@@ -139,13 +141,15 @@ export function parseArguments(argv = []) {
       index += 1;
       continue;
     }
+    if (argument === "--output-directory") {
+      options.outputDirectory = argumentValue(argv, index, argument);
+      index += 1;
+      continue;
+    }
     throw new TypeError(`Unknown option: ${argument}`);
   }
   if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1) {
     throw new TypeError("--concurrency must be a positive integer");
-  }
-  if (options.write && options.fixturePath) {
-    throw new TypeError("--write cannot be combined with --fixtures");
   }
   return options;
 }
@@ -497,18 +501,6 @@ function assertHealthSchema(context, healthSnapshot) {
   throw new TypeError(`Health scanner produced invalid snapshot data: ${details}`);
 }
 
-async function writeHealthSnapshot(rootDir, healthSnapshot) {
-  const targetPath = path.join(path.resolve(rootDir), HEALTH_PATH);
-  const temporaryPath = `${targetPath}.${process.pid}.tmp`;
-  try {
-    await writeFile(temporaryPath, `${JSON.stringify(healthSnapshot, null, 2)}\n`, "utf8");
-    await rename(temporaryPath, targetPath);
-  } finally {
-    await rm(temporaryPath, { force: true });
-  }
-  return targetPath;
-}
-
 function summarize(groups, sourceResults, healthSnapshot) {
   const summary = {
     sources: groups.length,
@@ -531,10 +523,25 @@ function summarize(groups, sourceResults, healthSnapshot) {
   return summary;
 }
 
+function prettyJsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function scanRunIdentity(reportTime, suppliedRun, environment) {
+  if (suppliedRun) return suppliedRun;
+  return {
+    repository: environment.GITHUB_REPOSITORY ?? "local/gallery",
+    runId: environment.GITHUB_RUN_ID ?? "local",
+    runAttempt: Number(environment.GITHUB_RUN_ATTEMPT ?? 1),
+    sourceRef: environment.GITHUB_REF ?? "refs/heads/local",
+    sourceSha: environment.GITHUB_SHA ?? "local-unbound",
+    observedAt: reportTime,
+  };
+}
+
 export async function runHealthScan({
   rootDir = process.cwd(),
   fixturePath = null,
-  write = false,
   checkedAt = null,
   concurrency = DEFAULT_CONCURRENCY,
   token = process.env.GITHUB_TOKEN,
@@ -544,9 +551,13 @@ export async function runHealthScan({
   records: suppliedRecords = null,
   policy: suppliedPolicy = null,
   previousHealth: suppliedPreviousHealth = null,
+  catalogBytes: suppliedCatalogBytes = null,
+  previousHealthBytes: suppliedPreviousHealthBytes = null,
+  run: suppliedRun = null,
+  environment = process.env,
+  now = null,
   delay = wait,
 } = {}) {
-  if (write && fixturePath) throw new TypeError("Fixture scans cannot write health state");
   if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
   const context = suppliedContext ?? await loadValidationContext(rootDir);
   const fixture = fixturePath ? await readFixture(fixturePath) : null;
@@ -555,6 +566,19 @@ export async function runHealthScan({
   const policy = fixture?.policy ?? suppliedPolicy ?? context.configs.policy;
   const previousHealth = fixture?.previousHealth ?? suppliedPreviousHealth ?? context.health;
   const reportTime = checkedAt ?? fixture?.checkedAt ?? new Date().toISOString();
+  const resolvedRoot = path.resolve(rootDir);
+  const catalogBytes = suppliedCatalogBytes ?? (
+    fixture
+      ? prettyJsonBytes(records)
+      : (suppliedRecords ? prettyJsonBytes(records) : await readFile(path.join(resolvedRoot, CATALOG_PATH)))
+  );
+  const previousHealthBytes = suppliedPreviousHealthBytes ?? (
+    fixture
+      ? prettyJsonBytes(previousHealth)
+      : (suppliedPreviousHealth
+        ? prettyJsonBytes(previousHealth)
+        : await readFile(path.join(resolvedRoot, HEALTH_PATH)))
+  );
   const githubToken = fixture ? (fixture.githubToken ?? null) : token;
   const groups = groupCatalogSources(records);
   const checkedResults = await mapAvailabilityChecks(groups, concurrency, async (group) => [
@@ -574,25 +598,43 @@ export async function runHealthScan({
     checkedAt: reportTime,
   });
   assertHealthSchema(context, healthSnapshot);
-  const writtenPath = write ? await writeHealthSnapshot(rootDir, healthSnapshot) : null;
-  return {
-    dryRun: !write,
-    writtenPath,
+  const persistence = createHealthPersistenceArtifacts({
+    catalog: records,
+    catalogBytes,
+    priorHealth: previousHealth,
+    priorHealthBytes: previousHealthBytes,
+    proposedHealth: healthSnapshot,
+    run: scanRunIdentity(reportTime, fixture?.run ?? suppliedRun, environment),
     summary: summarize(groups, sourceResults, healthSnapshot),
     sources: groups.map((group) => ({
       canonicalSource: group.canonicalSource,
       galleryIds: group.records.map((item) => item.galleryId),
       ...sourceResults.get(group.canonicalSource),
     })),
-    healthSnapshot,
+    now: now ?? new Date().toISOString(),
+  });
+  return {
+    dryRun: true,
+    ...persistence.report,
+    proposedHealth: persistence.proposedHealth,
+    receipt: persistence.receipt,
+    artifactBytes: persistence.artifactBytes,
   };
 }
 
 export async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   try {
     const options = parseArguments(argv);
-    const report = await runHealthScan(options);
-    stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    const { outputDirectory, ...scanOptions } = options;
+    const report = await runHealthScan(scanOptions);
+    if (outputDirectory) {
+      await writeHealthScanArtifacts({
+        rootDir: options.rootDir,
+        outputDirectory,
+        artifactBytes: report.artifactBytes,
+      });
+    }
+    stdout.write(report.artifactBytes[HEALTH_ARTIFACT_FILES.report]);
     return 0;
   } catch (error) {
     stderr.write(`${error?.message ?? error}\n`);
