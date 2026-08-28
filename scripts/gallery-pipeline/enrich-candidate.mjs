@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 
-import { canonicalizeUrl } from "./shared/canonicalize.mjs";
+import { canonicalizeUrl, generateIdentityKey } from "./shared/canonicalize.mjs";
+import { extractDeclaredTags } from "./validation.mjs";
 
 export const CATALOG_PREVIEW_PLACEHOLDER = "coming soon";
 
@@ -8,6 +11,27 @@ const MAX_METADATA_TEXT_LENGTH = 160;
 const MAX_METADATA_URL_LENGTH = 2_048;
 const LOCAL_HOSTNAMES = new Set(["localhost", "localhost.localdomain"]);
 const LOCAL_HOST_SUFFIXES = [".localhost", ".local", ".internal", ".localdomain", ".lan", ".home.arpa"];
+const GALLERY_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const RESOURCE_TAG_BY_SOURCE_TYPE = Object.freeze({
+  "blog-post": "blog",
+  "github-path": "example",
+  "github-repository": "example",
+  "learn-document": "documentation",
+  video: "video",
+});
+const DETERMINISTIC_TAGS = new Set([
+  ...Object.values(RESOURCE_TAG_BY_SOURCE_TYPE),
+  "microsoft",
+]);
+const DECLARED_TAGS = new Set(extractDeclaredTags(
+  readFileSync(new URL("../../src/data/tags.tsx", import.meta.url), "utf8"),
+));
+
+for (const tag of DETERMINISTIC_TAGS) {
+  if (!DECLARED_TAGS.has(tag)) {
+    throw new Error(`Deterministic candidate tag is not declared in the catalog taxonomy: ${tag}`);
+  }
+}
 
 class NonDefaultPortError extends TypeError {}
 
@@ -104,7 +128,50 @@ function normalizedTimestamp(value, name) {
   return timestamp.toISOString();
 }
 
+export function generateCandidateGalleryId({ sourceType, sourceId, repositoryPath = "" }) {
+  const identityKey = generateIdentityKey({ sourceType, sourceId, repositoryPath });
+  const digest = createHash("sha256").update(identityKey, "utf8").digest("hex");
+  return `candidate-${digest}`;
+}
+
+export function deterministicCandidateTags({ sourceType, trustTier = null }) {
+  const normalizedSourceType = boundedText(sourceType, "sourceType").toLowerCase();
+  const normalizedTrustTier = boundedText(trustTier, "metadata.trustTier", { nullable: true });
+  const resourceTag = RESOURCE_TAG_BY_SOURCE_TYPE[normalizedSourceType];
+  if (!resourceTag) {
+    throw new TypeError(`Unsupported candidate sourceType: ${normalizedSourceType}`);
+  }
+  return normalizedTrustTier === "first-party"
+    ? [resourceTag, "microsoft"]
+    : [resourceTag];
+}
+
+function normalizeGalleryId(value) {
+  const normalized = boundedText(value, "metadata.galleryId");
+  if (!GALLERY_ID_PATTERN.test(normalized)) {
+    throw new TypeError("metadata.galleryId must be a schema-valid lowercase opaque identifier");
+  }
+  return normalized;
+}
+
+function normalizeTags(value) {
+  if (!Array.isArray(value)) {
+    throw new TypeError("metadata.tags must be an array");
+  }
+  if (value.some((tag) => typeof tag !== "string" || !DECLARED_TAGS.has(tag))) {
+    throw new TypeError("metadata.tags contains an undeclared or case-aliased tag");
+  }
+  if (new Set(value).size !== value.length) {
+    throw new TypeError("metadata.tags must not contain duplicates");
+  }
+  return [...value];
+}
+
 export function enrichCandidateMetadata({
+  sourceType,
+  sourceId,
+  repositoryPath = "",
+  trustTier = null,
   launchUrl,
   websiteUrls = [],
   author,
@@ -117,6 +184,9 @@ export function enrichCandidateMetadata({
     throw new TypeError("metadata.website requires an authoritative HTTPS publisher, profile, or root URL");
   }
   return {
+    galleryId: generateCandidateGalleryId({ sourceType, sourceId, repositoryPath }),
+    tags: deterministicCandidateTags({ sourceType, trustTier }),
+    trustTier: boundedText(trustTier, "metadata.trustTier", { nullable: true }),
     launchUrl: authoritativeHttpsUrl(launchUrl, "metadata.launchUrl"),
     website,
     author: boundedText(author, "metadata.author"),
@@ -128,6 +198,12 @@ export function enrichCandidateMetadata({
 
 export function normalizeEnrichedMetadata(metadata, publishedAt) {
   const normalized = { ...metadata };
+  if (Object.hasOwn(normalized, "galleryId")) {
+    normalized.galleryId = normalizeGalleryId(normalized.galleryId);
+  }
+  if (Object.hasOwn(normalized, "tags")) {
+    normalized.tags = normalizeTags(normalized.tags);
+  }
   if (Object.hasOwn(normalized, "launchUrl")) {
     normalized.launchUrl = authoritativeHttpsUrl(normalized.launchUrl, "metadata.launchUrl");
   }

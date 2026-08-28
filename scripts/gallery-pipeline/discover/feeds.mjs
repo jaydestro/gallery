@@ -59,15 +59,19 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
     if (!COSMOS_TERM.test(relevanceText)) {
       continue;
     }
-    const author = entry.author ?? entry.publisher ?? sourceConfig.ownerLabel;
+    const normalizedSourceId = String(sourceId);
+    const publisher = entry.publisher ?? sourceConfig.ownerLabel;
     const sourceOwner = entry.publisher ?? sourceConfig.ownerLabel ?? null;
     const publishedAt = entry.publishedAt ?? entry.pubDate ?? null;
     const articleOrigin = new URL(launchUrl).origin;
     const catalogMetadata = enrichCandidateMetadata({
+      sourceType: "blog-post",
+      sourceId: normalizedSourceId,
+      trustTier: sourceConfig.trustTier,
       launchUrl,
       websiteUrls: [entry.feedSiteUrl, entry.siteUrl, sourceConfig.website, articleOrigin]
         .map((value) => trustedFeedUrl(value, allowedHosts)),
-      author,
+      author: publisher,
       sourceOwner,
       publishedAt,
       previewUrls: [entry.imageUrl, entry.thumbnailUrl, entry.image?.url]
@@ -76,11 +80,11 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
 
     candidates.push({
       sourceType: "blog-post",
-      sourceId: String(sourceId),
+      sourceId: normalizedSourceId,
       canonicalUrl,
       title: entry.title,
       description: entry.description ?? entry.summary ?? "",
-      publisher: author,
+      publisher,
       publishedAt,
       modifiedAt: entry.modifiedAt ?? entry.updatedAt ?? null,
       discoveredAt: discoveryTime,
@@ -94,7 +98,7 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
         ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
-        feedEntryId: String(sourceId),
+        feedEntryId: normalizedSourceId,
         feedUrl: canonicalizeUrl(sourceConfig.endpoint),
       },
     });

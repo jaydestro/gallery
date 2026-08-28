@@ -27,6 +27,18 @@
       "ownerLabel": "Microsoft Learn"
     },
     {
+      "id": "youtube-fixture-playlist",
+      "type": "youtube-playlist",
+      "endpoint": "https://youtube.googleapis.com/youtube/v3",
+      "playlistId": "PL12345678901234567890123456789012",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "weekly",
+      "ownerLabel": "YouTube fixture",
+      "includeRules": ["require-cosmos-db-material-relevance"],
+      "excludeRules": ["videos-without-immutable-id"]
+    },
+    {
       "id": "disabled-feed",
       "type": "rss-feed",
       "endpoint": "https://example.com/feed.xml",

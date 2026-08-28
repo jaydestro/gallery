@@ -28,6 +28,12 @@
           },
           {
             "$ref": "#/$defs/rssFeed"
+          },
+          {
+            "$ref": "#/$defs/youtubeChannel"
+          },
+          {
+            "$ref": "#/$defs/youtubePlaylist"
           }
         ]
       }
@@ -179,6 +185,118 @@
           "type": "string",
           "format": "uri",
           "pattern": "^https://devblogs\\.microsoft\\.com/"
+        },
+        "trustTier": {
+          "const": "first-party"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "cadence": {
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly",
+            "quarterly"
+          ]
+        },
+        "ownerLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "includeRules": {
+          "$ref": "#/$defs/commonStringArray"
+        },
+        "excludeRules": {
+          "$ref": "#/$defs/commonStringArray"
+        }
+      }
+    },
+    "youtubeChannel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "endpoint",
+        "channelId",
+        "trustTier",
+        "enabled",
+        "cadence",
+        "ownerLabel",
+        "includeRules",
+        "excludeRules"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "type": {
+          "const": "youtube-channel"
+        },
+        "endpoint": {
+          "const": "https://youtube.googleapis.com/youtube/v3"
+        },
+        "channelId": {
+          "type": "string",
+          "pattern": "^UC[A-Za-z0-9_-]{22}$"
+        },
+        "trustTier": {
+          "const": "first-party"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "cadence": {
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly",
+            "quarterly"
+          ]
+        },
+        "ownerLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "includeRules": {
+          "$ref": "#/$defs/commonStringArray"
+        },
+        "excludeRules": {
+          "$ref": "#/$defs/commonStringArray"
+        }
+      }
+    },
+    "youtubePlaylist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "endpoint",
+        "playlistId",
+        "trustTier",
+        "enabled",
+        "cadence",
+        "ownerLabel",
+        "includeRules",
+        "excludeRules"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "type": {
+          "const": "youtube-playlist"
+        },
+        "endpoint": {
+          "const": "https://youtube.googleapis.com/youtube/v3"
+        },
+        "playlistId": {
+          "type": "string",
+          "pattern": "^PL(?:[A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{32})$"
         },
         "trustTier": {
           "const": "first-party"

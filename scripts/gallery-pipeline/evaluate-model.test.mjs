@@ -164,7 +164,7 @@ test("workflow isolates real-model access to trusted default-branch dispatches",
   const trustedCondition = trustedJob.match(/    if: >-\r?\n([\s\S]*?)    runs-on:/)?.[1] ?? "";
 
   assert.match(workflow, /ENABLE_GALLERY_MODEL_EVALUATION == 'true'/);
-  assert.doesNotMatch(workflow, /^  (?:pull_request|merge_group):/m);
+  assert.match(workflow, /^  pull_request:\r?\n    paths:/m);
   assert.match(workflow, /^  workflow_dispatch:/m);
   assert.match(trustedCondition, /github\.event_name == 'workflow_dispatch'/);
   assert.match(

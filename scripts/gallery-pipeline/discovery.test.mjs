@@ -11,6 +11,12 @@ import {
 import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
 
 const DISCOVERED_AT = "2026-08-27T12:00:00Z";
+const YOUTUBE_API_ENDPOINT = "https://youtube.googleapis.com/youtube/v3";
+const YOUTUBE_CHANNEL_ID = "UC1234567890123456789012";
+const YOUTUBE_PLAYLIST_ID = "PL12345678901234567890123456789012";
+const YOUTUBE_UPLOADS_PLAYLIST_ID = `UU${YOUTUBE_CHANNEL_ID.slice(2)}`;
+const YOUTUBE_PLAYLIST_FIELDS = "nextPageToken,items(contentDetails/videoId)";
+const YOUTUBE_VIDEO_FIELDS = "items(id,snippet(title,description,publishedAt,channelId,channelTitle,thumbnails),contentDetails/caption)";
 
 function githubSource(overrides = {}) {
   return {
@@ -33,6 +39,49 @@ function feedSource(id, endpoint) {
     trustTier: "first-party",
     enabled: true,
     ownerLabel: "Azure Cosmos DB Blog",
+  };
+}
+
+function youtubeSource(type, overrides = {}) {
+  return {
+    id: type,
+    type,
+    endpoint: YOUTUBE_API_ENDPOINT,
+    ...(type === "youtube-channel"
+      ? { channelId: YOUTUBE_CHANNEL_ID }
+      : { playlistId: YOUTUBE_PLAYLIST_ID }),
+    trustTier: "first-party",
+    enabled: true,
+    ownerLabel: "YouTube fixture",
+    ...overrides,
+  };
+}
+
+function youtubeApiUrl(resource, parameters) {
+  const url = new URL(`${YOUTUBE_API_ENDPOINT}/${resource}`);
+  for (const [name, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(name, String(value));
+    }
+  }
+  return url.toString();
+}
+
+function youtubeVideo(id, overrides = {}) {
+  return {
+    id,
+    snippet: {
+      title: `Azure Cosmos DB video ${id}`,
+      description: "Build an application with Azure Cosmos DB for NoSQL.",
+      publishedAt: "2026-08-26T10:00:00Z",
+      channelId: YOUTUBE_CHANNEL_ID,
+      channelTitle: "Microsoft Developer",
+      thumbnails: {
+        high: { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg` },
+      },
+    },
+    contentDetails: { caption: "false" },
+    ...overrides,
   };
 }
 
@@ -79,18 +128,39 @@ function searchUrl(pageSize) {
   });
 }
 
-async function runWithFixtures({ sources, responses, activeCatalog = [], retiredCatalog = [], limits = {} }) {
+async function runWithFixtures({
+  sources,
+  responses,
+  activeCatalog = [],
+  retiredCatalog = [],
+  limits = {},
+  environment = { YOUTUBE_API_KEY: "fixture-youtube-api-key" },
+}) {
   const transport = createFixtureTransport(responses);
+  const youtubeAuthentication = [];
+  const fetchImpl = async (input, options) => {
+    if (new URL(input).hostname === "youtube.googleapis.com") {
+      const expectedKey = environment?.YOUTUBE_API_KEY;
+      const headers = new Headers(options?.headers);
+      youtubeAuthentication.push(
+        typeof expectedKey === "string" &&
+        expectedKey.length > 0 &&
+        headers.get("X-Goog-Api-Key") === expectedKey,
+      );
+    }
+    return transport.fetchImpl(input, options);
+  };
   const result = await runDiscovery({
     trustedSources: { sources },
     activeCatalog,
     retiredCatalog,
     githubToken: "fixture-token",
+    environment,
     discoveredAt: DISCOVERED_AT,
     limits,
-    fetchOptions: { fetchImpl: transport.fetchImpl, lookup: transport.lookup },
+    fetchOptions: { fetchImpl, lookup: transport.lookup },
   });
-  return { result, requests: transport.requests };
+  return { result, requests: transport.requests, youtubeAuthentication };
 }
 
 function rss(items) {
@@ -419,17 +489,223 @@ test("safe XML parsing rejects declarations and custom entities", () => {
   );
 });
 
-test("disabled and unconfigured YouTube sources perform no requests", async () => {
+test("disabled, unconfigured, and keyless YouTube sources perform no requests", async () => {
   const { result, requests } = await runWithFixtures({
     sources: [
-      { id: "disabled", type: "rss-feed", endpoint: "https://example.com/feed", enabled: false },
+      youtubeSource("youtube-playlist", { id: "disabled", enabled: false }),
+      youtubeSource("youtube-channel", { id: "keyless" }),
       { id: "youtube", type: "youtube-channel", endpoint: "https://www.youtube.com", enabled: true },
     ],
     responses: {},
+    environment: {},
   });
   assert.deepEqual(requests, []);
-  assert.deepEqual(result.sources.map((source) => source.status), ["skipped", "skipped"]);
-  assert.equal(result.sources[1].reason, "immutable-youtube-source-id-required");
+  assert.deepEqual(
+    result.sources.map((source) => source.status),
+    ["skipped", "indeterminate", "skipped"],
+  );
+  assert.equal(result.sources[1].queried, false);
+  assert.match(result.sources[1].reason, /YOUTUBE_API_KEY/);
+  assert.equal(result.sources[2].reason, "immutable-youtube-source-id-required");
+});
+
+test("YouTube rejects a credential-bearing alternate endpoint without storing its key", async () => {
+  const registryKey = "must-not-enter-the-report";
+  const { result, requests } = await runWithFixtures({
+    sources: [youtubeSource("youtube-playlist", {
+      endpoint: `${YOUTUBE_API_ENDPOINT}?key=${registryKey}`,
+    })],
+    responses: {},
+  });
+
+  assert.deepEqual(requests, []);
+  assert.equal(result.sources[0].status, "indeterminate");
+  assert.equal(result.sources[0].queried, false);
+  assert.equal(JSON.stringify(result).includes(registryKey), false);
+  assert.equal(result.rejected[0].canonicalUrl, `https://www.youtube.com/playlist?list=${YOUTUBE_PLAYLIST_ID}`);
+});
+
+test("YouTube playlist discovery uses exact key-free endpoints and no transcript call", async () => {
+  const playlistItemsUrl = youtubeApiUrl("playlistItems", {
+    part: "contentDetails",
+    playlistId: YOUTUBE_PLAYLIST_ID,
+    maxResults: 50,
+    fields: YOUTUBE_PLAYLIST_FIELDS,
+  });
+  const videosUrl = youtubeApiUrl("videos", {
+    part: "contentDetails,snippet",
+    id: "6IIUtEFKJec",
+    fields: YOUTUBE_VIDEO_FIELDS,
+  });
+  const { result, requests, youtubeAuthentication } = await runWithFixtures({
+    sources: [youtubeSource("youtube-playlist")],
+    responses: {
+      [playlistItemsUrl]: {
+        body: { items: [{ contentDetails: { videoId: "6IIUtEFKJec" } }] },
+      },
+      [videosUrl]: {
+        body: {
+          items: [youtubeVideo("6IIUtEFKJec", { contentDetails: { caption: "true" } })],
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(requests, [playlistItemsUrl, videosUrl]);
+  assert.ok(youtubeAuthentication.every(Boolean));
+  assert.ok(requests.every((url) => !url.includes("key=")));
+  assert.ok(requests.every((url) => !url.includes("captions")));
+  assert.equal(result.status, "complete");
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].metadata.youtubeSourceType, "youtube-playlist");
+  assert.equal(result.candidates[0].metadata.youtubeSourceId, YOUTUBE_PLAYLIST_ID);
+  assert.equal(result.candidates[0].metadata.captionsAvailable, true);
+  assert.equal(
+    result.candidates[0].evidence.some((item) => item.type === "youtube-transcript"),
+    false,
+  );
+});
+
+test("YouTube channel discovery resolves only the channel's exact uploads playlist", async () => {
+  const channelsUrl = youtubeApiUrl("channels", {
+    part: "contentDetails",
+    id: YOUTUBE_CHANNEL_ID,
+    fields: "items(id,contentDetails/relatedPlaylists/uploads)",
+  });
+  const playlistItemsUrl = youtubeApiUrl("playlistItems", {
+    part: "contentDetails",
+    playlistId: YOUTUBE_UPLOADS_PLAYLIST_ID,
+    maxResults: 50,
+    fields: YOUTUBE_PLAYLIST_FIELDS,
+  });
+  const videosUrl = youtubeApiUrl("videos", {
+    part: "contentDetails,snippet",
+    id: "AbCdEfGhI12",
+    fields: YOUTUBE_VIDEO_FIELDS,
+  });
+  const { result, requests } = await runWithFixtures({
+    sources: [youtubeSource("youtube-channel")],
+    responses: {
+      [channelsUrl]: {
+        body: {
+          items: [{
+            id: YOUTUBE_CHANNEL_ID,
+            contentDetails: { relatedPlaylists: { uploads: YOUTUBE_UPLOADS_PLAYLIST_ID } },
+          }],
+        },
+      },
+      [playlistItemsUrl]: {
+        body: { items: [{ contentDetails: { videoId: "AbCdEfGhI12" } }] },
+      },
+      [videosUrl]: { body: { items: [youtubeVideo("AbCdEfGhI12")] } },
+    },
+  });
+
+  assert.deepEqual(requests, [channelsUrl, playlistItemsUrl, videosUrl]);
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.equal(result.candidates[0].metadata.youtubeSourceType, "youtube-channel");
+  assert.equal(result.candidates[0].metadata.youtubeSourceId, YOUTUBE_CHANNEL_ID);
+});
+
+test("YouTube candidate limit stops pagination before another quota call", async () => {
+  const firstPageUrl = youtubeApiUrl("playlistItems", {
+    part: "contentDetails",
+    playlistId: YOUTUBE_PLAYLIST_ID,
+    maxResults: 1,
+    fields: YOUTUBE_PLAYLIST_FIELDS,
+  });
+  const videosUrl = youtubeApiUrl("videos", {
+    part: "contentDetails,snippet",
+    id: "6IIUtEFKJec",
+    fields: YOUTUBE_VIDEO_FIELDS,
+  });
+  const { result, requests } = await runWithFixtures({
+    sources: [youtubeSource("youtube-playlist")],
+    responses: {
+      [firstPageUrl]: {
+        body: {
+          nextPageToken: "NEXT_PAGE_MUST_NOT_BE_USED",
+          items: [
+            { contentDetails: { videoId: "6IIUtEFKJec" } },
+            { contentDetails: { videoId: "AbCdEfGhI12" } },
+          ],
+        },
+      },
+      [videosUrl]: { body: { items: [youtubeVideo("6IIUtEFKJec")] } },
+    },
+    limits: { youtubeCandidates: 1 },
+  });
+
+  assert.deepEqual(requests, [firstPageUrl, videosUrl]);
+  assert.equal(result.candidates.length, 1);
+});
+
+test("YouTube quota failure after a 50-video batch preserves partial candidates", async () => {
+  const videoIds = Array.from({ length: 51 }, (_, index) => `YT${String(index).padStart(9, "0")}`);
+  const firstBatch = videoIds.slice(0, 50);
+  const secondBatch = videoIds.slice(50);
+  const firstPageUrl = youtubeApiUrl("playlistItems", {
+    part: "contentDetails",
+    playlistId: YOUTUBE_PLAYLIST_ID,
+    maxResults: 50,
+    fields: YOUTUBE_PLAYLIST_FIELDS,
+  });
+  const secondPageUrl = youtubeApiUrl("playlistItems", {
+    part: "contentDetails",
+    playlistId: YOUTUBE_PLAYLIST_ID,
+    maxResults: 1,
+    pageToken: "PAGE_TWO",
+    fields: YOUTUBE_PLAYLIST_FIELDS,
+  });
+  const firstVideosUrl = youtubeApiUrl("videos", {
+    part: "contentDetails,snippet",
+    id: firstBatch.join(","),
+    fields: YOUTUBE_VIDEO_FIELDS,
+  });
+  const secondVideosUrl = youtubeApiUrl("videos", {
+    part: "contentDetails,snippet",
+    id: secondBatch.join(","),
+    fields: YOUTUBE_VIDEO_FIELDS,
+  });
+  const apiKey = "quota-fixture-secret";
+  const { result, requests } = await runWithFixtures({
+    sources: [youtubeSource("youtube-playlist")],
+    responses: {
+      [firstPageUrl]: {
+        body: {
+          nextPageToken: "PAGE_TWO",
+          items: firstBatch.map((videoId) => ({ contentDetails: { videoId } })),
+        },
+      },
+      [secondPageUrl]: {
+        body: { items: secondBatch.map((videoId) => ({ contentDetails: { videoId } })) },
+      },
+      [firstVideosUrl]: { body: { items: firstBatch.map((videoId) => youtubeVideo(videoId)) } },
+      [secondVideosUrl]: {
+        status: 403,
+        body: { error: { errors: [{ reason: "quotaExceeded" }] } },
+      },
+    },
+    environment: { YOUTUBE_API_KEY: apiKey },
+    limits: {
+      youtubePageSize: 50,
+      youtubeListingPages: 2,
+      youtubeCandidates: 51,
+    },
+  });
+
+  assert.deepEqual(requests, [firstPageUrl, secondPageUrl, firstVideosUrl, secondVideosUrl]);
+  assert.equal(result.status, "partial");
+  assert.equal(result.sources[0].status, "indeterminate");
+  assert.match(result.sources[0].reason, /quotaExceeded/);
+  assert.equal(result.candidates.length, 50);
+  assert.equal(
+    result.rejected.find((item) => item.sourceId === secondBatch[0]).reason,
+    "youtube-video-indeterminate",
+  );
+  assert.equal(JSON.stringify(result).includes(apiKey), false);
+  assert.ok(result.sources[0].endpoints.every((url) => !url.includes("key=")));
 });
 
 test("RSS parsing preserves fetched site, author, timestamp, and image metadata", () => {

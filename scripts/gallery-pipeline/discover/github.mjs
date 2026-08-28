@@ -202,6 +202,7 @@ export function discoverGitHub({ source, apiData, fixture, offline = false, disc
     const fullName = repository.full_name ?? `${repository.owner.login}/${repository.name}`;
     const owner = repository.owner?.login ?? fullName.split("/")[0];
     const repositoryName = fullName.split("/")[1] ?? repository.name;
+    const sourceId = String(repository.id);
     const derivedRepositoryUrl = `https://github.com/${owner}/${repositoryName}`;
     const launchUrl = matchingGitHubPath(repository.html_url, [owner, repositoryName]) ?? derivedRepositoryUrl;
     const canonicalUrl = launchUrl;
@@ -209,6 +210,9 @@ export function discoverGitHub({ source, apiData, fixture, offline = false, disc
     const derivedOwnerUrl = `https://github.com/${owner}`;
     const publishedAt = repository.created_at ?? null;
     const catalogMetadata = enrichCandidateMetadata({
+      sourceType: "github-repository",
+      sourceId,
+      trustTier: sourceConfig.trustTier,
       launchUrl,
       websiteUrls: [ownerProfileUrl, repository.homepage, derivedOwnerUrl],
       author: owner,
@@ -221,7 +225,7 @@ export function discoverGitHub({ source, apiData, fixture, offline = false, disc
     });
     candidates.push({
       sourceType: "github-repository",
-      sourceId: String(repository.id),
+      sourceId,
       canonicalUrl,
       title: repository.name,
       description: repository.description ?? "",

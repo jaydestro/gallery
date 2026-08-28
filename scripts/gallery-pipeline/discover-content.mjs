@@ -100,6 +100,9 @@ async function loadLiveInputs(env) {
     retiredCatalog,
     policy,
     githubToken: env.GITHUB_TOKEN,
+    environment: typeof env.YOUTUBE_API_KEY === "string"
+      ? { YOUTUBE_API_KEY: env.YOUTUBE_API_KEY }
+      : {},
     fetchImpl: globalThis.fetch,
     lookup: undefined,
   };
@@ -124,6 +127,7 @@ async function loadFixtureInputs(directory) {
     retiredCatalog,
     policy,
     githubToken: options.githubToken,
+    environment: options.environment ?? {},
     discoveredAt: options.discoveredAt,
     limits: options.limits,
     fetchImpl: transport.fetchImpl,
@@ -149,6 +153,7 @@ export async function runReportOnlyPipeline(inputs, {
     retiredCatalog,
     policy,
     githubToken,
+    environment,
     discoveredAt,
     limits,
     fetchImpl,
@@ -159,6 +164,7 @@ export async function runReportOnlyPipeline(inputs, {
     activeCatalog,
     retiredCatalog,
     githubToken,
+    environment,
     discoveredAt,
     limits,
     fetchOptions: { fetchImpl, lookup },

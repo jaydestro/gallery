@@ -60,6 +60,33 @@
     "headers": { "content-type": "application/xml" },
     "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search</loc><lastmod>2026-08-25</lastmod></url></urlset>"
   },
+  "https://youtube.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=PL12345678901234567890123456789012&maxResults=2&fields=nextPageToken%2Citems%28contentDetails%2FvideoId%29": {
+    "body": {
+      "items": [
+        { "contentDetails": { "videoId": "YtFixture01" } }
+      ]
+    }
+  },
+  "https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails%2Csnippet&id=YtFixture01&fields=items%28id%2Csnippet%28title%2Cdescription%2CpublishedAt%2CchannelId%2CchannelTitle%2Cthumbnails%29%2CcontentDetails%2Fcaption%29": {
+    "body": {
+      "items": [
+        {
+          "id": "YtFixture01",
+          "snippet": {
+            "title": "Build with Azure Cosmos DB",
+            "description": "Create an application with Azure Cosmos DB for NoSQL.",
+            "publishedAt": "2026-08-24T15:00:00Z",
+            "channelId": "UC1234567890123456789012",
+            "channelTitle": "Microsoft Developer",
+            "thumbnails": {
+              "high": { "url": "https://i.ytimg.com/vi/YtFixture01/hqdefault.jpg" }
+            }
+          },
+          "contentDetails": { "caption": "true" }
+        }
+      ]
+    }
+  },
   "https://github.com/AzureCosmosDB/cosmos-demo": {
     "status": 200
   },
@@ -76,6 +103,9 @@
     "status": 200
   },
   "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search": {
+    "status": 200
+  },
+  "https://www.youtube.com/watch?v=YtFixture01": {
     "status": 200
   }
 }

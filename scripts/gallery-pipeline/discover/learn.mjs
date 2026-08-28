@@ -67,11 +67,16 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
     if (!COSMOS_TERM.test(relevanceText)) {
       continue;
     }
+    const sourceId = String(document.id ?? document.uid ?? canonicalUrl);
+    const publisher = sourceConfig.ownerLabel;
     const publishedAt = document.publishedAt ?? null;
     const catalogMetadata = enrichCandidateMetadata({
+      sourceType: "learn-document",
+      sourceId,
+      trustTier: sourceConfig.trustTier,
       launchUrl,
       websiteUrls: [rootUrl],
-      author: sourceConfig.ownerLabel,
+      author: publisher,
       sourceOwner: sourceConfig.ownerLabel,
       publishedAt,
       previewUrls: [document.imageUrl, document.thumbnailUrl, document.image?.url]
@@ -80,11 +85,11 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
 
     candidates.push({
       sourceType: "learn-document",
-      sourceId: String(document.id ?? document.uid ?? canonicalUrl),
+      sourceId,
       canonicalUrl,
       title: document.title,
       description: document.description ?? "",
-      publisher: document.publisher ?? sourceConfig.ownerLabel,
+      publisher,
       publishedAt,
       modifiedAt: document.lastModified ?? document.modifiedAt ?? null,
       discoveredAt: discoveryTime,

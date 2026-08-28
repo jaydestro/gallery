@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 
+import { validateDeterministicGate } from "./ai-analysis.mjs";
 import { normalizeCandidate } from "./normalize.mjs";
 import { canonicalizeUrl } from "./shared/canonicalize.mjs";
 import { NON_WAIVABLE_RULE_IDS, SOURCE_SHARING_POLICY } from "./validation.mjs";
@@ -119,18 +120,42 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
         { $ref: "urn:gallery-pipeline:schema:catalog:2.0.0#/$defs/v2Record" },
       ],
     },
+    candidateAvailability: {
+      type: "object",
+      additionalProperties: false,
+      required: ["candidateId", "source", "checkedAt", "classification", "statusCode", "reasonCode"],
+      properties: {
+        candidateId: { type: "string", minLength: 1 },
+        source: { type: "string", format: "uri" },
+        checkedAt: { type: "string", format: "date-time" },
+        classification: { const: "healthy" },
+        statusCode: { type: "integer", minimum: 200, maximum: 299 },
+        reasonCode: { type: "null" },
+      },
+    },
     evidenceReference: {
       type: "object",
       additionalProperties: false,
       required: ["kind", "id"],
       properties: {
         kind: {
-          enum: ["active-record", "analysis", "candidate", "freshness", "health", "policy", "retired-record"],
+          enum: [
+            "active-record",
+            "analysis",
+            "candidate",
+            "candidate-availability",
+            "candidate-deterministic-gate",
+            "freshness",
+            "health",
+            "policy",
+            "retired-record",
+          ],
         },
         id: { type: "string", minLength: 1 },
         observedAt: { type: "string", format: "date-time" },
         source: { type: "string", format: "uri" },
         status: { type: "string", minLength: 1 },
+        statusCode: { type: "integer", minimum: 100, maximum: 599 },
         consecutiveFindings: { type: "integer", minimum: 0 },
         gracePeriodStartedAt: {
           oneOf: [
@@ -163,7 +188,13 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
         plannedAt: { type: "string", format: "date-time" },
         before: { $ref: "#/$defs/recordOrNull" },
         after: { $ref: "urn:gallery-pipeline:schema:catalog:2.0.0#/$defs/v2Record" },
-        healthAfter: { $ref: `${HEALTH_SCHEMA_ID}#/$defs/healthEntry` },
+        healthAfter: {
+          oneOf: [
+            { type: "null" },
+            { $ref: `${HEALTH_SCHEMA_ID}#/$defs/healthEntry` },
+          ],
+        },
+        candidateAvailability: { $ref: "#/$defs/candidateAvailability" },
         reasonCodes: {
           type: "array",
           minItems: 1,
@@ -764,7 +795,7 @@ function validateAnalyses(analyses, candidatesByIdentity, knownCatalogIds, polic
   return byCandidateId;
 }
 
-function validateHealth(health, policy, expectedIds, plannedAt, maximumAgeMilliseconds) {
+function validateHealth(health, policy, allowedIds, requiredIds, plannedAt, maximumAgeMilliseconds) {
   requireObject(health, "health");
   if (!validateHealthSnapshot(health)) {
     fail("SCHEMA_INVALID", `Health snapshot is invalid: ${schemaMessage(validateHealthSnapshot)}`);
@@ -774,7 +805,7 @@ function validateHealth(health, policy, expectedIds, plannedAt, maximumAgeMillis
   }
   const byId = new Map();
   for (const entry of health.entries) {
-    if (!expectedIds.has(entry.galleryId)) {
+    if (!allowedIds.has(entry.galleryId)) {
       fail("UNKNOWN_ID", `Health snapshot references unknown gallery ID ${entry.galleryId}.`);
     }
     if (byId.has(entry.galleryId)) {
@@ -792,13 +823,13 @@ function validateHealth(health, policy, expectedIds, plannedAt, maximumAgeMillis
     );
     byId.set(entry.galleryId, clone(entry));
   }
-  for (const id of expectedIds) {
+  for (const id of requiredIds) {
     if (!byId.has(id)) fail("MISSING_GATE", `Gallery ID ${id} is missing a health decision.`);
   }
   return byId;
 }
 
-function validateFreshness(freshness, expectedIds, policy, plannedAt, maximumAgeMilliseconds) {
+function validateFreshness(freshness, allowedIds, requiredIds, policy, plannedAt, maximumAgeMilliseconds) {
   requireObject(freshness, "freshness");
   if (freshness.version !== FRESHNESS_VERSION) {
     fail("MISSING_GATE", `Freshness report version must be ${FRESHNESS_VERSION}.`);
@@ -822,7 +853,7 @@ function validateFreshness(freshness, expectedIds, policy, plannedAt, maximumAge
   const byId = new Map();
   for (const entry of requireArray(freshness.entries, "freshness.entries")) {
     const galleryId = requireString(entry?.galleryId, "freshness.entries[].galleryId");
-    if (!expectedIds.has(galleryId)) {
+    if (!allowedIds.has(galleryId)) {
       fail("UNKNOWN_ID", `Freshness report references unknown gallery ID ${galleryId}.`);
     }
     if (byId.has(galleryId)) {
@@ -868,7 +899,7 @@ function validateFreshness(freshness, expectedIds, policy, plannedAt, maximumAge
     }
     byId.set(galleryId, { ...clone(entry), reportGeneratedAt: generatedAt });
   }
-  for (const id of expectedIds) {
+  for (const id of requiredIds) {
     if (!byId.has(id)) fail("MISSING_GATE", `Gallery ID ${id} is missing a freshness decision.`);
   }
   const expectedHealthEntries = [...byId.values()]
@@ -882,9 +913,10 @@ function validateFreshness(freshness, expectedIds, policy, plannedAt, maximumAge
   return byId;
 }
 
-function expectedSource(id, candidateByGalleryId, catalogById, analysesByCandidate) {
+function expectedSource(id, candidateByGalleryId, catalogById, analysesByCandidate, preserveCatalogSource) {
   const candidateInfo = candidateByGalleryId.get(id);
   const catalogEntry = catalogById.get(id);
+  if (preserveCatalogSource && catalogEntry) return catalogEntry.record.canonicalSource;
   if (!candidateInfo) return catalogEntry?.record.canonicalSource;
   if (!catalogEntry) return candidateInfo.candidate.canonicalUrl;
   const recommendation = analysesByCandidate.get(candidateInfo.candidate.identityKey)?.recommendation;
@@ -900,11 +932,21 @@ function validateDecisionSources(
   analysesByCandidate,
   healthById,
   freshnessById,
+  preserveCatalogSource = false,
 ) {
   for (const id of expectedIds) {
-    const expected = expectedSource(id, candidateByGalleryId, catalogById, analysesByCandidate);
+    const expected = expectedSource(
+      id,
+      candidateByGalleryId,
+      catalogById,
+      analysesByCandidate,
+      preserveCatalogSource,
+    );
     const health = healthById.get(id);
     const freshness = freshnessById.get(id);
+    if (!health || !freshness) {
+      fail("MISSING_GATE", `Gallery ID ${id} requires matching health and freshness decisions.`);
+    }
     for (const [gate, source] of [
       ["health", health.canonicalSource],
       ["freshness", freshness.canonicalSource],
@@ -956,7 +998,73 @@ function analysisEvidenceMatchesCandidate(analysis, candidate) {
   });
 }
 
-function positivePublicationGates({ analysis, health, freshness, policy, candidate }) {
+function validateCandidateGateEntries(
+  candidateGates,
+  candidatesByIdentity,
+  catalog,
+  plannedAt,
+  maximumAgeMilliseconds,
+) {
+  if (candidateGates === null || candidateGates === undefined) return null;
+  const byCandidateId = new Map();
+  for (const [index, entry] of requireArray(candidateGates, "candidateGates").entries()) {
+    const candidate = requireObject(entry?.candidate, `candidateGates[${index}].candidate`);
+    const candidateId = requireString(candidate.identityKey, `candidateGates[${index}].candidate.identityKey`);
+    const expectedCandidate = candidatesByIdentity.get(candidateId)?.candidate;
+    if (!expectedCandidate || !isDeepStrictEqual(candidate, expectedCandidate)) {
+      fail("CONFLICTING_OPERATIONS", `Candidate gate ${candidateId} does not match its planned candidate.`);
+    }
+    if (byCandidateId.has(candidateId)) {
+      fail("DUPLICATE_IDENTITY", `Candidate ${candidateId} has multiple candidate-gate entries.`);
+    }
+    try {
+      validateDeterministicGate({ candidate, catalog, deterministicGate: entry.deterministicGate });
+    } catch (error) {
+      fail("GATE_REJECTED", `Candidate ${candidateId} has an invalid deterministic gate.`, {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const availability = requireObject(entry.availability, `candidateGates[${index}].availability`);
+    if (Object.keys(availability).some((name) => /score|components/i.test(name))) {
+      fail("GATE_REJECTED", `Candidate ${candidateId} availability contains unsupported scores.`);
+    }
+    if (
+      availability.classification !== "healthy" ||
+      !Number.isInteger(availability.statusCode) ||
+      availability.statusCode < 200 ||
+      availability.statusCode >= 300 ||
+      availability.statusCode === 206 ||
+      availability.reasonCode !== null
+    ) {
+      fail("GATE_REJECTED", `Candidate ${candidateId} lacks a definitive healthy availability result.`);
+    }
+    const checkedAt = requireCurrentRunTimestamp(
+      availability.checkedAt,
+      `Candidate ${candidateId} availability.checkedAt`,
+      plannedAt,
+      maximumAgeMilliseconds,
+    );
+    byCandidateId.set(candidateId, {
+      candidateAvailability: {
+        candidateId,
+        source: candidate.canonicalUrl,
+        checkedAt,
+        classification: availability.classification,
+        statusCode: availability.statusCode,
+        reasonCode: availability.reasonCode,
+      },
+      deterministicGate: clone(entry.deterministicGate),
+    });
+  }
+  for (const candidateId of candidatesByIdentity.keys()) {
+    if (!byCandidateId.has(candidateId)) {
+      fail("MISSING_GATE", `Candidate ${candidateId} is missing its candidate-gate evidence.`);
+    }
+  }
+  return byCandidateId;
+}
+
+function positivePublicationGates({ analysis, health, freshness, candidateGate, policy, candidate }) {
   const threshold = policy.thresholds ?? {};
   const failures = [];
   if (!analysis.relevance.material || analysis.relevance.score < threshold.materialRelevance) {
@@ -972,19 +1080,39 @@ function positivePublicationGates({ analysis, health, freshness, policy, candida
   if (!analysisEvidenceMatchesCandidate(analysis, candidate)) failures.push("candidate-bound evidence");
   if (!analysis.quality.passes) failures.push("quality");
   if (analysis.duplicate.classification === "indeterminate") failures.push("duplicate determination");
-  if (health.status !== "healthy" || health.sourceState.availability !== "available") {
-    failures.push("health");
+  if (!candidateGate && (!health || !freshness)) failures.push("candidate gate");
+  if (health || freshness) {
+    if (!health || health.status !== "healthy" || health.sourceState.availability !== "available") {
+      failures.push("health");
+    }
+    const freshnessPassed = freshness?.applicability === "not-applicable"
+      ? freshness.recommendation === "no-action"
+      : freshness?.health?.status === "healthy" && freshness.recommendation === "keep";
+    if (!freshnessPassed) failures.push("freshness");
   }
-  const freshnessPassed = freshness.applicability === "not-applicable"
-    ? freshness.recommendation === "no-action"
-    : freshness.health.status === "healthy" && freshness.recommendation === "keep";
-  if (!freshnessPassed) failures.push("freshness");
   if (failures.length > 0) {
     fail("GATE_REJECTED", `Candidate ${candidate.identityKey} did not pass: ${failures.join(", ")}.`, { failures });
   }
 }
 
-function catalogRecordFromCandidate(candidate, analysis, id, generatedAt, health, previous = null) {
+function projectHealthToCandidate(health, candidate) {
+  if (health.canonicalSource === candidate.canonicalUrl) return clone(health);
+  return {
+    ...clone(health),
+    canonicalSource: candidate.canonicalUrl,
+    evidence: health.evidence.map((entry) => ({ ...clone(entry), source: candidate.canonicalUrl })),
+  };
+}
+
+function catalogRecordFromCandidate(
+  candidate,
+  analysis,
+  id,
+  generatedAt,
+  health,
+  previous = null,
+  candidateAvailability = null,
+) {
   const metadata = candidate.metadata ?? {};
   const preview = requireString(metadata.preview, `Candidate ${candidate.identityKey} metadata.preview`);
   const launchUrl = requireHttpsUrl(metadata.launchUrl, `Candidate ${candidate.identityKey} metadata.launchUrl`);
@@ -995,12 +1123,14 @@ function catalogRecordFromCandidate(candidate, analysis, id, generatedAt, health
   } catch {
     fail("SCHEMA_INVALID", `Candidate ${candidate.identityKey} metadata.launchUrl is invalid.`);
   }
-  if (
-    health.status !== "healthy" ||
-    health.sourceState.availability !== "available" ||
-    canonicalLaunchUrl !== candidate.canonicalUrl ||
-    health.canonicalSource !== candidate.canonicalUrl
-  ) {
+  const healthMatches = health !== null && health !== undefined &&
+    health.status === "healthy" &&
+    health.sourceState.availability === "available" &&
+    health.canonicalSource === candidate.canonicalUrl;
+  const availabilityMatches = candidateAvailability !== null &&
+    candidateAvailability.classification === "healthy" &&
+    candidateAvailability.source === candidate.canonicalUrl;
+  if (canonicalLaunchUrl !== candidate.canonicalUrl || (!healthMatches && !availabilityMatches)) {
     fail("GATE_REJECTED", `Candidate ${candidate.identityKey} launch URL lacks a matching healthy source check.`);
   }
   const tags = requireArray(metadata.tags, `Candidate ${candidate.identityKey} metadata.tags`)
@@ -1026,7 +1156,9 @@ function catalogRecordFromCandidate(candidate, analysis, id, generatedAt, health
     tags,
     publishedAt: normalizeTimestamp(candidate.publishedAt, `Candidate ${candidate.identityKey} publishedAt`),
     dateAdded: previous === null ? generatedAt.slice(0, 10) : previous.dateAdded,
-    lastVerified: health.checkedAt,
+    lastVerified: previous === null && candidateAvailability
+      ? candidateAvailability.checkedAt
+      : health?.checkedAt ?? null,
     lifecycleStatus: "active",
   };
   const supersededBy = metadata.supersededBy !== undefined ? metadata.supersededBy : previous?.supersededBy;
@@ -1044,32 +1176,54 @@ function reasonCodes(type, ...sources) {
   return [...new Set(values)].sort();
 }
 
-function evidenceReferences({ id, candidate, analysis, health, freshness, policy, catalogScope }) {
+function evidenceReferences({ id, candidate, analysis, candidateGate, health, freshness, policy, catalogScope }) {
   const references = [];
   if (catalogScope) references.push({ kind: `${catalogScope}-record`, id });
   if (candidate) references.push({ kind: "candidate", id: candidate.identityKey, source: candidate.canonicalUrl });
   if (analysis) references.push({ kind: "analysis", id: analysis.candidateId });
-  references.push({
-    kind: "health",
-    id,
-    observedAt: health.checkedAt,
-    source: health.canonicalSource,
-    status: health.status,
-    consecutiveFindings: health.consecutiveFindings,
-    gracePeriodStartedAt: health.gracePeriodStartedAt,
-  });
-  const freshnessReference = {
-    kind: "freshness",
-    id,
-    observedAt: freshness.reportGeneratedAt,
-    source: freshness.canonicalSource,
-  };
-  if (freshness.health !== null) {
-    freshnessReference.status = freshness.health.status;
-    freshnessReference.consecutiveFindings = freshness.health.consecutiveFindings;
-    freshnessReference.gracePeriodStartedAt = freshness.health.gracePeriodStartedAt;
+  if (candidateGate) {
+    const availability = candidateGate.candidateAvailability;
+    references.push({
+      kind: "candidate-availability",
+      id: availability.candidateId,
+      observedAt: availability.checkedAt,
+      source: availability.source,
+      status: availability.classification,
+      statusCode: availability.statusCode,
+    });
+    references.push({
+      kind: "candidate-deterministic-gate",
+      id: availability.candidateId,
+      observedAt: availability.checkedAt,
+      source: availability.source,
+      status: "passed",
+    });
   }
-  references.push(freshnessReference);
+  if (health) {
+    references.push({
+      kind: "health",
+      id,
+      observedAt: health.checkedAt,
+      source: health.canonicalSource,
+      status: health.status,
+      consecutiveFindings: health.consecutiveFindings,
+      gracePeriodStartedAt: health.gracePeriodStartedAt,
+    });
+  }
+  if (freshness) {
+    const freshnessReference = {
+      kind: "freshness",
+      id,
+      observedAt: freshness.reportGeneratedAt,
+      source: freshness.canonicalSource,
+    };
+    if (freshness.health !== null) {
+      freshnessReference.status = freshness.health.status;
+      freshnessReference.consecutiveFindings = freshness.health.consecutiveFindings;
+      freshnessReference.gracePeriodStartedAt = freshness.health.gracePeriodStartedAt;
+    }
+    references.push(freshnessReference);
+  }
   references.push({ kind: "policy", id: policy.version });
   return references;
 }
@@ -1084,6 +1238,9 @@ function operationIdentityPayload(operation) {
     reasonCodes: operation.reasonCodes,
     evidenceReferences: operation.evidenceReferences,
   };
+  if (operation.candidateAvailability !== undefined) {
+    payload.candidateAvailability = operation.candidateAvailability;
+  }
   if (operation.type === "retire") {
     payload.decisionRunUrl = operation.decisionRunUrl;
     payload.decisionPullRequestUrl = operation.decisionPullRequestUrl;
@@ -1107,6 +1264,7 @@ function makeOperation({
   before,
   after,
   healthAfter,
+  candidateAvailability = null,
   reasons,
   references,
   decisionRunUrl,
@@ -1124,10 +1282,13 @@ function makeOperation({
     plannedAt,
     before: before === null ? null : clone(before),
     after: clone(after),
-    healthAfter: clone(healthAfter),
+    healthAfter: healthAfter === null ? null : clone(healthAfter),
     reasonCodes: reasons,
     evidenceReferences: references,
   };
+  if (candidateAvailability !== null) {
+    operation.candidateAvailability = clone(candidateAvailability);
+  }
   if (type === "retire") {
     Object.assign(operation, retirementDecisionProvenance({
       decisionRunUrl,
@@ -1299,11 +1460,15 @@ function expectedBeforeLocation(operation) {
 function validateTransition(operation, trustedRepository) {
   validateRecord(operation.after, `Operation ${operation.operationId} after`);
   if (operation.before !== null) validateRecord(operation.before, `Operation ${operation.operationId} before`);
-  if (!validateHealthEntry(operation.healthAfter)) {
+  const hasHealthAfter = operation.healthAfter !== null;
+  if (hasHealthAfter && !validateHealthEntry(operation.healthAfter)) {
     fail(
       "SCHEMA_INVALID",
       `Operation ${operation.operationId} healthAfter is invalid: ${schemaMessage(validateHealthEntry)}`,
     );
+  }
+  if (!hasHealthAfter && operation.type !== "publish") {
+    fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} is missing healthAfter state.`);
   }
   if (operation.after.id !== operation.targetId || (operation.before && operation.before.id !== operation.targetId)) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} changes its target ID.`);
@@ -1319,18 +1484,85 @@ function validateTransition(operation, trustedRepository) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has an invalid after lifecycle status.`);
   }
   const expectedHealthStatus = {
-    publish: "healthy",
     update: "healthy",
     quarantine: "quarantined",
     retire: "retired",
     restore: "healthy",
   }[operation.type];
-  if (
+  if (hasHealthAfter && (
     operation.healthAfter.galleryId !== operation.targetId ||
     operation.healthAfter.canonicalSource !== operation.after.canonicalSource ||
-    operation.healthAfter.status !== expectedHealthStatus
-  ) {
+    operation.healthAfter.status !== (operation.type === "publish" ? "healthy" : expectedHealthStatus)
+  )) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has mismatched healthAfter state.`);
+  }
+  if (operation.candidateAvailability !== undefined) {
+    const availability = operation.candidateAvailability;
+    let source;
+    try {
+      source = canonicalizeUrl(availability.source);
+    } catch {
+      fail("SCHEMA_INVALID", `Operation ${operation.operationId} candidate availability source is invalid.`);
+    }
+    if (
+      !["publish", "update", "restore"].includes(operation.type) ||
+      source !== operation.after.canonicalSource ||
+      availability.classification !== "healthy" ||
+      availability.statusCode === 206 ||
+      availability.reasonCode !== null ||
+      new Date(availability.checkedAt).getTime() > new Date(operation.plannedAt).getTime()
+    ) {
+      fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has invalid candidate availability evidence.`);
+    }
+    const availabilityReferences = operation.evidenceReferences.filter((reference) => (
+      reference.kind === "candidate-availability"
+    ));
+    const deterministicReferences = operation.evidenceReferences.filter((reference) => (
+      reference.kind === "candidate-deterministic-gate"
+    ));
+    const candidateReferences = operation.evidenceReferences.filter((reference) => (
+      reference.kind === "candidate"
+    ));
+    const analysisReferences = operation.evidenceReferences.filter((reference) => (
+      reference.kind === "analysis"
+    ));
+    if (
+      availabilityReferences.length !== 1 ||
+      deterministicReferences.length !== 1 ||
+      candidateReferences.length !== 1 ||
+      analysisReferences.length !== 1 ||
+      candidateReferences[0].id !== availability.candidateId ||
+      candidateReferences[0].source !== availability.source ||
+      analysisReferences[0].id !== availability.candidateId ||
+      !isDeepStrictEqual(availabilityReferences[0], {
+        kind: "candidate-availability",
+        id: availability.candidateId,
+        observedAt: availability.checkedAt,
+        source: availability.source,
+        status: availability.classification,
+        statusCode: availability.statusCode,
+      }) ||
+      !isDeepStrictEqual(deterministicReferences[0], {
+        kind: "candidate-deterministic-gate",
+        id: availability.candidateId,
+        observedAt: availability.checkedAt,
+        source: availability.source,
+        status: "passed",
+      })
+    ) {
+      fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has mismatched candidate-gate references.`);
+    }
+    if (operation.type === "publish" && operation.after.lastVerified !== availability.checkedAt) {
+      fail("NON_IDEMPOTENT_REPLAY", `Publish operation ${operation.operationId} has mismatched lastVerified evidence.`);
+    }
+    if (
+      !hasHealthAfter &&
+      operation.evidenceReferences.some((reference) => ["health", "freshness"].includes(reference.kind))
+    ) {
+      fail("NON_IDEMPOTENT_REPLAY", `Publish operation ${operation.operationId} contains scheduled decision evidence.`);
+    }
+  } else if (!hasHealthAfter) {
+    fail("NON_IDEMPOTENT_REPLAY", `Publish operation ${operation.operationId} lacks candidate availability evidence.`);
   }
   if (operation.type === "retire") {
     retirementDecisionProvenance(operation, `Operation ${operation.operationId}`, trustedRepository);
@@ -1466,6 +1698,14 @@ export function validateCatalogChangePlanPolicy(plan, policy, { trustedRepositor
   validatePolicyInput(policy);
   validatePolicyForOperations(policy, plan.operations);
   for (const operation of plan.operations) {
+    if (operation.candidateAvailability !== undefined) {
+      requireCurrentRunTimestamp(
+        operation.candidateAvailability.checkedAt,
+        `Operation ${operation.operationId} candidateAvailability.checkedAt`,
+        plan.generatedAt,
+        decisionEvidenceWindowMilliseconds(policy),
+      );
+    }
     if (operation.type === "retire") replayRetirementEvidence(operation, policy, plan.generatedAt);
   }
   return plan;
@@ -1529,11 +1769,12 @@ export function replayCatalogChangePlan(plan, state, { trustedRepository = state
   return replayed;
 }
 
-export function buildCatalogChangePlan({
+function buildCatalogChangePlanInternal({
   runId,
   generatedAt,
   candidates,
   analyses,
+  candidateGates = null,
   health,
   freshness,
   activeRecords,
@@ -1547,7 +1788,7 @@ export function buildCatalogChangePlan({
   decisionRunId,
   decisionPullRequestNumber,
   trustedRepository,
-}) {
+}, operationTargetIds = null) {
   const normalizedRunId = requireString(runId, "runId");
   const plannedAt = normalizeTimestamp(generatedAt, "generatedAt");
   validatePolicyInput(policy);
@@ -1580,16 +1821,46 @@ export function buildCatalogChangePlan({
     new Set(catalogIndex.byId.keys()),
     policy,
   );
-  const expectedIds = new Set([...catalogIndex.byId.keys(), ...candidateByGalleryId.keys()]);
-  const healthById = validateHealth(health, policy, expectedIds, plannedAt, maximumEvidenceAge);
-  const freshnessById = validateFreshness(freshness, expectedIds, policy, plannedAt, maximumEvidenceAge);
+  const candidateGatesByCandidate = validateCandidateGateEntries(
+    candidateGates,
+    candidatesByIdentity,
+    [...active, ...retired],
+    plannedAt,
+    maximumEvidenceAge,
+  );
+  const catalogIds = new Set(catalogIndex.byId.keys());
+  const legacyExpectedIds = new Set([...catalogIds, ...candidateByGalleryId.keys()]);
+  const allowedDecisionIds = candidateGatesByCandidate === null ? legacyExpectedIds : catalogIds;
+  const requiredDecisionIds = candidateGatesByCandidate === null
+    ? legacyExpectedIds
+    : operationTargetIds === null
+      ? catalogIds
+      : new Set([...operationTargetIds].filter((id) => catalogIds.has(id)));
+  const healthById = validateHealth(
+    health,
+    policy,
+    allowedDecisionIds,
+    requiredDecisionIds,
+    plannedAt,
+    maximumEvidenceAge,
+  );
+  const freshnessById = validateFreshness(
+    freshness,
+    allowedDecisionIds,
+    requiredDecisionIds,
+    policy,
+    plannedAt,
+    maximumEvidenceAge,
+  );
+  const suppliedDecisionIds = new Set([...healthById.keys(), ...freshnessById.keys()]);
   validateDecisionSources(
-    expectedIds,
+    suppliedDecisionIds,
     candidateByGalleryId,
     catalogIndex.byId,
     analysesByCandidate,
     healthById,
     freshnessById,
+    candidateGatesByCandidate !== null,
   );
 
   const operationsByTarget = new Map();
@@ -1603,10 +1874,12 @@ export function buildCatalogChangePlan({
 
   for (const candidateInfo of candidateInfos) {
     const { candidate, galleryId } = candidateInfo;
+    if (operationTargetIds !== null && !operationTargetIds.has(galleryId)) continue;
     const analysis = analysesByCandidate.get(candidate.identityKey);
     const target = resolveCandidateTarget(candidateInfo, analysis, catalogIndex);
-    const decisionHealth = healthById.get(galleryId);
-    const decisionFreshness = freshnessById.get(galleryId);
+    const candidateGate = candidateGatesByCandidate?.get(candidate.identityKey) ?? null;
+    const decisionHealth = target || candidateGatesByCandidate === null ? healthById.get(galleryId) : null;
+    const decisionFreshness = target || candidateGatesByCandidate === null ? freshnessById.get(galleryId) : null;
     const recommendation = analysis.recommendation;
     if (["reject", "keep"].includes(recommendation)) continue;
     if (["quarantine", "retire"].includes(recommendation)) {
@@ -1623,19 +1896,27 @@ export function buildCatalogChangePlan({
       analysis,
       health: decisionHealth,
       freshness: decisionFreshness,
+      candidateGate,
       policy,
       candidate,
     });
+    const healthAfter = candidateGatesByCandidate === null
+      ? decisionHealth
+      : target
+        ? projectHealthToCandidate(decisionHealth, candidate)
+        : null;
     const common = (type) => ({
       targetId: galleryId,
       runId: normalizedRunId,
       plannedAt,
-      healthAfter: decisionHealth,
-      reasons: reasonCodes(type, analysis.reasonCodes, decisionHealth.healthReasons),
+      healthAfter,
+      candidateAvailability: candidateGate?.candidateAvailability ?? null,
+      reasons: reasonCodes(type, analysis.reasonCodes, decisionHealth?.healthReasons),
       references: evidenceReferences({
         id: galleryId,
         candidate,
         analysis,
+        candidateGate,
         health: decisionHealth,
         freshness: decisionFreshness,
         policy,
@@ -1650,7 +1931,15 @@ export function buildCatalogChangePlan({
         ...common("publish"),
         type: "publish",
         before: null,
-        after: catalogRecordFromCandidate(candidate, analysis, galleryId, plannedAt, decisionHealth),
+        after: catalogRecordFromCandidate(
+          candidate,
+          analysis,
+          galleryId,
+          plannedAt,
+          healthAfter,
+          null,
+          candidateGate?.candidateAvailability ?? null,
+        ),
       }));
       continue;
     }
@@ -1659,7 +1948,15 @@ export function buildCatalogChangePlan({
       if (recommendation !== "update") {
         fail("DUPLICATE_CANONICAL_URL", `Publish candidate ${candidate.identityKey} already exists as ${before.id}.`);
       }
-      const after = catalogRecordFromCandidate(candidate, analysis, galleryId, plannedAt, decisionHealth, before);
+      const after = catalogRecordFromCandidate(
+        candidate,
+        analysis,
+        galleryId,
+        plannedAt,
+        healthAfter,
+        before,
+        candidateGate?.candidateAvailability ?? null,
+      );
       if (!isDeepStrictEqual(before, after)) {
         addOperation(makeOperation({ ...common("update"), type: "update", before, after }));
       }
@@ -1668,11 +1965,20 @@ export function buildCatalogChangePlan({
     if (recommendation !== "update") {
       fail("DUPLICATE_CANONICAL_URL", `Publish candidate ${candidate.identityKey} already exists as ${before.id}.`);
     }
-    const after = catalogRecordFromCandidate(candidate, analysis, galleryId, plannedAt, decisionHealth, before);
+    const after = catalogRecordFromCandidate(
+      candidate,
+      analysis,
+      galleryId,
+      plannedAt,
+      healthAfter,
+      before,
+      candidateGate?.candidateAvailability ?? null,
+    );
     addOperation(makeOperation({ ...common("restore"), type: "restore", before, after }));
   }
 
   for (const record of sortedRecords(active)) {
+    if (operationTargetIds !== null && !operationTargetIds.has(record.id)) continue;
     const decisionHealth = healthById.get(record.id);
     const decisionFreshness = freshnessById.get(record.id);
     const decision = lifecycleDecision(record.id, decisionHealth, decisionFreshness);
@@ -1722,6 +2028,7 @@ export function buildCatalogChangePlan({
   }
 
   for (const record of retired) {
+    if (operationTargetIds !== null && !operationTargetIds.has(record.id)) continue;
     const decision = lifecycleDecision(record.id, healthById.get(record.id), freshnessById.get(record.id));
     if (decision === "quarantine") {
       fail("CONFLICTING_OPERATIONS", `Retired record ${record.id} cannot transition back to quarantine.`);
@@ -1733,6 +2040,7 @@ export function buildCatalogChangePlan({
   const fingerprintInput = {
     candidates: candidateInfos.map((info) => info.candidate),
     analyses: [...analysesByCandidate.values()].sort((left, right) => left.candidateId.localeCompare(right.candidateId)),
+    candidateGates: candidateGates === null ? null : clone(candidateGates),
     health: { ...health, entries: [...health.entries].sort((left, right) => left.galleryId.localeCompare(right.galleryId)) },
     freshness: {
       ...freshness,
@@ -1754,6 +2062,9 @@ export function buildCatalogChangePlan({
     decisionRunId,
     decisionPullRequestNumber,
     trustedRepository,
+    ...(operationTargetIds === null
+      ? {}
+      : { operationTargetIds: [...operationTargetIds].sort((left, right) => left.localeCompare(right)) }),
   };
   const plan = validateCatalogChangePlan({
     version: PLAN_VERSION,
@@ -1771,4 +2082,48 @@ export function buildCatalogChangePlan({
     fail("NON_IDEMPOTENT_REPLAY", "Catalog change plan did not produce an idempotent replay.");
   }
   return plan;
+}
+
+export function buildCatalogChangePlan(input) {
+  return buildCatalogChangePlanInternal(input);
+}
+
+export function buildCatalogChangePlanForTargets(input, targetIds) {
+  const normalizedTargetIds = requireArray(targetIds, "targetIds")
+    .map((targetId, index) => requireString(targetId, `targetIds[${index}]`));
+  if (new Set(normalizedTargetIds).size !== normalizedTargetIds.length) {
+    fail("DUPLICATE_IDENTITY", "targetIds must not contain duplicate IDs.");
+  }
+  return buildCatalogChangePlanInternal(input, new Set(normalizedTargetIds));
+}
+
+export function composeCatalogChangePlan({
+  runId,
+  generatedAt,
+  operations,
+  fingerprintInput,
+  trustedRepository,
+}) {
+  const normalizedRunId = requireString(runId, "runId");
+  const plannedAt = normalizeTimestamp(generatedAt, "generatedAt");
+  const composedOperations = requireArray(operations, "operations")
+    .map((operation) => {
+      const remapped = {
+        ...clone(operation),
+        runId: normalizedRunId,
+        plannedAt,
+      };
+      delete remapped.operationId;
+      return { operationId: catalogChangeOperationId(remapped), ...remapped };
+    })
+    .sort(compareCatalogOperations);
+  return validateCatalogChangePlan({
+    version: PLAN_VERSION,
+    mode: "plan-only",
+    runId: normalizedRunId,
+    generatedAt: plannedAt,
+    inputFingerprint: hashCanonicalValue(fingerprintInput),
+    summary: planSummary(composedOperations),
+    operations: composedOperations,
+  }, { trustedRepository });
 }

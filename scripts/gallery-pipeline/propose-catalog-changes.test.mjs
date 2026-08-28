@@ -1,0 +1,692 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+import {
+  compareCatalogOperations,
+  hashCanonicalValue,
+  replayCatalogChangePlan,
+} from "./build-catalog-change.mjs";
+import {
+  makeFreshnessEntry,
+  makeHealthEntry,
+  makeRecord,
+} from "./build-catalog-change.fixtures.mjs";
+import {
+  CatalogProposalError,
+  createModelAnalysisReceipt,
+  main,
+  proposeCatalogChanges,
+  validateCatalogProposalReceipt,
+  validateCatalogProposalReport,
+} from "./propose-catalog-changes.mjs";
+import {
+  makeDisabledProposalFixture,
+  makePartialProposalFixture,
+  makeProposalFixture,
+} from "./propose-catalog-changes.fixtures.mjs";
+import { verifyAuditLog } from "./write-audit.mjs";
+
+const REPOSITORY_POLICY_PATH = fileURLToPath(new URL(
+  "../../.github/gallery-pipeline/policy.json",
+  import.meta.url,
+));
+const PROPOSAL_WORKFLOW_PATH = fileURLToPath(new URL(
+  "../../.github/workflows/propose-gallery-changes.yml",
+  import.meta.url,
+));
+const repositoryPolicy = JSON.parse(await readFile(REPOSITORY_POLICY_PATH, "utf8"));
+const FIXTURE_NOW = "2026-08-27T12:05:00.000Z";
+
+function clone(value) {
+  return structuredClone(value);
+}
+
+function ledgerEntry(result, subjectType, subjectId) {
+  return result.report.reasonLedger.find((entry) => (
+    entry.subjectType === subjectType && entry.subjectId === subjectId
+  ));
+}
+
+function flattenedOperations(result) {
+  return result.plans.flatMap((plan) => plan.operations);
+}
+
+function retargetFirstCandidateForUpdate(input, target) {
+  for (const candidate of [
+    input.discovery.candidates[0],
+    input.candidateGates.eligible[0].candidate,
+  ]) {
+    candidate.metadata.galleryId = target.id;
+  }
+  const analysis = input.modelAnalysis.analyses[0];
+  analysis.recommendation = "update";
+  analysis.reasonCodes = ["AI_UPDATE_APPROVED"];
+  input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
+}
+
+function proposeFixture(input) {
+  return proposeCatalogChanges(input, { now: FIXTURE_NOW });
+}
+
+test("requires an explicit current run timestamp after all evidence and within the workflow window", () => {
+  const missing = makeProposalFixture({ candidateCount: 1 });
+  missing.workflowStartedAt = "2026-08-27T11:55:00.000Z";
+  delete missing.generatedAt;
+  assert.throws(() => proposeCatalogChanges(missing, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_REQUIRED");
+
+  const invalid = makeProposalFixture({ candidateCount: 1 });
+  invalid.generatedAt = "not-a-timestamp";
+  assert.throws(() => proposeCatalogChanges(invalid, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_INVALID");
+
+  const dateOnly = makeProposalFixture({ candidateCount: 1 });
+  dateOnly.generatedAt = "2026-08-27";
+  assert.throws(() => proposeCatalogChanges(dateOnly, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_INVALID");
+
+  const invalidEvidence = makeProposalFixture({ candidateCount: 1 });
+  invalidEvidence.health.entries[0].checkedAt = "not-a-timestamp";
+  assert.throws(() => proposeCatalogChanges(invalidEvidence, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "EVIDENCE_TIMESTAMP_INVALID");
+
+  const futureEvidenceField = makeProposalFixture({ candidateCount: 1 });
+  futureEvidenceField.discovery.evaluatedAt = "2026-08-27T12:00:01.000Z";
+  assert.throws(() => proposeCatalogChanges(futureEvidenceField, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_BEFORE_EVIDENCE");
+
+  const beforeEvidence = makeProposalFixture({ candidateCount: 1 });
+  beforeEvidence.workflowStartedAt = "2026-08-27T11:55:00.000Z";
+  beforeEvidence.generatedAt = "2026-08-27T11:59:59.000Z";
+  assert.throws(() => proposeCatalogChanges(beforeEvidence, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_BEFORE_EVIDENCE");
+
+  const stale = makeProposalFixture({ candidateCount: 1 });
+  stale.workflowStartedAt = "2026-08-27T11:55:00.000Z";
+  assert.throws(() => proposeCatalogChanges(stale, {
+    now: "2026-08-27T12:20:01.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_STALE");
+
+  const outsideRun = makeProposalFixture({ candidateCount: 1 });
+  outsideRun.workflowStartedAt = "2026-08-27T10:59:59.000Z";
+  assert.throws(() => proposeCatalogChanges(outsideRun, {
+    now: "2026-08-27T12:05:00.000Z",
+  }), (error) => error instanceof CatalogProposalError && error.code === "GENERATED_AT_OUTSIDE_RUN");
+});
+
+test("requires exact upstream producer provenance and persists it in the proposal receipt", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const result = proposeFixture(input);
+  assert.deepEqual(result.receipt.upstreamArtifacts, input.upstreamArtifacts);
+  assert.equal(result.receipt.trustedRepository, input.trustedRepository);
+  assert.equal(result.receipt.trustedRef, input.trustedRef);
+  assert.equal(result.receipt.trustedSha, input.trustedSha);
+
+  for (const mutate of [
+    (value) => { value.upstreamArtifacts.pop(); },
+    (value) => { value.upstreamArtifacts[0].repository = "attacker/gallery"; },
+    (value) => { value.upstreamArtifacts[0].workflowPath = ".github/workflows/other.yml"; },
+    (value) => { value.upstreamArtifacts[0].sourceRef = "refs/heads/untrusted"; },
+    (value) => { value.upstreamArtifacts[0].sourceSha = "f".repeat(40); },
+    (value) => { value.upstreamArtifacts[0].artifactName = "gallery-discovery-latest"; },
+    (value) => { value.upstreamArtifacts[0].digest = "sha256:unverified"; },
+  ]) {
+    const invalid = makeProposalFixture({ candidateCount: 1 });
+    mutate(invalid);
+    assert.throws(() => proposeFixture(invalid), (error) => (
+      error instanceof CatalogProposalError && error.code === "UPSTREAM_ARTIFACTS_INVALID"
+    ));
+  }
+});
+
+test("proposal workflow selects only exact same-repository ref and SHA artifacts", async () => {
+  const workflow = await readFile(PROPOSAL_WORKFLOW_PATH, "utf8");
+
+  for (const input of ["discovery_run_id", "health_run_id", "freshness_run_id"]) {
+    assert.match(workflow, new RegExp(`^      ${input}:\\r?$`, "m"));
+  }
+  assert.match(workflow, /^permissions:\r?\n  contents: read\r?\n  actions: read\r?$/m);
+  assert.doesNotMatch(workflow, /\b(?:contents|actions|checks|pull-requests|id-token): write\b/);
+  assert.doesNotMatch(workflow, /\$\{\{\s*secrets\.|pull_request_target|gh run download/);
+  assert.doesNotMatch(workflow, /download_latest|regenerate|startsWith|sort \| head/);
+  for (const binding of [
+    ".repository.full_name",
+    ".head_repository.full_name",
+    ".workflow_id",
+    ".path",
+    ".head_branch",
+    ".head_sha",
+    ".conclusion",
+    ".run_attempt",
+    ".artifactName",
+    ".artifactId",
+    ".digest",
+  ]) {
+    assert.match(workflow, new RegExp(binding.replaceAll(".", "\\.")));
+  }
+  assert.match(workflow, /sha256sum/);
+  assert.match(workflow, /upstream-artifact-diagnostics\.json/);
+  assert.match(workflow, /--upstream-artifacts/);
+  assert.match(workflow, /--trusted-sha/);
+  assert.match(workflow, /--trusted-ref/);
+  assert.match(workflow, /--workflow-started-at/);
+  assert.match(workflow, /if: always\(\)/);
+});
+
+function retirementProvenance() {
+  return {
+    decisionRunUrl: "https://github.com/example/gallery/actions/runs/123456789",
+    decisionPullRequestUrl: "https://github.com/example/gallery/pull/42",
+    decisionRepositoryOwner: "example",
+    decisionRepositoryName: "gallery",
+    decisionRunId: "123456789",
+    decisionPullRequestNumber: "42",
+  };
+}
+
+async function recursiveFiles(directory, prefix = "") {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...await recursiveFiles(path.join(directory, entry.name), relative));
+    else files.push(relative);
+  }
+  return files.sort();
+}
+
+test("partitions 146 accepted inputs into six bounded plans and a hash-chained audit", () => {
+  const input = makeProposalFixture({ candidateCount: 146 });
+  const untouched = clone(input);
+  const existingIds = new Set(input.activeCatalog.map((record) => record.id));
+  assert(input.health.entries.every((entry) => existingIds.has(entry.galleryId)));
+  assert(input.freshness.entries.every((entry) => existingIds.has(entry.galleryId)));
+  const result = proposeFixture(input);
+
+  assert.deepEqual(input, untouched);
+  assert.equal(result.report.status, "complete");
+  assert.equal(result.report.stage.status, "completed");
+  assert.equal(result.report.summary.candidates, 146);
+  assert.equal(result.report.summary.plannedCandidates, 146);
+  assert.equal(result.report.summary.rejectedCandidates, 0);
+  assert.equal(result.report.summary.operations, 146);
+  assert.equal(result.report.summary.plans, 6);
+  assert.deepEqual(result.plans.map((plan) => plan.operations.length), [25, 25, 25, 25, 25, 21]);
+  assert(result.plans.every((plan) => plan.operations.length <= 25));
+  assert.equal(result.proposedState.activeCatalog.length, input.activeCatalog.length + 146);
+  assert.equal(result.proposedState.audit.entries.length, 6);
+  assert.strictEqual(validateCatalogProposalReport(result.report), result.report);
+  assert.strictEqual(validateCatalogProposalReceipt(result.receipt), result.receipt);
+  assert.strictEqual(verifyAuditLog(result.proposedState.audit, {
+    trustedRepository: input.trustedRepository,
+  }), result.proposedState.audit);
+  for (let index = 1; index < result.proposedState.audit.entries.length; index += 1) {
+    assert.equal(
+      result.proposedState.audit.entries[index].previousHash,
+      result.proposedState.audit.entries[index - 1].entryHash,
+    );
+  }
+});
+
+test("publishes a healthy available candidate without synthesizing health or freshness scores", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  input.generatedAt = "2026-08-27T12:01:00.000Z";
+  const candidate = input.discovery.candidates[0];
+  assert.equal(input.health.entries.some((entry) => entry.galleryId === candidate.metadata.galleryId), false);
+  assert.equal(input.freshness.entries.some((entry) => entry.galleryId === candidate.metadata.galleryId), false);
+
+  const result = proposeFixture(input);
+  const operation = flattenedOperations(result)[0];
+  const availability = input.candidateGates.eligible[0].availability;
+
+  assert.equal(operation.type, "publish");
+  assert.equal(operation.healthAfter, null);
+  assert.deepEqual(operation.candidateAvailability, {
+    candidateId: candidate.identityKey,
+    source: candidate.canonicalUrl,
+    checkedAt: availability.checkedAt,
+    classification: "healthy",
+    statusCode: 200,
+    reasonCode: null,
+  });
+  assert.equal(operation.after.lastVerified, availability.checkedAt);
+  assert.equal(operation.evidenceReferences.some((entry) => entry.kind === "health"), false);
+  assert.equal(operation.evidenceReferences.some((entry) => entry.kind === "freshness"), false);
+  assert(operation.evidenceReferences.some((entry) => entry.kind === "candidate-availability"));
+  assert(operation.evidenceReferences.some((entry) => entry.kind === "candidate-deterministic-gate"));
+  assert.equal("healthScore" in operation, false);
+  assert.equal("components" in operation, false);
+  assert.equal(
+    result.proposedState.health.entries.some((entry) => entry.galleryId === candidate.metadata.galleryId),
+    false,
+  );
+});
+
+test("fails candidate availability closed when evidence is missing, indeterminate, mismatched, or scored", () => {
+  const cases = [
+    {
+      reason: "CANDIDATE_AVAILABILITY_MISSING",
+      mutate(input) { delete input.candidateGates.eligible[0].availability; },
+    },
+    {
+      reason: "CANDIDATE_AVAILABILITY_INDETERMINATE",
+      mutate(input) {
+        Object.assign(input.candidateGates.eligible[0].availability, {
+          classification: "indeterminate",
+          statusCode: null,
+          reasonCode: "SOURCE_TIMEOUT",
+        });
+      },
+    },
+    {
+      reason: "CANDIDATE_AVAILABILITY_UNHEALTHY",
+      mutate(input) {
+        Object.assign(input.candidateGates.eligible[0].availability, {
+          classification: "definitive-failure",
+          statusCode: 404,
+          reasonCode: "SOURCE_HTTP_404",
+        });
+      },
+    },
+    {
+      reason: "CANDIDATE_AVAILABILITY_TIMESTAMP_MISMATCH",
+      mutate(input) {
+        input.candidateGates.eligible[0].availability.checkedAt = "2026-08-27T11:59:59.000Z";
+      },
+    },
+    {
+      reason: "CANDIDATE_AVAILABILITY_TIMESTAMP_MISMATCH",
+      mutate(input) { input.candidateGates.startedAt = "2026-08-27T11:59:59.000Z"; },
+    },
+    {
+      reason: "CANDIDATE_AVAILABILITY_SCORE_UNSUPPORTED",
+      mutate(input) { input.candidateGates.eligible[0].availability.qualityScore = 1; },
+    },
+  ];
+
+  for (const definition of cases) {
+    const input = makeProposalFixture({ candidateCount: 1 });
+    const candidateId = input.discovery.candidates[0].identityKey;
+    definition.mutate(input);
+    const result = proposeFixture(input);
+
+    assert.equal(result.report.summary.operations, 0, definition.reason);
+    assert.equal(result.report.summary.rejectedCandidates, 1, definition.reason);
+    assert(
+      ledgerEntry(result, "candidate", candidateId).reasonCodes.includes(definition.reason),
+      definition.reason,
+    );
+  }
+});
+
+test("requires scheduled health and freshness evidence for an existing candidate target", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const target = input.activeCatalog[0];
+  retargetFirstCandidateForUpdate(input, target);
+  input.health.entries = input.health.entries.filter((entry) => entry.galleryId !== target.id);
+  input.freshness.entries = input.freshness.entries.filter((entry) => entry.galleryId !== target.id);
+  input.freshness.healthSnapshot.entries = input.freshness.healthSnapshot.entries
+    .filter((entry) => entry.galleryId !== target.id);
+
+  const result = proposeFixture(input);
+  assert.equal(result.report.summary.operations, 0);
+  assert.deepEqual(
+    ledgerEntry(result, "candidate", input.discovery.candidates[0].identityKey).reasonCodes,
+    ["FRESHNESS_DECISION_MISSING", "HEALTH_DECISION_MISSING"],
+  );
+});
+
+test("uses candidate availability for an update only after matching scheduled target evidence", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const target = makeRecord(
+    "existing-update",
+    "https://learn.microsoft.com/azure/cosmos-db/existing-update",
+  );
+  const targetHealth = makeHealthEntry(target.id, target.canonicalSource);
+  const targetFreshness = makeFreshnessEntry(targetHealth);
+  input.activeCatalog.push(target);
+  input.health.entries.push(targetHealth);
+  input.freshness.entries.push(targetFreshness);
+  input.freshness.healthSnapshot.entries.push(clone(targetHealth));
+  retargetFirstCandidateForUpdate(input, target);
+
+  const candidate = input.discovery.candidates[0];
+  const mismatched = clone(input);
+  const candidateSource = candidate.canonicalUrl;
+  const mismatchedHealth = mismatched.health.entries.find((entry) => entry.galleryId === target.id);
+  const mismatchedFreshness = mismatched.freshness.entries.find((entry) => entry.galleryId === target.id);
+  const mismatchedSnapshot = mismatched.freshness.healthSnapshot.entries
+    .find((entry) => entry.galleryId === target.id);
+  for (const health of [mismatchedHealth, mismatchedFreshness.health, mismatchedSnapshot]) {
+    health.canonicalSource = candidateSource;
+    health.evidence.forEach((entry) => { entry.source = candidateSource; });
+  }
+  mismatchedFreshness.canonicalSource = candidateSource;
+  const mismatchedResult = proposeFixture(mismatched);
+  assert.deepEqual(
+    ledgerEntry(mismatchedResult, "candidate", candidate.identityKey).reasonCodes,
+    ["FRESHNESS_DECISION_TARGET_MISMATCH", "HEALTH_DECISION_TARGET_MISMATCH"],
+  );
+
+  const result = proposeFixture(input);
+  const operation = flattenedOperations(result)[0];
+
+  assert.equal(result.report.summary.operations, 1);
+  assert.equal(operation.type, "update");
+  assert.equal(operation.before.canonicalSource, target.canonicalSource);
+  assert.equal(operation.after.canonicalSource, candidate.canonicalUrl);
+  assert.equal(operation.healthAfter.canonicalSource, candidate.canonicalUrl);
+  assert.equal(operation.healthAfter.checkedAt, input.generatedAt);
+  assert.equal(operation.healthAfter.healthScore, targetHealth.healthScore);
+  assert.deepEqual(operation.healthAfter.components, targetHealth.components);
+  assert.equal(
+    operation.evidenceReferences.find((entry) => entry.kind === "health").source,
+    target.canonicalSource,
+  );
+  assert.equal(
+    operation.evidenceReferences.find((entry) => entry.kind === "freshness").source,
+    target.canonicalSource,
+  );
+  assert.equal(operation.candidateAvailability.source, candidate.canonicalUrl);
+});
+
+test("rejects stale original scheduled evidence before projecting an existing update", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const target = input.activeCatalog[0];
+  retargetFirstCandidateForUpdate(input, target);
+  const targetHealth = input.health.entries.find((entry) => entry.galleryId === target.id);
+  targetHealth.checkedAt = "2026-07-27T11:59:59.000Z";
+  targetHealth.evidence.forEach((entry) => {
+    entry.observedAt = targetHealth.checkedAt;
+  });
+
+  const result = proposeFixture(input);
+
+  assert.equal(result.report.summary.operations, 0);
+  assert.deepEqual(
+    ledgerEntry(result, "candidate", input.discovery.candidates[0].identityKey).reasonCodes,
+    ["MISSING_GATE"],
+  );
+  assert.deepEqual(result.proposedState.health, input.health);
+});
+
+test("restores an existing retired target only with matching scheduled target evidence", () => {
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const target = makeRecord(
+    "existing-restore",
+    "https://learn.microsoft.com/azure/cosmos-db/existing-restore",
+    "retired",
+  );
+  const targetHealth = makeHealthEntry(target.id, target.canonicalSource);
+  const targetFreshness = makeFreshnessEntry(targetHealth);
+  input.retired.entries.push({
+    record: target,
+    retiredAt: "2026-08-01T00:00:00.000Z",
+    retentionUntil: "2027-08-01",
+    reasonCodes: ["PREVIOUS_RETIREMENT"],
+    evidence: [{
+      observedAt: "2026-08-01T00:00:00.000Z",
+      source: target.canonicalSource,
+      reason: "health",
+    }],
+    supersededBy: null,
+    decisionRunUrl: "https://github.com/example/gallery/actions/runs/100",
+    decisionPullRequestUrl: "https://github.com/example/gallery/pull/10",
+  });
+  input.health.entries.push(targetHealth);
+  input.freshness.entries.push(targetFreshness);
+  input.freshness.healthSnapshot.entries.push(clone(targetHealth));
+  retargetFirstCandidateForUpdate(input, target);
+
+  const candidate = input.discovery.candidates[0];
+  const result = proposeFixture(input);
+  const operation = flattenedOperations(result)[0];
+
+  assert.equal(result.report.summary.operations, 1);
+  assert.equal(operation.type, "restore");
+  assert.equal(operation.before.lifecycleStatus, "retired");
+  assert.equal(operation.after.lifecycleStatus, "active");
+  assert.equal(operation.healthAfter.canonicalSource, candidate.canonicalUrl);
+});
+
+test("uses the repository default policy to emit a blocked schema-valid zero-plan report without AI", () => {
+  const input = makeDisabledProposalFixture({ candidateCount: 2 });
+  input.policy = repositoryPolicy;
+  let aiCalls = 0;
+  input.aiClient = { invoke() { aiCalls += 1; } };
+
+  const result = proposeFixture(input);
+
+  assert.equal(aiCalls, 0);
+  assert.equal(result.report.status, "blocked");
+  assert.equal(result.report.stage.status, "blocked");
+  assert(result.report.stage.reasonCodes.includes("POLICY_EMERGENCY_DISABLED"));
+  assert(result.report.stage.reasonCodes.includes("AI_AUTOMATION_DISABLED"));
+  assert(result.report.stage.reasonCodes.includes("MUTATION_AUTOMATION_DISABLED"));
+  assert.equal(result.report.upstream.modelAnalysis, "not-required");
+  assert.equal(result.report.summary.plans, 0);
+  assert.equal(result.report.summary.operations, 0);
+  assert.deepEqual(result.plans, []);
+  assert.deepEqual(result.proposedState.activeCatalog, input.activeCatalog);
+  validateCatalogProposalReport(result.report);
+});
+
+test("partial or indeterminate upstream reports yield evidence reports and zero promotable plans", () => {
+  const partial = makePartialProposalFixture({ candidateCount: 3 });
+  const partialResult = proposeFixture(partial);
+  assert.equal(partialResult.report.status, "partial");
+  assert.deepEqual(partialResult.plans, []);
+  assert.equal(partialResult.report.summary.operations, 0);
+  assert(partialResult.report.reasonLedger.every((entry) => entry.disposition === "rejected"));
+
+  const indeterminate = makeProposalFixture({ candidateCount: 3 });
+  indeterminate.candidateGates.status = "indeterminate";
+  const indeterminateResult = proposeFixture(indeterminate);
+  assert.equal(indeterminateResult.report.status, "indeterminate");
+  assert.deepEqual(indeterminateResult.plans, []);
+  assert.equal(indeterminateResult.report.summary.operations, 0);
+  assert.deepEqual(indeterminateResult.proposedState.audit, indeterminate.audit);
+});
+
+test("rejects only candidates missing precomputed analysis or required publication facts", () => {
+  const missingAnalysis = makeProposalFixture({ candidateCount: 3 });
+  const removedAnalysis = missingAnalysis.modelAnalysis.analyses.pop();
+  missingAnalysis.modelAnalysisReceipt = createModelAnalysisReceipt(missingAnalysis.modelAnalysis);
+  const analysisResult = proposeFixture(missingAnalysis);
+  assert.equal(analysisResult.report.status, "complete");
+  assert.equal(analysisResult.report.summary.operations, 2);
+  assert.equal(analysisResult.report.summary.rejectedCandidates, 1);
+  assert.deepEqual(
+    ledgerEntry(analysisResult, "candidate", removedAnalysis.candidateId).reasonCodes,
+    ["MODEL_ANALYSIS_MISSING"],
+  );
+
+  const missingFacts = makeProposalFixture({ candidateCount: 3 });
+  const candidateId = missingFacts.discovery.candidates[0].identityKey;
+  for (const candidate of [
+    missingFacts.discovery.candidates[0],
+    missingFacts.candidateGates.eligible[0].candidate,
+  ]) {
+    candidate.publishedAt = null;
+    candidate.metadata.sourceOwner = null;
+  }
+  const factsResult = proposeFixture(missingFacts);
+  assert.equal(factsResult.report.summary.operations, 2);
+  assert.deepEqual(
+    ledgerEntry(factsResult, "candidate", candidateId).reasonCodes,
+    ["PUBLISHED_AT_MISSING"],
+  );
+
+  const nonMaterial = makeProposalFixture({ candidateCount: 1 });
+  nonMaterial.modelAnalysis.analyses[0].relevance.material = false;
+  nonMaterial.modelAnalysisReceipt = createModelAnalysisReceipt(nonMaterial.modelAnalysis);
+  const nonMaterialResult = proposeFixture(nonMaterial);
+  assert.equal(nonMaterialResult.report.summary.operations, 0);
+  assert.deepEqual(
+    ledgerEntry(
+      nonMaterialResult,
+      "candidate",
+      nonMaterial.discovery.candidates[0].identityKey,
+    ).reasonCodes,
+    ["GATE_REJECTED"],
+  );
+
+  const noReport = makeProposalFixture({ candidateCount: 2 });
+  noReport.modelAnalysis = null;
+  noReport.modelAnalysisReceipt = null;
+  const noReportResult = proposeFixture(noReport);
+  assert.equal(noReportResult.report.status, "blocked");
+  assert.equal(noReportResult.report.summary.operations, 0);
+  assert.deepEqual(noReportResult.report.stage.reasonCodes, ["MODEL_ANALYSIS_MISSING"]);
+});
+
+test("does not invent retirement PR provenance and accepts it only when supplied", () => {
+  const input = makeProposalFixture({ candidateCount: 2 });
+  const retiringRecord = makeRecord(
+    "retirement-proposal",
+    "https://learn.microsoft.com/azure/cosmos-db/retirement-proposal",
+  );
+  const retiringHealth = makeHealthEntry(
+    retiringRecord.id,
+    retiringRecord.canonicalSource,
+    "retired",
+  );
+  const retiringFreshness = makeFreshnessEntry(retiringHealth, "retire");
+  input.activeCatalog.push(retiringRecord);
+  input.health.entries.push(retiringHealth);
+  input.freshness.entries.push(retiringFreshness);
+  input.freshness.healthSnapshot.entries.push(clone(retiringHealth));
+
+  const withoutProvenance = proposeFixture(input);
+  assert.equal(withoutProvenance.report.summary.operations, 2);
+  assert.equal(flattenedOperations(withoutProvenance).some((operation) => operation.type === "retire"), false);
+  assert.deepEqual(
+    ledgerEntry(withoutProvenance, "catalog", retiringRecord.id).reasonCodes,
+    ["RETIREMENT_PROVENANCE_MISSING"],
+  );
+
+  input.retirementProvenance = retirementProvenance();
+  const withProvenance = proposeFixture(input);
+  const retirement = flattenedOperations(withProvenance)
+    .find((operation) => operation.targetId === retiringRecord.id);
+  assert.equal(retirement.type, "retire");
+  assert.equal(retirement.decisionRunUrl, input.retirementProvenance.decisionRunUrl);
+  assert.equal(retirement.decisionPullRequestUrl, input.retirementProvenance.decisionPullRequestUrl);
+});
+
+test("orders operations canonically and sequential proposals replay idempotently", () => {
+  const input = makeProposalFixture({ candidateCount: 28 });
+  const first = proposeFixture(input);
+  const second = proposeFixture(clone(input));
+  assert.deepEqual(second, first);
+
+  const operations = flattenedOperations(first);
+  for (let index = 1; index < operations.length; index += 1) {
+    assert(compareCatalogOperations(operations[index - 1], operations[index]) <= 0);
+  }
+
+  let replayed = {
+    activeRecords: clone(input.activeCatalog),
+    retiredRecords: input.retired.entries.map((entry) => clone(entry.record)),
+  };
+  for (const plan of first.plans) {
+    replayed = replayCatalogChangePlan(plan, replayed, {
+      trustedRepository: input.trustedRepository,
+    });
+  }
+  assert.deepEqual(replayed.activeRecords, first.proposedState.activeCatalog);
+  assert.deepEqual(
+    replayed.retiredRecords,
+    first.proposedState.retired.entries.map((entry) => entry.record),
+  );
+  for (const plan of first.plans) {
+    replayed = replayCatalogChangePlan(plan, replayed, {
+      trustedRepository: input.trustedRepository,
+    });
+  }
+  assert.deepEqual(replayed.activeRecords, first.proposedState.activeCatalog);
+
+  const reordered = clone(input);
+  reordered.discovery.candidates.reverse();
+  reordered.candidateGates.eligible.reverse();
+  reordered.modelAnalysis.analyses.reverse();
+  reordered.modelAnalysisReceipt = createModelAnalysisReceipt(reordered.modelAnalysis);
+  reordered.health.entries.reverse();
+  reordered.freshness.entries.reverse();
+  reordered.freshness.healthSnapshot.entries.reverse();
+  const reorderedOperations = flattenedOperations(proposeFixture(reordered));
+  assert.deepEqual(
+    reorderedOperations.map(({ type, targetId, after }) => ({ type, targetId, after })),
+    operations.map(({ type, targetId, after }) => ({ type, targetId, after })),
+  );
+});
+
+test("writes plans, receipt, and proposed state only beneath the explicit report directory", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "gallery-proposal-"));
+  const reportDirectory = path.join(root, "reports");
+  const sentinelPath = path.join(root, "sentinel.txt");
+  const fixture = makeProposalFixture({ candidateCount: 26 });
+  const untouched = clone(fixture);
+  await writeFile(sentinelPath, "unchanged\n");
+
+  try {
+    const first = await main([
+      "--fixtures",
+      "--report-directory",
+      reportDirectory,
+    ], {
+      stdout: { write() {} },
+      env: {},
+      now: FIXTURE_NOW,
+      loadFixture: async () => fixture,
+    });
+    assert.equal(first.exitCode, 0);
+    assert.deepEqual(fixture, untouched);
+    assert.deepEqual(await recursiveFiles(reportDirectory), [
+      "plans/catalog-change-plan-001.json",
+      "plans/catalog-change-plan-002.json",
+      "proposal-receipt.json",
+      "proposal-report.json",
+      "proposed/catalog-audit.json",
+      "proposed/gallery-health.json",
+      "proposed/retired-templates.json",
+      "proposed/templates.json",
+    ]);
+    assert.equal(await readFile(sentinelPath, "utf8"), "unchanged\n");
+    assert.equal(
+      hashCanonicalValue(JSON.parse(await readFile(path.join(reportDirectory, "proposal-report.json"), "utf8"))),
+      first.result.receipt.reportFingerprint,
+    );
+
+    await main(["--fixtures", `--report-directory=${reportDirectory}`], {
+      stdout: { write() {} },
+      env: {},
+      now: FIXTURE_NOW,
+      loadFixture: async () => makeProposalFixture({ candidateCount: 1 }),
+    });
+    assert.equal((await recursiveFiles(reportDirectory)).includes("plans/catalog-change-plan-002.json"), false);
+    assert.deepEqual((await readdir(root)).sort(), ["reports", "sentinel.txt"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI requires an explicit report directory and has no mutation flags", async () => {
+  await assert.rejects(main([], { stdout: { write() {} }, env: {} }), (error) => (
+    error instanceof CatalogProposalError && error.code === "ARGUMENT_INVALID"
+  ));
+  for (const flag of ["--write", "--apply", "--mutate"]) {
+    await assert.rejects(main([flag], { stdout: { write() {} }, env: {} }), (error) => (
+      error instanceof CatalogProposalError && error.code === "WRITE_MODE_DISABLED"
+    ));
+  }
+});

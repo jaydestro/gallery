@@ -2,7 +2,8 @@ import { normalizeCandidates } from "../normalize.mjs";
 import { enrichCandidateMetadata } from "../enrich-candidate.mjs";
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
-const SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;
+const CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
+const PLAYLIST_ID_PATTERN = /^PL(?:[A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{32})$/;
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
 const YOUTUBE_THUMBNAIL_HOSTS = new Set(["i.ytimg.com", "img.youtube.com"]);
 
@@ -23,37 +24,42 @@ function officialThumbnailUrl(value) {
 
 function configuredIds(source = {}) {
   const channelIds = new Set(
-    [source.channelId, ...(source.channelIds ?? [])]
-      .filter((value) => typeof value === "string" && SOURCE_ID_PATTERN.test(value)),
+    source.type === "youtube-channel" && CHANNEL_ID_PATTERN.test(source.channelId ?? "")
+      ? [source.channelId]
+      : [],
   );
   const playlistIds = new Set(
-    [source.playlistId, ...(source.playlistIds ?? [])]
-      .filter((value) => typeof value === "string" && SOURCE_ID_PATTERN.test(value)),
+    source.type === "youtube-playlist" && PLAYLIST_ID_PATTERN.test(source.playlistId ?? "")
+      ? [source.playlistId]
+      : [],
   );
   return { channelIds, playlistIds };
 }
 
-export function isYouTubeDiscoveryEnabled(source) {
-  if (source?.enabled !== true) {
-    return false;
-  }
+export function isYouTubeSourceConfigured(source) {
   const { channelIds, playlistIds } = configuredIds(source);
-  return channelIds.size > 0 || playlistIds.size > 0;
+  return channelIds.size + playlistIds.size === 1;
+}
+
+export function isYouTubeDiscoveryEnabled(source) {
+  return source?.enabled === true && isYouTubeSourceConfigured(source);
 }
 
 function normalizedVideo(video) {
   const snippet = video?.snippet ?? {};
+  const contentDetails = video?.contentDetails ?? {};
   const thumbnails = snippet.thumbnails ?? {};
-  const rawId = typeof video?.id === "object" ? video.id.videoId : video?.id ?? video?.videoId;
+  const captionsAvailable = contentDetails.caption === "true" || video?.captionsAvailable === true;
   return {
-    id: rawId,
-    title: snippet.title ?? video?.title,
-    description: snippet.description ?? video?.description ?? "",
+    id: video?.id,
+    title: snippet.title,
+    description: snippet.description ?? "",
     publishedAt: snippet.publishedAt ?? null,
     channelId: snippet.videoOwnerChannelId ?? snippet.channelId,
     channelTitle: snippet.videoOwnerChannelTitle ?? snippet.channelTitle,
     playlistIds: [video?.playlistId, ...(video?.playlistIds ?? [])].filter(Boolean),
-    transcript: video?.transcript ?? video?.captions ?? "",
+    captionsAvailable,
+    transcript: captionsAvailable && typeof video?.transcript === "string" ? video.transcript : "",
     thumbnailUrl: thumbnails.maxres?.url ?? thumbnails.high?.url ?? thumbnails.medium?.url ??
       thumbnails.default?.url ?? null,
   };
@@ -86,7 +92,7 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
     const video = normalizedVideo(item);
     if (
       !VIDEO_ID_PATTERN.test(video.id ?? "") ||
-      !SOURCE_ID_PATTERN.test(video.channelId ?? "") ||
+      !CHANNEL_ID_PATTERN.test(video.channelId ?? "") ||
       !video.title ||
       !comesFromConfiguredSource(video, ids)
     ) {
@@ -98,6 +104,9 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
     const canonicalUrl = `https://www.youtube.com/watch?v=${video.id}`;
     const author = video.channelTitle ?? video.channelId;
     const catalogMetadata = enrichCandidateMetadata({
+      sourceType: "video",
+      sourceId: video.id,
+      trustTier: sourceConfig.trustTier,
       launchUrl: canonicalUrl,
       websiteUrls: [`https://www.youtube.com/channel/${video.channelId}`],
       author,
@@ -126,10 +135,12 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
         ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
+        youtubeSourceType: sourceConfig.type,
+        youtubeSourceId: sourceConfig.channelId ?? sourceConfig.playlistId,
         videoId: video.id,
         channelId: video.channelId,
         playlistIds: [...video.playlistIds].sort(),
-        captionsAvailable: Boolean(video.transcript),
+        captionsAvailable: video.captionsAvailable,
       },
     });
   }

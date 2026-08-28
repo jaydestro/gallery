@@ -4,13 +4,21 @@ import { detectExactDuplicates } from "./detect-duplicates.mjs";
 import { discoverFeeds } from "./discover/feeds.mjs";
 import { discoverGitHub } from "./discover/github.mjs";
 import { discoverLearn } from "./discover/learn.mjs";
-import { isYouTubeDiscoveryEnabled } from "./discover/youtube.mjs";
+import {
+  discoverYouTube,
+  isYouTubeDiscoveryEnabled,
+  isYouTubeSourceConfigured,
+} from "./discover/youtube.mjs";
 import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
 import { safeFetch } from "./shared/safe-fetch.mjs";
 
 const GITHUB_HOST = "api.github.com";
 const LEARN_HOST = "learn.microsoft.com";
-const IMMUTABLE_SOURCE_ID = /^[A-Za-z0-9_-]{10,}$/;
+const YOUTUBE_API_HOST = "youtube.googleapis.com";
+const YOUTUBE_API_ENDPOINT = `https://${YOUTUBE_API_HOST}/youtube/v3`;
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_UPLOADS_PLAYLIST_ID = /^UU[A-Za-z0-9_-]{22}$/;
+const YOUTUBE_VIDEO_BATCH_SIZE = 50;
 const MAX_XML_DEPTH = 64;
 const MAX_XML_NODES = 10_000;
 const LEARN_ROOT_PATH = "/azure/cosmos-db";
@@ -23,6 +31,9 @@ const DEFAULT_LIMITS = Object.freeze({
   feedEntries: 100,
   sitemapFiles: 4,
   learnDocuments: 500,
+  youtubePageSize: 50,
+  youtubeListingPages: 2,
+  youtubeCandidates: 100,
   responseBytes: 2 * 1024 * 1024,
 });
 
@@ -33,12 +44,15 @@ const HARD_LIMITS = Object.freeze({
   feedEntries: 250,
   sitemapFiles: 8,
   learnDocuments: 2_000,
+  youtubePageSize: 50,
+  youtubeListingPages: 5,
+  youtubeCandidates: 250,
   responseBytes: 4 * 1024 * 1024,
 });
 
 class HttpStatusError extends Error {
-  constructor(url, status) {
-    super(`Request failed with HTTP ${status}: ${url}`);
+  constructor(url, status, detail = null) {
+    super(`Request failed with HTTP ${status}${detail ? ` (${detail})` : ""}: ${url}`);
     this.name = "HttpStatusError";
     this.status = status;
   }
@@ -84,9 +98,18 @@ function retiredRecords(catalog) {
   return entries.map((entry) => entry?.record ?? entry);
 }
 
-function cleanError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+function cleanError(error, secrets = []) {
+  let message = error instanceof Error ? error.message : String(error);
+  message = message
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/(X-Goog-Api-Key\s*[:=]\s*)\S+/gi, "$1[redacted]");
+  for (const secret of secrets) {
+    if (typeof secret === "string" && secret) {
+      message = message.replaceAll(secret, "[redacted]");
+    }
+  }
+  return message;
 }
 
 function localName(name) {
@@ -865,13 +888,230 @@ async function collectLearn(source, context) {
   return { candidates, rejected: [], issues };
 }
 
-function configuredYouTubeSource(source) {
-  return [
-    source.channelId,
-    ...(source.channelIds ?? []),
-    source.playlistId,
-    ...(source.playlistIds ?? []),
-  ].some((value) => typeof value === "string" && IMMUTABLE_SOURCE_ID.test(value));
+function youtubeApiUrl(resource, parameters) {
+  if (!new Set(["channels", "playlistItems", "videos"]).has(resource)) {
+    throw new TypeError(`Unsupported YouTube API resource: ${resource}`);
+  }
+  const url = new URL(`${YOUTUBE_API_ENDPOINT}/${resource}`);
+  for (const [name, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(name, String(value));
+    }
+  }
+  return url;
+}
+
+function parseYouTubeResponse(response) {
+  let payload;
+  try {
+    payload = response.json();
+  } catch {
+    throw new TypeError(`YouTube API returned invalid JSON: ${response.url}`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const reasons = payload?.error?.errors
+      ?.map((item) => item?.reason)
+      .filter((reason) => typeof reason === "string" && reason)
+      .sort();
+    throw new HttpStatusError(response.url, response.status, reasons?.join(", ") || "YouTube API error");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError(`YouTube API returned a non-object payload: ${response.url}`);
+  }
+  return payload;
+}
+
+async function youtubeRequest(resource, parameters, context) {
+  const url = youtubeApiUrl(resource, parameters);
+  context.endpoints.push(url.toString());
+  try {
+    const response = await fetchBounded(url, {
+      trustedHosts: [YOUTUBE_API_HOST],
+      fetchOptions: context.fetchOptions,
+      limits: context.limits,
+      headers: {
+        Accept: "application/json",
+        "X-Goog-Api-Key": context.youtubeApiKey,
+      },
+    });
+    return parseYouTubeResponse(response);
+  } catch (error) {
+    throw new Error(cleanError(error, [context.youtubeApiKey]));
+  }
+}
+
+function youtubePublicSourceUrl(source) {
+  if (source?.type === "youtube-channel" && isYouTubeSourceConfigured(source)) {
+    return `https://www.youtube.com/channel/${source.channelId}`;
+  }
+  if (source?.type === "youtube-playlist" && isYouTubeSourceConfigured(source)) {
+    return `https://www.youtube.com/playlist?list=${source.playlistId}`;
+  }
+  return null;
+}
+
+async function resolveYouTubePlaylist(source, context) {
+  if (source.type === "youtube-playlist") return source.playlistId;
+  const payload = await youtubeRequest("channels", {
+    part: "contentDetails",
+    id: source.channelId,
+    fields: "items(id,contentDetails/relatedPlaylists/uploads)",
+  }, context);
+  if (!Array.isArray(payload.items)) {
+    throw new TypeError("YouTube channels response did not contain an item array");
+  }
+  const channel = payload.items.find((item) => item?.id === source.channelId);
+  const uploadsPlaylistId = channel?.contentDetails?.relatedPlaylists?.uploads;
+  const expectedUploadsPlaylistId = `UU${source.channelId.slice(2)}`;
+  if (
+    !YOUTUBE_UPLOADS_PLAYLIST_ID.test(uploadsPlaylistId ?? "") ||
+    uploadsPlaylistId !== expectedUploadsPlaylistId
+  ) {
+    throw new TypeError(`YouTube channel ${source.channelId} did not return its exact uploads playlist`);
+  }
+  return uploadsPlaylistId;
+}
+
+function recordYouTubeIssue(issues, error, context) {
+  issues.push(cleanError(error, [context.youtubeApiKey]));
+}
+
+async function collectYouTubeVideoIds(playlistId, context, issues) {
+  const videoIds = [];
+  const seenVideoIds = new Set();
+  const seenPageTokens = new Set();
+  let pageToken = null;
+  for (let page = 1; page <= context.limits.youtubeListingPages; page += 1) {
+    const remaining = context.limits.youtubeCandidates - videoIds.length;
+    if (remaining <= 0) break;
+    let payload;
+    try {
+      payload = await youtubeRequest("playlistItems", {
+        part: "contentDetails",
+        playlistId,
+        maxResults: Math.min(context.limits.youtubePageSize, remaining),
+        pageToken,
+        fields: "nextPageToken,items(contentDetails/videoId)",
+      }, context);
+    } catch (error) {
+      recordYouTubeIssue(issues, error, context);
+      break;
+    }
+    if (!Array.isArray(payload.items)) {
+      recordYouTubeIssue(
+        issues,
+        new TypeError("YouTube playlistItems response did not contain an item array"),
+        context,
+      );
+      break;
+    }
+    for (const item of payload.items) {
+      const videoId = item?.contentDetails?.videoId;
+      if (YOUTUBE_VIDEO_ID.test(videoId ?? "") && !seenVideoIds.has(videoId)) {
+        seenVideoIds.add(videoId);
+        videoIds.push(videoId);
+      }
+      if (videoIds.length >= context.limits.youtubeCandidates) break;
+    }
+    if (videoIds.length >= context.limits.youtubeCandidates || payload.nextPageToken === undefined) {
+      break;
+    }
+    if (
+      typeof payload.nextPageToken !== "string" ||
+      payload.nextPageToken.length === 0 ||
+      payload.nextPageToken.length > 512 ||
+      seenPageTokens.has(payload.nextPageToken)
+    ) {
+      recordYouTubeIssue(issues, new TypeError("YouTube returned an invalid pagination token"), context);
+      break;
+    }
+    seenPageTokens.add(payload.nextPageToken);
+    pageToken = payload.nextPageToken;
+  }
+  return videoIds;
+}
+
+async function collectYouTubeVideos(videoIds, playlistId, context, issues) {
+  const videosById = new Map();
+  for (let index = 0; index < videoIds.length; index += YOUTUBE_VIDEO_BATCH_SIZE) {
+    const batch = videoIds.slice(index, index + YOUTUBE_VIDEO_BATCH_SIZE);
+    let payload;
+    try {
+      payload = await youtubeRequest("videos", {
+        part: "contentDetails,snippet",
+        id: batch.join(","),
+        fields: "items(id,snippet(title,description,publishedAt,channelId,channelTitle,thumbnails),contentDetails/caption)",
+      }, context);
+    } catch (error) {
+      recordYouTubeIssue(issues, error, context);
+      break;
+    }
+    if (!Array.isArray(payload.items)) {
+      recordYouTubeIssue(
+        issues,
+        new TypeError("YouTube videos response did not contain an item array"),
+        context,
+      );
+      break;
+    }
+    const requestedIds = new Set(batch);
+    for (const video of payload.items) {
+      if (requestedIds.has(video?.id) && !videosById.has(video.id)) {
+        videosById.set(video.id, { ...video, playlistIds: [playlistId] });
+      }
+    }
+  }
+  return videoIds.map((videoId) => videosById.get(videoId)).filter(Boolean);
+}
+
+async function collectYouTube(source, context) {
+  if (!isYouTubeSourceConfigured(source)) {
+    throw new TypeError("YouTube source requires one immutable ID matching its source type");
+  }
+  if (!exactEndpoint(source.endpoint, YOUTUBE_API_ENDPOINT)) {
+    throw new TypeError(`YouTube source endpoint must exactly match ${YOUTUBE_API_ENDPOINT}`);
+  }
+  if (typeof context.youtubeApiKey !== "string" || context.youtubeApiKey.trim() === "") {
+    throw new TypeError("YOUTUBE_API_KEY is required for enabled YouTube discovery sources");
+  }
+  context.youtubeApiKey = context.youtubeApiKey.trim();
+
+  const issues = [];
+  let playlistId;
+  try {
+    playlistId = await resolveYouTubePlaylist(source, context);
+  } catch (error) {
+    recordYouTubeIssue(issues, error, context);
+    return { candidates: [], rejected: [], issues };
+  }
+  const videoIds = await collectYouTubeVideoIds(playlistId, context, issues);
+  const videos = await collectYouTubeVideos(videoIds, playlistId, context, issues);
+  const candidates = discoverYouTube({ source, videos, discoveredAt: context.discoveredAt });
+  const acceptedIds = new Set(candidates.map((candidate) => candidate.sourceId));
+  const returnedIds = new Set(videos.map((video) => video.id));
+  const rejected = videos
+    .filter((video) => !acceptedIds.has(video.id))
+    .map((video) => ({
+      sourceRegistryId: source.id,
+      sourceType: "video",
+      sourceId: video.id,
+      canonicalUrl: `https://www.youtube.com/watch?v=${video.id}`,
+      reason: "insufficient-cosmos-evidence",
+      evidence: [],
+    }));
+  for (const videoId of videoIds) {
+    if (!returnedIds.has(videoId)) {
+      rejected.push({
+        sourceRegistryId: source.id,
+        sourceType: "video",
+        sourceId: videoId,
+        canonicalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        reason: issues.length > 0 ? "youtube-video-indeterminate" : "youtube-video-unavailable",
+        evidence: [],
+      });
+    }
+  }
+  return { candidates, rejected, issues };
 }
 
 function skippedStatus(source, reason) {
@@ -898,6 +1138,8 @@ async function querySource(source, context) {
       result = await collectFeed(source, sourceContext);
     } else if (source.type === "documentation-root") {
       result = await collectLearn(source, sourceContext);
+    } else if (source.type === "youtube-channel" || source.type === "youtube-playlist") {
+      result = await collectYouTube(source, sourceContext);
     } else {
       throw new TypeError(`Unsupported trusted source type: ${source.type}`);
     }
@@ -953,6 +1195,7 @@ export async function runDiscovery({
   activeCatalog = [],
   retiredCatalog = [],
   githubToken = process.env.GITHUB_TOKEN,
+  environment = process.env,
   discoveredAt = new Date().toISOString(),
   fetchOptions = {},
   limits: limitOverrides = {},
@@ -971,19 +1214,15 @@ export async function runDiscovery({
       continue;
     }
     if (source.type === "youtube-channel" || source.type === "youtube-playlist") {
-      if (!configuredYouTubeSource(source) || !isYouTubeDiscoveryEnabled(source)) {
+      if (!isYouTubeSourceConfigured(source) || !isYouTubeDiscoveryEnabled(source)) {
         statuses.push(skippedStatus(source, "immutable-youtube-source-id-required"));
-      } else {
-        statuses.push({
-          ...skippedStatus(source, "live-youtube-retrieval-not-configured"),
-          status: "indeterminate",
-        });
+        continue;
       }
-      continue;
     }
     try {
       const result = await querySource(source, {
         githubToken,
+        youtubeApiKey: environment?.YOUTUBE_API_KEY,
         discoveredAt: normalizedTimestamp,
         fetchOptions,
         limits,
@@ -996,7 +1235,9 @@ export async function runDiscovery({
         sourceRegistryId: source.id,
         sourceType: source.type,
         status: "indeterminate",
-        queried: true,
+        queried: source.type === "youtube-channel" || source.type === "youtube-playlist"
+          ? (error?.discoveryEndpoints?.length ?? 0) > 0
+          : true,
         candidateCount: 0,
         rejectedCount: 1,
         endpoints: error?.discoveryEndpoints ?? [],
@@ -1006,7 +1247,7 @@ export async function runDiscovery({
         sourceRegistryId: source.id,
         sourceType: source.type,
         sourceId: source.id,
-        canonicalUrl: source.endpoint ?? null,
+        canonicalUrl: youtubePublicSourceUrl(source) ?? source.endpoint ?? null,
         reason: "source-indeterminate",
         evidence: [{ type: "source-error", value: cleanError(error) }],
       });

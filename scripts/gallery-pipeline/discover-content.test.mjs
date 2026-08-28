@@ -29,14 +29,21 @@ test("--fixtures runs a deterministic, fully offline combined dry run", async ()
   assert.equal(first.result.mode, "dry-run");
   assert.equal(first.result.mutationPerformed, false);
   assert.equal(first.result.status, "complete");
-  assert.equal(first.result.discovery.candidates.length, 2);
+  assert.equal(first.result.discovery.candidates.length, 3);
   assert.ok(first.result.discovery.rejected.some((item) => item.reason === "exact-duplicate"));
   assert.equal(first.result.candidateGates.status, "complete");
-  assert.equal(first.result.candidateGates.summary.eligible, 2);
+  assert.equal(first.result.candidateGates.summary.eligible, 3);
+  const youtubeCandidate = first.result.discovery.candidates.find(
+    (candidate) => candidate.metadata.youtubeSourceType === "youtube-playlist",
+  );
+  assert.equal(youtubeCandidate.sourceId, "YtFixture01");
+  assert.equal(youtubeCandidate.metadata.captionsAvailable, true);
+  assert.equal(youtubeCandidate.evidence.some((item) => item.type === "youtube-transcript"), false);
   assert.equal(first.result.candidateGates.startedAt, first.result.discovery.completedAt);
   assert.deepEqual(JSON.parse(firstOutput.value()), first.result);
   assert.equal(firstOutput.value(), secondOutput.value());
   assert.deepEqual(first.result, second.result);
+  assert.equal(firstOutput.value().includes("offline-fixture-youtube-key"), false);
   assert.equal(await readFile(activePath, "utf8"), before);
 });
 
@@ -55,6 +62,7 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
     retiredCatalog,
     policy,
     githubToken: "read-only-token",
+    environment: { YOUTUBE_API_KEY: "fixture-youtube-key" },
     discoveredAt: "2026-08-28T12:00:00.000Z",
     limits: { feedEntries: 1 },
     fetchImpl,
@@ -103,8 +111,54 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   assert.equal(gateOptions.checkedAt, discovery.completedAt);
   assert.strictEqual(discoveryOptions.fetchOptions.fetchImpl, fetchImpl);
   assert.strictEqual(discoveryOptions.fetchOptions.lookup, lookup);
+  assert.strictEqual(discoveryOptions.environment, inputs.environment);
   assert.equal(Object.hasOwn(gateOptions, "aiClient"), false);
   assert.equal(Object.hasOwn(gateOptions, "writer"), false);
+});
+
+test("live CLI forwards only the environment YouTube key and never serializes it", async () => {
+  const output = outputBuffer();
+  const apiKey = "live-test-youtube-key";
+  const timestamp = "2026-08-28T12:00:00.000Z";
+  let discoveryOptions;
+  const result = await main([], {
+    stdout: output.stream,
+    env: {
+      GITHUB_TOKEN: "github-test-token",
+      YOUTUBE_API_KEY: apiKey,
+      UNRELATED_SECRET: "must-not-be-forwarded",
+    },
+    async runDiscoveryImpl(options) {
+      discoveryOptions = options;
+      return {
+        schemaVersion: "1.0.0",
+        mode: "dry-run",
+        mutationPerformed: false,
+        status: "complete",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        candidates: [],
+        sources: [],
+      };
+    },
+    async runCandidateGatesImpl() {
+      return {
+        schemaVersion: "1.0.0",
+        mode: "dry-run",
+        mutationPerformed: false,
+        status: "complete",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        eligible: [],
+        rejected: [],
+      };
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(discoveryOptions.environment, { YOUTUBE_API_KEY: apiKey });
+  assert.equal(Object.hasOwn(discoveryOptions.environment, "UNRELATED_SECRET"), false);
+  assert.equal(output.value().includes(apiKey), false);
 });
 
 test("writes both valid reports before returning nonzero for a partial run", async () => {

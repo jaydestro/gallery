@@ -1,6 +1,13 @@
 name: Evaluate pipeline policy
 
 on:
+  pull_request:
+    paths:
+      - '.github/gallery-pipeline/**'
+      - '.github/workflows/evaluate-pipeline-policy.yml'
+      - 'package-lock.json'
+      - 'package.json'
+      - 'scripts/gallery-pipeline/**'
   workflow_dispatch:
 
 permissions:

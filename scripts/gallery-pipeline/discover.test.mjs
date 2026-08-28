@@ -6,7 +6,10 @@ import { discoverFeeds } from "./discover/feeds.mjs";
 import { discoverGitHub } from "./discover/github.mjs";
 import { discoverLearn } from "./discover/learn.mjs";
 import { discoverYouTube, isYouTubeDiscoveryEnabled } from "./discover/youtube.mjs";
-import { CATALOG_PREVIEW_PLACEHOLDER } from "./enrich-candidate.mjs";
+import {
+  CATALOG_PREVIEW_PLACEHOLDER,
+  generateCandidateGalleryId,
+} from "./enrich-candidate.mjs";
 
 async function loadFixture(name) {
   return JSON.parse(
@@ -27,6 +30,8 @@ test("GitHub fixture accepts strong SDK, infrastructure, and code signals", asyn
     [],
   );
   const enriched = candidates.find((candidate) => candidate.sourceId === "1001");
+  assert.equal(enriched.metadata.galleryId, generateCandidateGalleryId(enriched));
+  assert.deepEqual(enriched.metadata.tags, ["example", "microsoft"]);
   assert.deepEqual(
     {
       launchUrl: enriched.metadata.launchUrl,
@@ -51,6 +56,8 @@ test("Learn fixture emits only canonical documents under the configured root", a
   const [candidate] = discoverLearn({ fixture: await loadFixture("learn"), offline: true });
   assert.equal(candidate.canonicalUrl, "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search");
   assert.equal(candidate.identityKey, "learn-document:cosmos-db-nosql-vector-search");
+  assert.equal(candidate.metadata.galleryId, generateCandidateGalleryId(candidate));
+  assert.deepEqual(candidate.metadata.tags, ["documentation", "microsoft"]);
   assert.deepEqual(
     {
       launchUrl: candidate.metadata.launchUrl,
@@ -129,6 +136,8 @@ test("feed fixture accepts already parsed entries with stable GUIDs", async () =
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].sourceType, "blog-post");
   assert.equal(candidates[0].metadata.feedEntryId, "https://devblogs.microsoft.com/cosmosdb/?p=12345");
+  assert.equal(candidates[0].metadata.galleryId, generateCandidateGalleryId(candidates[0]));
+  assert.deepEqual(candidates[0].metadata.tags, ["blog", "microsoft"]);
   assert.equal(candidates[0].canonicalUrl.includes("utm_"), false);
   assert.deepEqual(
     {
@@ -142,7 +151,7 @@ test("feed fixture accepts already parsed entries with stable GUIDs", async () =
     {
       launchUrl: "https://devblogs.microsoft.com/cosmosdb/vector-search-update/?utm_medium=rss&utm_source=fixture",
       website: "https://devblogs.microsoft.com/cosmosdb",
-      author: "Azure Cosmos DB Team",
+      author: "Azure Cosmos DB Blog",
       sourceOwner: "Azure Cosmos DB Blog",
       publishedAt: "2026-08-25T09:00:00.000Z",
       preview: "https://devblogs.microsoft.com/cosmosdb/wp-content/uploads/sites/52/2026/08/vector-search.png",
@@ -189,6 +198,8 @@ test("YouTube fixture requires configured source IDs and immutable video IDs", a
   const candidates = discoverYouTube({ fixture, offline: true });
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].identityKey, "video:6IIUtEFKJec");
+  assert.equal(candidates[0].metadata.galleryId, generateCandidateGalleryId(candidates[0]));
+  assert.deepEqual(candidates[0].metadata.tags, ["video", "microsoft"]);
   assert.equal(candidates[0].canonicalUrl, "https://www.youtube.com/watch?v=6IIUtEFKJec");
   assert.deepEqual(
     {
@@ -208,6 +219,10 @@ test("YouTube fixture requires configured source IDs and immutable video IDs", a
       preview: "https://i.ytimg.com/vi/6IIUtEFKJec/hqdefault.jpg",
     },
   );
+  assert.equal(candidates[0].metadata.youtubeSourceType, "youtube-playlist");
+  assert.equal(candidates[0].metadata.youtubeSourceId, fixture.source.playlistId);
+  assert.equal(candidates[0].metadata.captionsAvailable, true);
+  assert.equal(candidates[0].evidence.some((item) => item.type === "youtube-transcript"), true);
 
   assert.equal(
     discoverYouTube({ fixture: { ...fixture, source: { enabled: true } }, offline: true }).length,
@@ -217,7 +232,13 @@ test("YouTube fixture requires configured source IDs and immutable video IDs", a
 
 test("YouTube metadata uses only official snippet channel, thumbnail, and timestamp fields", async () => {
   const fixture = await loadFixture("youtube");
-  const configuredChannelId = fixture.source.channelIds[0];
+  const configuredChannelId = fixture.videos[0].snippet.channelId;
+  const channelSource = {
+    ...fixture.source,
+    type: "youtube-channel",
+    channelId: configuredChannelId,
+  };
+  delete channelSource.playlistId;
   const video = {
     id: "6IIUtEFKJec",
     channelId: "UC9999999999abcdefghijkl",
@@ -238,7 +259,7 @@ test("YouTube metadata uses only official snippet channel, thumbnail, and timest
   const [candidate] = discoverYouTube({
     fixture: {
       ...fixture,
-      source: { ...fixture.source, playlistIds: [] },
+      source: channelSource,
       videos: [video],
     },
     offline: true,
@@ -262,7 +283,7 @@ test("YouTube metadata uses only official snippet channel, thumbnail, and timest
     discoverYouTube({
       fixture: {
         ...fixture,
-        source: { ...fixture.source, playlistIds: [] },
+        source: channelSource,
         videos: [forgedChannelVideo],
       },
       offline: true,
@@ -290,9 +311,40 @@ test("all adapters remain offline and emit the common candidate schema", async (
     assert.match(candidate.metadata.website, /^https:\/\//);
     assert.ok(candidate.metadata.author);
     assert.ok(candidate.metadata.preview);
+    assert.match(candidate.metadata.galleryId, /^candidate-[a-f0-9]{64}$/);
+    assert.ok(Array.isArray(candidate.metadata.tags));
   }
   assert.deepEqual(discoverGitHub({ offline: true }), []);
   assert.deepEqual(discoverLearn({ offline: true }), []);
   assert.deepEqual(discoverFeeds({ offline: true }), []);
   assert.deepEqual(discoverYouTube({ offline: true }), []);
+});
+
+test("untrusted sources do not receive the microsoft tag", async () => {
+  const fixture = await loadFixture("feeds");
+  const [candidate] = discoverFeeds({
+    fixture: {
+      ...fixture,
+      source: { ...fixture.source, trustTier: "community" },
+    },
+    offline: true,
+  });
+
+  assert.deepEqual(candidate.metadata.tags, ["blog"]);
+});
+
+test("keywords do not create speculative language, service, or scenario tags", async () => {
+  const fixture = await loadFixture("github");
+  const repository = {
+    ...fixture.repositories[0],
+    name: "python-serverless-migration-cosmosdb-ai",
+    description: "Python serverless migration analytics AI search scenario",
+    readme: "Python TypeScript Java C# Cosmos DB serverless migration analytics search",
+  };
+  const [candidate] = discoverGitHub({
+    fixture: { ...fixture, repositories: [repository] },
+    offline: true,
+  });
+
+  assert.deepEqual(candidate.metadata.tags, ["example", "microsoft"]);
 });

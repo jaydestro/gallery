@@ -11,6 +11,7 @@ import {
   CATALOG_CHANGE_PLAN_SCHEMA,
   CatalogChangePlanError,
   buildCatalogChangePlan,
+  buildCatalogChangePlanForTargets,
   catalogChangeOperationId,
   hashCanonicalValue,
   replayCatalogChangePlan,
@@ -64,6 +65,86 @@ function setObservationTime(healthEntry, observedAt) {
   healthEntry.evidence.forEach((evidence) => {
     evidence.observedAt = observedAt;
   });
+}
+
+function candidateGateFor(candidate, duplicateOutcome = "unique") {
+  return {
+    candidate: clone(candidate),
+    deterministicGate: {
+      candidateId: candidate.identityKey,
+      provenance: {
+        status: "passed",
+        sourceRegistryId: candidate.metadata.sourceRegistryId,
+        trusted: true,
+      },
+      sourceAvailability: { status: "healthy" },
+      cosmosRelevance: {
+        status: "passed",
+        strategy: "strong-signal",
+        signalKinds: ["learn-cosmos-section"],
+      },
+      duplicateCheck: {
+        status: "passed",
+        outcome: duplicateOutcome,
+        identityKeyChecked: true,
+        canonicalUrlChecked: true,
+      },
+      normalization: { status: "passed", schemaVersion: "1.0.0" },
+    },
+    availability: {
+      checkedAt: "2026-08-27T12:00:00.000Z",
+      classification: "healthy",
+      statusCode: 200,
+      reasonCode: null,
+    },
+  };
+}
+
+function removeDecision(input, targetId, kind) {
+  if (kind === "health") {
+    input.health.entries = input.health.entries.filter((entry) => entry.galleryId !== targetId);
+    return;
+  }
+  input.freshness.entries = input.freshness.entries.filter((entry) => entry.galleryId !== targetId);
+  input.freshness.healthSnapshot.entries = input.freshness.healthSnapshot.entries
+    .filter((entry) => entry.galleryId !== targetId);
+}
+
+function setDecisionSource(input, targetId, source) {
+  const entries = [
+    input.health.entries.find((entry) => entry.galleryId === targetId),
+    input.freshness.entries.find((entry) => entry.galleryId === targetId)?.health,
+    input.freshness.healthSnapshot.entries.find((entry) => entry.galleryId === targetId),
+  ].filter(Boolean);
+  for (const entry of entries) {
+    entry.canonicalSource = source;
+    entry.evidence.forEach((evidence) => {
+      evidence.source = source;
+    });
+  }
+  const freshness = input.freshness.entries.find((entry) => entry.galleryId === targetId);
+  if (freshness) freshness.canonicalSource = source;
+}
+
+function explicitGateInputFor(targetId) {
+  const input = makePlanInput();
+  removeDecision(input, "publish-item", "health");
+  removeDecision(input, "publish-item", "freshness");
+  const updateRecord = input.activeRecords.find((record) => record.id === "update-item");
+  setDecisionSource(input, updateRecord.id, updateRecord.canonicalSource);
+  if (["update-item", "restore-item"].includes(targetId)) {
+    input.candidates = input.candidates.filter((candidate) => candidate.metadata.galleryId === targetId);
+    input.analyses = input.analyses.filter((analysis) => analysis.candidateId === input.candidates[0].identityKey);
+    input.candidateGates = [candidateGateFor(
+      input.candidates[0],
+      targetId === "restore-item" ? "duplicate-fast-path" : "unique",
+    )];
+  } else {
+    input.candidates = [];
+    input.analyses = [];
+    input.candidateGates = [];
+  }
+  return input;
 }
 
 test("builds a deterministic schema-valid plan for all catalog mutation types", () => {
@@ -121,6 +202,63 @@ test("builds a deterministic schema-valid plan for all catalog mutation types", 
   assert.equal(update.before.dateAdded, null);
   assert.equal(update.after.dateAdded, null);
   assert.equal(update.after.lastVerified, input.health.entries.find((entry) => entry.galleryId === "update-item").checkedAt);
+});
+
+test("publishes from explicit candidate-gate evidence without candidate health or freshness", () => {
+  const input = explicitGateInputFor("publish-item");
+  const candidate = makeCandidate(
+    "publish-item",
+    "publish-source",
+    "https://learn.microsoft.com/azure/cosmos-db/publish",
+  );
+  input.candidates = [candidate];
+  input.analyses = [makePlanInput().analyses.find((analysis) => analysis.recommendation === "publish")];
+  input.candidateGates = [candidateGateFor(candidate)];
+
+  const plan = buildCatalogChangePlanForTargets(input, ["publish-item"]);
+  const operation = plan.operations[0];
+
+  assert.equal(validatePlanSchema(plan), true, JSON.stringify(validatePlanSchema.errors));
+  assert.equal(operation.type, "publish");
+  assert.equal(operation.healthAfter, null);
+  assert.equal(operation.after.lastVerified, input.candidateGates[0].availability.checkedAt);
+  assert.equal(operation.evidenceReferences.some((entry) => entry.kind === "health"), false);
+  assert.equal(operation.evidenceReferences.some((entry) => entry.kind === "freshness"), false);
+  assert(operation.evidenceReferences.some((entry) => entry.kind === "candidate-availability"));
+  assert(operation.evidenceReferences.some((entry) => entry.kind === "candidate-deterministic-gate"));
+  assert.equal(
+    Object.keys(operation.candidateAvailability).some((name) => /score|components/i.test(name)),
+    false,
+  );
+  const replayed = replayCatalogChangePlan(plan, input);
+  assert.deepEqual(replayCatalogChangePlan(plan, replayed), replayed);
+
+  const tampered = clone(plan);
+  const tamperedOperation = tampered.operations[0];
+  tamperedOperation.evidenceReferences = tamperedOperation.evidenceReferences
+    .filter((entry) => entry.kind !== "candidate-deterministic-gate");
+  refreshOperationId(tamperedOperation);
+  assert.throws(() => replayCatalogChangePlan(tampered, input), expectCode("NON_IDEMPOTENT_REPLAY"));
+});
+
+test("explicit candidate-gate mode requires original scheduled evidence for every existing action", () => {
+  for (const targetId of ["update-item", "restore-item", "quarantine-item", "retire-item"]) {
+    const complete = explicitGateInputFor(targetId);
+    assert.doesNotThrow(
+      () => buildCatalogChangePlanForTargets(complete, [targetId]),
+      `${targetId} should accept complete original evidence`,
+    );
+
+    for (const kind of ["health", "freshness"]) {
+      const missing = explicitGateInputFor(targetId);
+      removeDecision(missing, targetId, kind);
+      assert.throws(
+        () => buildCatalogChangePlanForTargets(missing, [targetId]),
+        expectCode("MISSING_GATE"),
+        `${targetId} should require ${kind}`,
+      );
+    }
+  }
 });
 
 test("accepts the real 109-record catalog only with its exact source-sharing policy groups", () => {

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import {
+  deterministicCandidateTags,
+  generateCandidateGalleryId,
+} from "./enrich-candidate.mjs";
 import { normalizeCandidate } from "./normalize.mjs";
 import {
   canonicalizeGitHubUrl,
@@ -56,6 +60,33 @@ test("normalizes a candidate to the common schema with a stable identity", () =>
     }),
   );
   assert.equal(candidate.discoveredAt, "2026-08-27T12:00:00.000Z");
+  assert.deepEqual(candidate.metadata, {});
+});
+
+test("keeps deterministic metadata stable through repeated normalization", () => {
+  const identity = {
+    sourceType: "github-path",
+    sourceId: 123,
+    repositoryPath: "samples/QuickStart/App.js",
+  };
+  const input = {
+    ...identity,
+    canonicalUrl: "https://github.com/Azure-Samples/repository/tree/main/samples/QuickStart/App.js",
+    title: "Quickstart",
+    publisher: "Azure-Samples",
+    discoveredAt: "2026-08-27T12:00:00Z",
+    evidence: [],
+    metadata: {
+      galleryId: generateCandidateGalleryId(identity),
+      tags: deterministicCandidateTags({ ...identity, trustTier: "first-party" }),
+      trustTier: "first-party",
+    },
+  };
+  const first = normalizeCandidate(input);
+  const second = normalizeCandidate({ ...input, metadata: first.metadata });
+
+  assert.equal(second.metadata.galleryId, first.metadata.galleryId);
+  assert.deepEqual(second.metadata.tags, ["example", "microsoft"]);
 });
 
 test("does not invent source timestamps from metadata or numeric coercion", () => {

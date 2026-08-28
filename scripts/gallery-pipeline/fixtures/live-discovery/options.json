@@ -1,6 +1,9 @@
 {
   "discoveredAt": "2026-08-27T12:00:00Z",
   "githubToken": "fixture-token",
+  "environment": {
+    "YOUTUBE_API_KEY": "offline-fixture-youtube-key"
+  },
   "lookup": [
     { "address": "20.12.34.56", "family": 4 }
   ],
@@ -10,6 +13,9 @@
     "githubRepositories": 2,
     "feedEntries": 10,
     "sitemapFiles": 1,
-    "learnDocuments": 10
+    "learnDocuments": 10,
+    "youtubePageSize": 2,
+    "youtubeListingPages": 1,
+    "youtubeCandidates": 2
   }
 }

@@ -2,10 +2,11 @@
   "discoveredAt": "2026-08-27T12:00:00Z",
   "source": {
     "id": "youtube-cosmos-playlist",
+    "type": "youtube-playlist",
+    "endpoint": "https://youtube.googleapis.com/youtube/v3",
     "trustTier": "first-party",
     "enabled": true,
-    "channelIds": ["UC1234567890abcdefghijkl"],
-    "playlistIds": ["PL1234567890abcdefghijkl"]
+    "playlistId": "PL12345678901234567890123456789012"
   },
   "videos": [
     {
@@ -20,7 +21,8 @@
           "high": { "url": "https://i.ytimg.com/vi/6IIUtEFKJec/hqdefault.jpg" }
         }
       },
-      "playlistIds": ["PL1234567890abcdefghijkl"],
+      "contentDetails": { "caption": "true" },
+      "playlistIds": ["PL12345678901234567890123456789012"],
       "transcript": "This demonstration creates an Azure Cosmos DB database and container."
     },
     {
