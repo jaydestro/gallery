@@ -491,56 +491,39 @@ test("fails candidate availability closed after retry exhaustion", async () => {
   assert.equal(calls, 4);
 });
 
-test("caps global availability at six and learn.microsoft.com at two", async () => {
-  const candidates = [
-    ...Array.from({ length: 4 }, (_, index) => blogCandidate(`host-example-${index}`, {
-      canonicalUrl: `https://example.com/host-${index}`,
-    })),
-    ...Array.from({ length: 8 }, (_, index) => blogCandidate(`host-learn-${index}`, {
+test("candidate gates serialize Learn checks with injected pacing and deterministic output", async () => {
+  const candidates = Array.from({ length: 8 }, (_, index) => (
+    blogCandidate(`host-learn-${index}`, {
       canonicalUrl: `https://learn.microsoft.com/azure/cosmos-db/host-${index}`,
-    })),
-  ].reverse();
-  let active = 0;
+    })
+  )).reverse();
+  const delays = [];
+  const startedUrls = [];
   let activeLearn = 0;
-  let maximumActive = 0;
   let maximumActiveLearn = 0;
-  let started = 0;
-  let releaseImmediately = false;
-  const blocked = [];
-  let firstWaveReady;
-  const firstWave = new Promise((resolve) => {
-    firstWaveReady = resolve;
-  });
-  const reportPromise = runCandidateGates(gateOptions({
+  const report = await runCandidateGates(gateOptions({
     candidates,
     concurrency: 20,
+    delay: async (milliseconds) => delays.push(milliseconds),
     fetchImpl: async (input) => {
-      const isLearn = new URL(input).hostname === "learn.microsoft.com";
-      active += 1;
-      if (isLearn) activeLearn += 1;
-      maximumActive = Math.max(maximumActive, active);
+      const url = new URL(input).toString();
+      activeLearn += 1;
       maximumActiveLearn = Math.max(maximumActiveLearn, activeLearn);
-      started += 1;
-      if (started === 6) firstWaveReady();
-      if (!releaseImmediately) {
-        await new Promise((resolve) => blocked.push(resolve));
-      }
-      active -= 1;
-      if (isLearn) activeLearn -= 1;
+      startedUrls.push(url);
+      await Promise.resolve();
+      activeLearn -= 1;
       return new Response(null, { status: 200 });
     },
   }));
-
-  await firstWave;
-  assert.equal(active, 6);
-  assert.equal(activeLearn, 2);
-  releaseImmediately = true;
-  blocked.splice(0).forEach((resolve) => resolve());
-  const report = await reportPromise;
   const identities = report.eligible.map((item) => item.candidate.identityKey);
+  const expectedUrls = Array.from(
+    { length: 8 },
+    (_, index) => `https://learn.microsoft.com/azure/cosmos-db/host-${index}`,
+  );
 
-  assert.equal(maximumActive, 6);
-  assert.equal(maximumActiveLearn, 2);
+  assert.equal(maximumActiveLearn, 1);
+  assert.deepEqual(delays, Array(7).fill(200));
+  assert.deepEqual(startedUrls, expectedUrls);
   assert.deepEqual(identities, [...identities].sort((left, right) => left.localeCompare(right)));
 });
 

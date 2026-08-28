@@ -12,8 +12,13 @@ import { safeFetch } from "./shared/safe-fetch.mjs";
 import { loadValidationContext } from "./validation.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
+const LEARN_HOSTNAME = "learn.microsoft.com";
+const LEARN_INTER_REQUEST_DELAY_MILLISECONDS = 200;
 const HOST_CONCURRENCY_LIMITS = new Map([
-  ["learn.microsoft.com", 2],
+  [LEARN_HOSTNAME, 1],
+]);
+const HOST_INTER_REQUEST_DELAYS_MILLISECONDS = new Map([
+  [LEARN_HOSTNAME, LEARN_INTER_REQUEST_DELAY_MILLISECONDS],
 ]);
 const DEFAULT_FIXTURE = fileURLToPath(new URL("./fixtures/health/input.json", import.meta.url));
 const HEALTH_PATH = path.join("static", "gallery-health.json");
@@ -420,17 +425,19 @@ function fixtureNetwork(responses) {
   };
 }
 
-export async function mapAvailabilityChecks(items, concurrency, worker) {
+export async function mapAvailabilityChecks(items, concurrency, worker, { delay = wait } = {}) {
   if (!Array.isArray(items)) throw new TypeError("items must be an array");
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new TypeError("concurrency must be a positive integer");
   }
   if (typeof worker !== "function") throw new TypeError("worker must be a function");
+  if (typeof delay !== "function") throw new TypeError("delay must be a function");
 
   const globalLimit = Math.min(concurrency, DEFAULT_CONCURRENCY);
   const results = new Array(items.length);
   const pendingIndexes = items.map((_, index) => index);
   const activeByHost = new Map();
+  const completedHosts = new Set();
 
   function canonicalSource(item) {
     const source = typeof item === "string" ? item : item?.canonicalSource;
@@ -446,7 +453,13 @@ export async function mapAvailabilityChecks(items, concurrency, worker) {
       if (activeForHost >= hostLimit) continue;
       pendingIndexes.splice(pendingIndex, 1);
       activeByHost.set(hostname, activeForHost + 1);
-      return { hostname, itemIndex };
+      return {
+        hostname,
+        itemIndex,
+        interRequestDelayMilliseconds: completedHosts.has(hostname)
+          ? (HOST_INTER_REQUEST_DELAYS_MILLISECONDS.get(hostname) ?? 0)
+          : 0,
+      };
     }
     return null;
   }
@@ -456,7 +469,11 @@ export async function mapAvailabilityChecks(items, concurrency, worker) {
       const claim = claimNext();
       if (!claim) return;
       try {
+        if (claim.interRequestDelayMilliseconds > 0) {
+          await delay(claim.interRequestDelayMilliseconds);
+        }
         results[claim.itemIndex] = await worker(items[claim.itemIndex], claim.itemIndex);
+        completedHosts.add(claim.hostname);
       } finally {
         const remaining = (activeByHost.get(claim.hostname) ?? 1) - 1;
         if (remaining === 0) activeByHost.delete(claim.hostname);
@@ -549,7 +566,7 @@ export async function runHealthScan({
       policy,
       delay,
     }),
-  ]);
+  ], { delay });
   const sourceResults = new Map(checkedResults);
   const healthSnapshot = createHealthSnapshot(records, sourceResults, {
     previousHealth,

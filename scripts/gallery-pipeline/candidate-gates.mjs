@@ -394,7 +394,7 @@ export async function runCandidateGates(options = {}) {
   const checkedSources = await mapAvailabilityChecks(urls, effectiveConcurrency, async (url) => [
     url,
     await checkSource(url, { token, fetchImpl, lookup, policy, delay }),
-  ]);
+  ], { delay });
   const availabilityByUrl = new Map(
     checkedSources.map(([url, result]) => [url, availabilityFor(result, reportTime)]),
   );

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkGitHubSource,
   checkHttpSource,
+  mapAvailabilityChecks,
   parseArguments,
   runHealthScan,
 } from "./scan-health.mjs";
@@ -46,6 +47,83 @@ test("argument parsing is dry-run by default and rejects fixture writes", () => 
   });
   assert.throws(() => parseArguments(["--fixtures", "--write"]), /cannot be combined/);
   assert.throws(() => parseArguments(["--concurrency", "0"]), /positive integer/);
+});
+
+test("serializes and paces Learn checks in deterministic order without real sleeping", async () => {
+  const urls = Array.from(
+    { length: 4 },
+    (_, index) => `https://learn.microsoft.com/azure/cosmos-db/scheduled-${index}`,
+  );
+  const startResolvers = [];
+  const releaseResolvers = [];
+  const starts = urls.map((_, index) => new Promise((resolve) => {
+    startResolvers[index] = resolve;
+  }));
+  const releases = urls.map((_, index) => new Promise((resolve) => {
+    releaseResolvers[index] = resolve;
+  }));
+  const startedUrls = [];
+  const delays = [];
+  let activeLearn = 0;
+  let maximumActiveLearn = 0;
+
+  const scheduled = mapAvailabilityChecks(urls, 20, async (url, index) => {
+    activeLearn += 1;
+    maximumActiveLearn = Math.max(maximumActiveLearn, activeLearn);
+    startedUrls.push(url);
+    startResolvers[index]();
+    await releases[index];
+    activeLearn -= 1;
+    return url;
+  }, {
+    delay: async (milliseconds) => delays.push(milliseconds),
+  });
+
+  await starts[0];
+  assert.deepEqual(startedUrls, [urls[0]]);
+  for (let index = 0; index < urls.length; index += 1) {
+    assert.equal(activeLearn, 1);
+    releaseResolvers[index]();
+    if (index + 1 < urls.length) await starts[index + 1];
+  }
+
+  assert.deepEqual(await scheduled, urls);
+  assert.equal(maximumActiveLearn, 1);
+  assert.deepEqual(startedUrls, urls);
+  assert.deepEqual(delays, [200, 200, 200]);
+});
+
+test("retains the global cap of six for non-Learn hosts without pacing", async () => {
+  const urls = Array.from({ length: 10 }, (_, index) => `https://example.com/scheduled-${index}`);
+  const blocked = [];
+  let releaseImmediately = false;
+  let firstWaveReady;
+  const firstWave = new Promise((resolve) => {
+    firstWaveReady = resolve;
+  });
+  let active = 0;
+  let maximumActive = 0;
+  let started = 0;
+
+  const scheduled = mapAvailabilityChecks(urls, 20, async (url) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    started += 1;
+    if (started === 6) firstWaveReady();
+    if (!releaseImmediately) await new Promise((resolve) => blocked.push(resolve));
+    active -= 1;
+    return url;
+  }, {
+    delay: async () => assert.fail("non-Learn checks must not be paced"),
+  });
+
+  await firstWave;
+  assert.equal(active, 6);
+  releaseImmediately = true;
+  blocked.splice(0).forEach((resolve) => resolve());
+
+  assert.deepEqual(await scheduled, urls);
+  assert.equal(maximumActive, 6);
 });
 
 test("HTTP checks fall back from unsupported HEAD to GET and keep rate limits indeterminate", async () => {
