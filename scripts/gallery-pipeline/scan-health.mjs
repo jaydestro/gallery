@@ -7,15 +7,18 @@ import {
   createHealthSnapshot,
   githubSourceCoordinates,
   groupCatalogSources,
-  mapWithConcurrency,
 } from "./health.mjs";
 import { safeFetch } from "./shared/safe-fetch.mjs";
 import { loadValidationContext } from "./validation.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
+const HOST_CONCURRENCY_LIMITS = new Map([
+  ["learn.microsoft.com", 2],
+]);
 const DEFAULT_FIXTURE = fileURLToPath(new URL("./fixtures/health/input.json", import.meta.url));
 const HEALTH_PATH = path.join("static", "gallery-health.json");
 const FALLBACK_TO_GET_STATUSES = new Set([405, 501]);
+const TRANSIENT_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const DNS_ERROR_CODES = new Set([
   "EAI_AGAIN",
   "ENETDOWN",
@@ -24,6 +27,66 @@ const DNS_ERROR_CODES = new Set([
   "ENOTFOUND",
   "EHOSTUNREACH",
 ]);
+
+class RequestAttemptsExhaustedError extends Error {
+  constructor(cause, retryEvents) {
+    super("Availability request attempts exhausted");
+    this.name = "RequestAttemptsExhaustedError";
+    this.cause = cause;
+    this.retryEvents = retryEvents;
+  }
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function retrySchedule(policy) {
+  const schedule = policy?.http?.retryDelaySeconds ?? [0];
+  if (
+    !Array.isArray(schedule) ||
+    schedule.length === 0 ||
+    schedule.some((delay) => !Number.isSafeInteger(delay) || delay < 0)
+  ) {
+    throw new TypeError("policy.http.retryDelaySeconds must contain non-negative integers");
+  }
+  return schedule;
+}
+
+function retryAfterSeconds(response, maximumDelaySeconds, now) {
+  const value = response?.headers?.get?.("retry-after")?.trim();
+  if (!value) return null;
+  if (/^\d+$/.test(value)) {
+    return Math.min(Number(value), maximumDelaySeconds);
+  }
+  const retryAt = Date.parse(value);
+  if (Number.isNaN(retryAt)) return null;
+  const delay = Math.max(0, Math.ceil((retryAt - now()) / 1000));
+  return Math.min(delay, maximumDelaySeconds);
+}
+
+function sourceErrorReason(error) {
+  const isTimeout = error?.name === "AbortError" || /timed out/i.test(error?.message ?? "");
+  const errorCode = error?.code ?? error?.cause?.code;
+  const isDnsError = DNS_ERROR_CODES.has(errorCode);
+  return isTimeout
+    ? "SOURCE_TIMEOUT"
+    : (isDnsError ? "SOURCE_DNS_ERROR" : "SOURCE_REQUEST_INDETERMINATE");
+}
+
+function retryEvidence(retryEvents) {
+  return retryEvents.map(({ reason, delaySeconds }, index) => ({
+    kind: "availability-retry",
+    value: `retry ${index + 1} after ${reason}; delay ${delaySeconds}s`,
+  }));
+}
+
+function retryMetadata(retryEvents) {
+  return {
+    retryAttempts: retryEvents.length,
+    retryReasons: retryEvents.map(({ reason }) => reason),
+  };
+}
 
 function argumentValue(argv, index, option) {
   const value = argv[index + 1];
@@ -86,7 +149,7 @@ function requestEvidence(kind, method, status) {
   return { kind, value: `${method} ${status}` };
 }
 
-function resultForStatus(status, { kind, method, evidence = [] } = {}) {
+function resultForStatus(status, { kind, method, evidence = [], retryEvents = [] } = {}) {
   const malformed = !Number.isInteger(status) || status < 100 || status > 599;
   const partial = status === 206;
   const classification = malformed || partial ? "indeterminate" : classifyHttpStatus(status);
@@ -97,21 +160,24 @@ function resultForStatus(status, { kind, method, evidence = [] } = {}) {
     classification,
     statusCode: status,
     reason: classification === "healthy" ? null : reason,
-    evidence: [...evidence, requestEvidence(kind, method, status)],
+    ...retryMetadata(retryEvents),
+    evidence: [...evidence, ...retryEvidence(retryEvents), requestEvidence(kind, method, status)],
   };
 }
 
-function resultForError(error, { kind, method, evidence = [] } = {}) {
-  const isTimeout = error?.name === "AbortError" || /timed out/i.test(error?.message ?? "");
-  const errorCode = error?.code ?? error?.cause?.code;
-  const isDnsError = DNS_ERROR_CODES.has(errorCode);
-  const reason = isTimeout
-    ? "SOURCE_TIMEOUT"
-    : (isDnsError ? "SOURCE_DNS_ERROR" : "SOURCE_REQUEST_INDETERMINATE");
+function resultForError(error, { kind, method, evidence = [], retryEvents: priorRetryEvents = [] } = {}) {
+  const exhausted = error instanceof RequestAttemptsExhaustedError;
+  const requestError = exhausted ? error.cause : error;
+  const retryEvents = [
+    ...priorRetryEvents,
+    ...(exhausted ? error.retryEvents : []),
+  ];
+  const reason = sourceErrorReason(requestError);
   return {
     classification: "indeterminate",
     reason,
-    evidence: [...evidence, {
+    ...retryMetadata(retryEvents),
+    evidence: [...evidence, ...retryEvidence(retryEvents), {
       kind,
       value: `${method} ${reason}`,
     }],
@@ -124,17 +190,50 @@ async function boundedRequest(url, method, {
   headers = {},
   policy,
   maxBytes = 64 * 1024,
+  delay = wait,
+  now = Date.now,
 }) {
+  if (typeof delay !== "function") throw new TypeError("delay must be a function");
+  if (typeof now !== "function") throw new TypeError("now must be a function");
   const hostname = new URL(url).hostname;
-  return safeFetch(url, {
-    trustedHosts: [hostname],
-    fetchImpl: (input, init) => fetchImpl(input, { ...init, method }),
-    lookup,
-    headers,
-    maxBytes,
-    timeoutMs: (policy?.http?.timeoutSeconds ?? 30) * 1000,
-    maxRedirects: policy?.http?.maxRedirects ?? 5,
-  });
+  const schedule = retrySchedule(policy);
+  const maximumDelaySeconds = Math.max(...schedule);
+  const retryEvents = [];
+  let nextDelaySeconds = 0;
+
+  for (let attempt = 0; attempt < schedule.length; attempt += 1) {
+    if (attempt > 0) await delay(nextDelaySeconds * 1000);
+    try {
+      const response = await safeFetch(url, {
+        trustedHosts: [hostname],
+        fetchImpl: (input, init) => fetchImpl(input, { ...init, method }),
+        lookup,
+        headers,
+        maxBytes,
+        timeoutMs: (policy?.http?.timeoutSeconds ?? 30) * 1000,
+        maxRedirects: policy?.http?.maxRedirects ?? 5,
+      });
+      const reason = TRANSIENT_HTTP_STATUSES.has(response.status)
+        ? `SOURCE_HTTP_${response.status}`
+        : null;
+      if (!reason || attempt === schedule.length - 1) {
+        return { ...response, retryEvents };
+      }
+      nextDelaySeconds = retryAfterSeconds(response, maximumDelaySeconds, now)
+        ?? schedule[attempt + 1];
+      retryEvents.push({ reason, delaySeconds: nextDelaySeconds });
+    } catch (error) {
+      if (attempt === schedule.length - 1) {
+        throw new RequestAttemptsExhaustedError(error, retryEvents);
+      }
+      nextDelaySeconds = schedule[attempt + 1];
+      retryEvents.push({
+        reason: sourceErrorReason(error),
+        delaySeconds: nextDelaySeconds,
+      });
+    }
+  }
+  throw new Error("Availability retry schedule was not executed");
 }
 
 export async function checkHttpSource(canonicalSource, options) {
@@ -147,7 +246,11 @@ export async function checkHttpSource(canonicalSource, options) {
 
   const headEvidence = [requestEvidence("http-status", "HEAD", head.status)];
   if (!FALLBACK_TO_GET_STATUSES.has(head.status)) {
-    return resultForStatus(head.status, { kind: "http-status", method: "HEAD" });
+    return resultForStatus(head.status, {
+      kind: "http-status",
+      method: "HEAD",
+      retryEvents: head.retryEvents,
+    });
   }
 
   try {
@@ -156,12 +259,14 @@ export async function checkHttpSource(canonicalSource, options) {
       kind: "http-status",
       method: "GET",
       evidence: headEvidence,
+      retryEvents: [...(head.retryEvents ?? []), ...(get.retryEvents ?? [])],
     });
   } catch (error) {
     return resultForError(error, {
       kind: "http-status",
       method: "GET",
       evidence: headEvidence,
+      retryEvents: head.retryEvents,
     });
   }
 }
@@ -210,6 +315,7 @@ export async function checkGitHubSource(canonicalSource, options) {
   const repositoryResult = resultForStatus(repositoryResponse.status, {
     kind: "github-repository-status",
     method: "GET",
+    retryEvents: repositoryResponse.retryEvents,
   });
   if (repositoryResult.classification !== "healthy") return repositoryResult;
 
@@ -254,14 +360,19 @@ export async function checkGitHubSource(canonicalSource, options) {
     return resultForError(error, {
       kind: "github-path-status",
       method: "GET",
-      evidence: repositoryResult.evidence,
+      evidence: [requestEvidence("github-repository-status", "GET", repositoryResponse.status)],
+      retryEvents: repositoryResponse.retryEvents,
     });
   }
   return {
     ...resultForStatus(pathResponse.status, {
       kind: "github-path-status",
       method: "GET",
-      evidence: repositoryResult.evidence,
+      evidence: [requestEvidence("github-repository-status", "GET", repositoryResponse.status)],
+      retryEvents: [
+        ...(repositoryResponse.retryEvents ?? []),
+        ...(pathResponse.retryEvents ?? []),
+      ],
     }),
     archived,
     disabled,
@@ -307,6 +418,57 @@ function fixtureNetwork(responses) {
       });
     },
   };
+}
+
+export async function mapAvailabilityChecks(items, concurrency, worker) {
+  if (!Array.isArray(items)) throw new TypeError("items must be an array");
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new TypeError("concurrency must be a positive integer");
+  }
+  if (typeof worker !== "function") throw new TypeError("worker must be a function");
+
+  const globalLimit = Math.min(concurrency, DEFAULT_CONCURRENCY);
+  const results = new Array(items.length);
+  const pendingIndexes = items.map((_, index) => index);
+  const activeByHost = new Map();
+
+  function canonicalSource(item) {
+    const source = typeof item === "string" ? item : item?.canonicalSource;
+    return new URL(source).hostname.toLowerCase();
+  }
+
+  function claimNext() {
+    for (let pendingIndex = 0; pendingIndex < pendingIndexes.length; pendingIndex += 1) {
+      const itemIndex = pendingIndexes[pendingIndex];
+      const hostname = canonicalSource(items[itemIndex]);
+      const hostLimit = HOST_CONCURRENCY_LIMITS.get(hostname) ?? globalLimit;
+      const activeForHost = activeByHost.get(hostname) ?? 0;
+      if (activeForHost >= hostLimit) continue;
+      pendingIndexes.splice(pendingIndex, 1);
+      activeByHost.set(hostname, activeForHost + 1);
+      return { hostname, itemIndex };
+    }
+    return null;
+  }
+
+  async function runWorker() {
+    while (true) {
+      const claim = claimNext();
+      if (!claim) return;
+      try {
+        results[claim.itemIndex] = await worker(items[claim.itemIndex], claim.itemIndex);
+      } finally {
+        const remaining = (activeByHost.get(claim.hostname) ?? 1) - 1;
+        if (remaining === 0) activeByHost.delete(claim.hostname);
+        else activeByHost.set(claim.hostname, remaining);
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(globalLimit, items.length) }, () => runWorker()),
+  );
+  return results;
 }
 
 function assertHealthSchema(context, healthSnapshot) {
@@ -365,6 +527,7 @@ export async function runHealthScan({
   records: suppliedRecords = null,
   policy: suppliedPolicy = null,
   previousHealth: suppliedPreviousHealth = null,
+  delay = wait,
 } = {}) {
   if (write && fixturePath) throw new TypeError("Fixture scans cannot write health state");
   if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
@@ -377,13 +540,14 @@ export async function runHealthScan({
   const reportTime = checkedAt ?? fixture?.checkedAt ?? new Date().toISOString();
   const githubToken = fixture ? (fixture.githubToken ?? null) : token;
   const groups = groupCatalogSources(records);
-  const checkedResults = await mapWithConcurrency(groups, concurrency, async (group) => [
+  const checkedResults = await mapAvailabilityChecks(groups, concurrency, async (group) => [
     group.canonicalSource,
     await checkSource(group.canonicalSource, {
       token: githubToken,
       fetchImpl: network.fetchImpl,
       lookup: network.lookup,
       policy,
+      delay,
     }),
   ]);
   const sourceResults = new Map(checkedResults);

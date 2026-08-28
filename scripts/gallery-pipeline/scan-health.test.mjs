@@ -32,7 +32,7 @@ function responseFetch(definitions, calls = []) {
     const body = init.method === "HEAD" || definition.body === undefined
       ? null
       : JSON.stringify(definition.body);
-    return new Response(body, { status: definition.status });
+    return new Response(body, { status: definition.status, headers: definition.headers });
   };
 }
 
@@ -100,6 +100,115 @@ test("HTTP checks fail closed for partial and malformed responses", async () => 
   });
   assert.equal(malformed.classification, "indeterminate");
   assert.equal(malformed.reason, "SOURCE_RESPONSE_MALFORMED");
+});
+
+test("HTTP checks recover from transient failures using injected retry delays", async () => {
+  const statuses = [503, 200];
+  const delays = [];
+  let calls = 0;
+  const result = await checkHttpSource("https://example.com/recovery", {
+    policy: {
+      ...policy,
+      http: { ...policy.http, retryDelaySeconds: [0, 5, 30, 120] },
+    },
+    lookup: publicLookup,
+    delay: async (milliseconds) => delays.push(milliseconds),
+    fetchImpl: async () => {
+      const status = statuses[calls];
+      calls += 1;
+      return new Response(null, { status });
+    },
+  });
+
+  assert.equal(result.classification, "healthy");
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.retryAttempts, 1);
+  assert.deepEqual(result.retryReasons, ["SOURCE_HTTP_503"]);
+  assert.deepEqual(delays, [5_000]);
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    result.evidence.filter((item) => item.kind === "availability-retry"),
+    [{ kind: "availability-retry", value: "retry 1 after SOURCE_HTTP_503; delay 5s" }],
+  );
+});
+
+test("HTTP checks fail closed after exhausting the configured retry envelope", async () => {
+  const delays = [];
+  let calls = 0;
+  const result = await checkHttpSource("https://example.com/exhausted", {
+    policy: {
+      ...policy,
+      http: { ...policy.http, retryDelaySeconds: [0, 5, 30, 120] },
+    },
+    lookup: publicLookup,
+    delay: async (milliseconds) => delays.push(milliseconds),
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(null, { status: 503 });
+    },
+  });
+
+  assert.equal(result.classification, "indeterminate");
+  assert.equal(result.reason, "SOURCE_HTTP_503");
+  assert.equal(result.retryAttempts, 3);
+  assert.deepEqual(result.retryReasons, [
+    "SOURCE_HTTP_503",
+    "SOURCE_HTTP_503",
+    "SOURCE_HTTP_503",
+  ]);
+  assert.deepEqual(delays, [5_000, 30_000, 120_000]);
+  assert.equal(calls, 4);
+});
+
+test("HTTP checks cap Retry-After at the policy maximum without real waiting", async () => {
+  const delays = [];
+  let calls = 0;
+  const result = await checkHttpSource("https://example.com/rate-limited", {
+    policy: {
+      ...policy,
+      http: { ...policy.http, retryDelaySeconds: [0, 5, 30] },
+    },
+    lookup: publicLookup,
+    delay: async (milliseconds) => delays.push(milliseconds),
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(null, { status: 429, headers: { "Retry-After": "600" } })
+        : new Response(null, { status: 200 });
+    },
+  });
+
+  assert.equal(result.classification, "healthy");
+  assert.equal(result.retryAttempts, 1);
+  assert.deepEqual(delays, [30_000]);
+  assert.equal(calls, 2);
+});
+
+test("HTTP checks do not retry healthy or definitive availability results", async (context) => {
+  for (const status of [200, 404, 410]) {
+    await context.test(String(status), async () => {
+      let calls = 0;
+      const result = await checkHttpSource(`https://example.com/status-${status}`, {
+        policy: {
+          ...policy,
+          http: { ...policy.http, retryDelaySeconds: [0, 5, 30, 120] },
+        },
+        lookup: publicLookup,
+        delay: async () => assert.fail(`status ${status} must not be delayed`),
+        fetchImpl: async () => {
+          calls += 1;
+          return new Response(null, { status });
+        },
+      });
+
+      assert.equal(calls, 1);
+      assert.equal(result.retryAttempts, 0);
+      assert.equal(
+        result.classification,
+        status === 200 ? "healthy" : "definitive-failure",
+      );
+    });
+  }
 });
 
 test("GitHub sources without a token use one bounded URL check", async () => {

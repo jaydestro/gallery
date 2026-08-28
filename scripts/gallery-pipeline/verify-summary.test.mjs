@@ -75,7 +75,9 @@ test("uses an independent fixed-instruction invocation and verifies each sentenc
   assert.equal(requests[0].systemInstructions, GROUNDING_SYSTEM_INSTRUCTIONS);
   assert.deepEqual(requests[0].tools, []);
   assert.equal(requests[0].maxOutputTokens, AI_LIMITS.groundingMaxOutputTokens);
-  assert.equal(JSON.parse(requests[0].input).trustBoundary, "UNTRUSTED_RETRIEVED_CONTENT");
+  const input = JSON.parse(requests[0].input);
+  assert.equal(input.trustBoundary, "UNTRUSTED_RETRIEVED_CONTENT");
+  assert.equal(input.invocationId, "grounding-grounding-id");
 });
 
 test("fails closed before invocation when the summary is not two or three sentences", async () => {
@@ -172,6 +174,39 @@ test("fails closed when claims, summaries, or evidence do not match input", asyn
       );
     });
   }
+});
+
+test("rejects replay of grounding output bound to an earlier model-visible invocation ID", async () => {
+  let replayedOutput;
+  const visibleInvocationIds = [];
+  const client = {
+    async invoke(request) {
+      const input = JSON.parse(request.input);
+      visibleInvocationIds.push(input.invocationId);
+      assert.equal(input.invocationId, request.invocationId);
+      replayedOutput ??= groundingOutput(request);
+      return { outputText: JSON.stringify(replayedOutput) };
+    },
+  };
+
+  await verifySummary({
+    candidate,
+    summary,
+    client,
+    previousInvocationId: "relevance-one",
+    createInvocationId: () => "nonce-one",
+  });
+  await assert.rejects(
+    verifySummary({
+      candidate,
+      summary,
+      client,
+      previousInvocationId: "relevance-two",
+      createInvocationId: () => "nonce-two",
+    }),
+    (error) => error instanceof AiAnalysisError && error.code === "INVOCATION_MISMATCH",
+  );
+  assert.deepEqual(visibleInvocationIds, ["grounding-nonce-one", "grounding-nonce-two"]);
 });
 
 test("rejects a fabricated grounding excerpt from an otherwise allowed URL", async () => {

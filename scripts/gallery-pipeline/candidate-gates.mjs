@@ -2,9 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { validateDeterministicGate } from "./ai-analysis.mjs";
 import { detectExactDuplicates } from "./detect-duplicates.mjs";
-import { mapWithConcurrency } from "./health.mjs";
 import { CANDIDATE_SCHEMA_VERSION, normalizeCandidate } from "./normalize.mjs";
-import { checkSource } from "./scan-health.mjs";
+import { checkSource, mapAvailabilityChecks } from "./scan-health.mjs";
 
 const MAX_CONCURRENCY = 6;
 const GITHUB_SOURCE_TYPES = new Set(["github-path", "github-repository"]);
@@ -235,6 +234,15 @@ function safeSourceReasonCode(result) {
 
 function availabilityFor(result, checkedAt) {
   const statusCode = Number.isInteger(result?.statusCode) ? result.statusCode : null;
+  const retryAttempts = Number.isSafeInteger(result?.retryAttempts) && result.retryAttempts > 0
+    ? result.retryAttempts
+    : 0;
+  const retryReasons = retryAttempts > 0
+    ? uniqueStrings(result?.retryReasons).filter((reason) => (
+      SAFE_SOURCE_REASON_CODES.has(reason) || /^SOURCE_HTTP_[1-5][0-9]{2}$/.test(reason)
+    ))
+    : [];
+  const retryMetadata = retryAttempts > 0 ? { retryAttempts, retryReasons } : {};
   const healthy = (
     result?.classification === "healthy" &&
     statusCode >= 200 &&
@@ -247,6 +255,7 @@ function availabilityFor(result, checkedAt) {
       classification: "healthy",
       statusCode,
       reasonCode: null,
+      ...retryMetadata,
     };
   }
   return {
@@ -256,14 +265,17 @@ function availabilityFor(result, checkedAt) {
       : "indeterminate",
     statusCode,
     reasonCode: safeSourceReasonCode(result),
+    ...retryMetadata,
   };
 }
 
-function rejectedEntry(envelope, reasonCodes) {
-  return {
+function rejectedEntry(envelope, reasonCodes, availability = null) {
+  const rejection = {
     candidateId: envelope.candidateId,
     reasonCodes: [...new Set(reasonCodes)].sort(),
   };
+  if (availability?.retryAttempts > 0) rejection.availability = availability;
+  return rejection;
 }
 
 function sortRejected(rejected) {
@@ -287,6 +299,7 @@ export async function runCandidateGates(options = {}) {
     token = process.env.GITHUB_TOKEN,
     fetchImpl = globalThis.fetch,
     lookup,
+    delay,
   } = options;
   const envelope = requireDiscoveryEnvelope(discovery);
   const discoveryCandidates = requireArray(envelope.candidates, "discovery.candidates");
@@ -378,9 +391,9 @@ export async function runCandidateGates(options = {}) {
 
   const urls = [...new Set(ready.map((item) => item.candidate.canonicalUrl))]
     .sort((left, right) => left.localeCompare(right));
-  const checkedSources = await mapWithConcurrency(urls, effectiveConcurrency, async (url) => [
+  const checkedSources = await mapAvailabilityChecks(urls, effectiveConcurrency, async (url) => [
     url,
-    await checkSource(url, { token, fetchImpl, lookup, policy }),
+    await checkSource(url, { token, fetchImpl, lookup, policy, delay }),
   ]);
   const availabilityByUrl = new Map(
     checkedSources.map(([url, result]) => [url, availabilityFor(result, reportTime)]),
@@ -398,7 +411,7 @@ export async function runCandidateGates(options = {}) {
   for (const item of ready) {
     const availability = availabilityByUrl.get(item.candidate.canonicalUrl);
     if (availability.classification !== "healthy") {
-      rejected.push(rejectedEntry(item.envelope, [availability.reasonCode]));
+      rejected.push(rejectedEntry(item.envelope, [availability.reasonCode], availability));
       continue;
     }
     eligible.push({

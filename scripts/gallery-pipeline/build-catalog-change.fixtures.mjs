@@ -156,6 +156,7 @@ export function makeEnabledPolicy() {
     batching: { maxEntriesPerPullRequest: 25 },
     lifecycle: { requiredConfirmations: 2, retirementGraceDays: 30 },
     exemptions: { maximumDurationDays: 90 },
+    audit: { retentionDays: 365 },
     automation: {
       emergencyDisable: false,
       mutationMode: "dry-run",
@@ -228,6 +229,13 @@ export function makePlanInput() {
   return {
     runId: "gallery-run-20260827-120000",
     generatedAt: FIXTURE_TIME,
+    trustedRepository: "example/gallery",
+    decisionRunUrl: "https://github.com/example/gallery/actions/runs/123456789",
+    decisionPullRequestUrl: "https://github.com/example/gallery/pull/42",
+    decisionRepositoryOwner: "example",
+    decisionRepositoryName: "gallery",
+    decisionRunId: "123456789",
+    decisionPullRequestNumber: "42",
     candidates,
     analyses,
     health: {

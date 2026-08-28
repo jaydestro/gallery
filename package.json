@@ -11,6 +11,8 @@
     "gallery:discover": "node scripts/gallery-pipeline/discover-content.mjs",
     "gallery:health": "node scripts/gallery-pipeline/scan-health.mjs",
     "gallery:freshness": "node scripts/gallery-pipeline/score-freshness.mjs",
+    "gallery:evaluate:model": "node scripts/gallery-pipeline/evaluate-model.mjs",
+    "gallery:evaluate:model:test": "node --test scripts/gallery-pipeline/evaluate-model.test.mjs",
     "ci:gallery": "npm run gallery:test && npm run gallery:validate",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",

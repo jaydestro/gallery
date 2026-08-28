@@ -418,26 +418,129 @@ test("deduplicates a shared URL check and deterministically rejects the later id
   assert.equal(report.summary.availabilityChecks, 1);
 });
 
-test("caps availability concurrency at six and preserves identity ordering", async () => {
-  const candidates = Array.from({ length: 12 }, (_, index) => (
-    blogCandidate(`parallel-${String(index).padStart(2, "0")}`)
-  )).reverse();
-  let active = 0;
-  let maximumActive = 0;
+test("recovers transient availability and reports sanitized retry metadata", async () => {
+  const candidate = blogCandidate("retry-recovery");
+  const delays = [];
+  let calls = 0;
   const report = await runCandidateGates(gateOptions({
+    candidates: [candidate],
+    policy: {
+      ...structuredClone(fixture.policy),
+      http: {
+        ...structuredClone(fixture.policy.http),
+        retryDelaySeconds: [0, 5, 30, 120],
+      },
+    },
+    delay: async (milliseconds) => delays.push(milliseconds),
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(null, { status: calls === 1 ? 503 : 200 });
+    },
+  }));
+
+  assert.equal(report.status, "complete");
+  assert.equal(report.eligible.length, 1);
+  assert.deepEqual(report.eligible[0].availability, {
+    checkedAt: fixture.checkedAt,
+    classification: "healthy",
+    statusCode: 200,
+    reasonCode: null,
+    retryAttempts: 1,
+    retryReasons: ["SOURCE_HTTP_503"],
+  });
+  assert.deepEqual(delays, [5_000]);
+  assert.equal(calls, 2);
+});
+
+test("fails candidate availability closed after retry exhaustion", async () => {
+  const candidate = blogCandidate("retry-exhaustion");
+  const delays = [];
+  let calls = 0;
+  const report = await runCandidateGates(gateOptions({
+    candidates: [candidate],
+    policy: {
+      ...structuredClone(fixture.policy),
+      http: {
+        ...structuredClone(fixture.policy.http),
+        retryDelaySeconds: [0, 5, 30, 120],
+      },
+    },
+    delay: async (milliseconds) => delays.push(milliseconds),
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response("sensitive upstream response", { status: 503 });
+    },
+  }));
+
+  assert.equal(report.status, "indeterminate");
+  assert.equal(report.eligible.length, 0);
+  assert.deepEqual(report.rejected, [{
+    candidateId: candidate.identityKey,
+    reasonCodes: ["SOURCE_HTTP_503"],
+    availability: {
+      checkedAt: fixture.checkedAt,
+      classification: "indeterminate",
+      statusCode: 503,
+      reasonCode: "SOURCE_HTTP_503",
+      retryAttempts: 3,
+      retryReasons: ["SOURCE_HTTP_503"],
+    },
+  }]);
+  assert.doesNotMatch(JSON.stringify(report.rejected), /sensitive|upstream/i);
+  assert.deepEqual(delays, [5_000, 30_000, 120_000]);
+  assert.equal(calls, 4);
+});
+
+test("caps global availability at six and learn.microsoft.com at two", async () => {
+  const candidates = [
+    ...Array.from({ length: 4 }, (_, index) => blogCandidate(`host-example-${index}`, {
+      canonicalUrl: `https://example.com/host-${index}`,
+    })),
+    ...Array.from({ length: 8 }, (_, index) => blogCandidate(`host-learn-${index}`, {
+      canonicalUrl: `https://learn.microsoft.com/azure/cosmos-db/host-${index}`,
+    })),
+  ].reverse();
+  let active = 0;
+  let activeLearn = 0;
+  let maximumActive = 0;
+  let maximumActiveLearn = 0;
+  let started = 0;
+  let releaseImmediately = false;
+  const blocked = [];
+  let firstWaveReady;
+  const firstWave = new Promise((resolve) => {
+    firstWaveReady = resolve;
+  });
+  const reportPromise = runCandidateGates(gateOptions({
     candidates,
     concurrency: 20,
-    fetchImpl: async () => {
+    fetchImpl: async (input) => {
+      const isLearn = new URL(input).hostname === "learn.microsoft.com";
       active += 1;
+      if (isLearn) activeLearn += 1;
       maximumActive = Math.max(maximumActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      maximumActiveLearn = Math.max(maximumActiveLearn, activeLearn);
+      started += 1;
+      if (started === 6) firstWaveReady();
+      if (!releaseImmediately) {
+        await new Promise((resolve) => blocked.push(resolve));
+      }
       active -= 1;
+      if (isLearn) activeLearn -= 1;
       return new Response(null, { status: 200 });
     },
   }));
+
+  await firstWave;
+  assert.equal(active, 6);
+  assert.equal(activeLearn, 2);
+  releaseImmediately = true;
+  blocked.splice(0).forEach((resolve) => resolve());
+  const report = await reportPromise;
   const identities = report.eligible.map((item) => item.candidate.identityKey);
 
   assert.equal(maximumActive, 6);
+  assert.equal(maximumActiveLearn, 2);
   assert.deepEqual(identities, [...identities].sort((left, right) => left.localeCompare(right)));
 });
 

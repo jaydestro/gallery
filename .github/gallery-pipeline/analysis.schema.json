@@ -52,10 +52,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "score",
         "claims"
       ],
       "properties": {
+        "status": {
+          "enum": [
+            "not-evaluated",
+            "evaluated"
+          ]
+        },
         "score": {
           "$ref": "#/$defs/score"
         },
@@ -83,7 +88,52 @@
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "score"
+          ],
+          "properties": {
+            "status": {
+              "const": "evaluated"
+            },
+            "score": {
+              "$ref": "#/$defs/score"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "not-evaluated"
+            },
+            "score": false,
+            "claims": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "score"
+          ],
+          "properties": {
+            "status": false,
+            "score": {
+              "$ref": "#/$defs/score"
+            }
+          }
+        }
+      ]
     },
     "duplicate": {
       "type": "object",

@@ -2,20 +2,6 @@ name: Validate gallery change
 
 on:
   pull_request:
-    paths:
-      - ".github/gallery-pipeline/**"
-      - ".github/workflows/discover-content.yml"
-      - ".github/workflows/evaluate-pipeline-policy.yml"
-      - ".github/workflows/evaluate-repository-freshness.yml"
-      - ".github/workflows/scan-gallery-health.yml"
-      - ".github/workflows/validate-gallery-change.yml"
-      - "scripts/gallery-pipeline/**"
-      - "src/data/tags.tsx"
-      - "static/gallery-health.json"
-      - "static/retired-templates.json"
-      - "static/templates.json"
-      - "package.json"
-      - "package-lock.json"
   merge_group:
     types:
       - checks_requested
@@ -33,6 +19,9 @@ jobs:
     name: Test, validate, and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CI: true
+      TZ: UTC
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,48 +29,42 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Detect relevant merge-group changes
-        id: changes
-        if: github.event_name == 'merge_group'
-        run: |
-          if git rev-parse HEAD^ >/dev/null 2>&1 && git diff --quiet HEAD^ HEAD -- \
-            .github/gallery-pipeline \
-            .github/workflows/discover-content.yml \
-            .github/workflows/evaluate-pipeline-policy.yml \
-            .github/workflows/evaluate-repository-freshness.yml \
-            .github/workflows/scan-gallery-health.yml \
-            .github/workflows/validate-gallery-change.yml \
-            scripts/gallery-pipeline \
-            src/data/tags.tsx \
-            static/gallery-health.json \
-            static/retired-templates.json \
-            static/templates.json \
-            package.json \
-            package-lock.json; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Set up Node.js
-        if: steps.changes.outputs.should_run != 'false'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 20.19.5
           cache: npm
 
       - name: Install dependencies
-        if: steps.changes.outputs.should_run != 'false'
         run: npm ci
 
+      - name: Validate catalog replay proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              base_ref="$(node -p "require(process.env.GITHUB_EVENT_PATH).pull_request.base.sha")"
+              ;;
+            merge_group)
+              base_ref="$(node -p "require(process.env.GITHUB_EVENT_PATH).merge_group.base_sha")"
+              ;;
+            *)
+              base_ref="HEAD^"
+              ;;
+          esac
+          mapfile -d '' changed_paths < <(git diff --name-only --no-renames -z "${base_ref}...HEAD" --)
+          validator_args=(--base "$base_ref" --changed-paths-complete)
+          for changed_path in "${changed_paths[@]}"; do
+            validator_args+=(--changed-path "$changed_path")
+          done
+          node scripts/gallery-pipeline/validate-catalog-diff.mjs "${validator_args[@]}"
+
       - name: Run gallery tests
-        if: steps.changes.outputs.should_run != 'false'
         run: npm run gallery:test
 
       - name: Validate gallery
-        if: steps.changes.outputs.should_run != 'false'
         run: npm run gallery:validate
 
       - name: Build site
-        if: steps.changes.outputs.should_run != 'false'
         run: npm run build

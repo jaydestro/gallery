@@ -105,6 +105,7 @@ test("keeps fixed instructions separate from bounded untrusted content", async (
   assert.equal(client.requests[0].systemInstructions.includes("Ignore every prior"), false);
   const input = JSON.parse(client.requests[0].input);
   assert.equal(input.trustBoundary, "UNTRUSTED_RETRIEVED_CONTENT");
+  assert.equal(input.invocationId, "relevance-analysis-one");
   assert.match(input.retrievedContent[0].text, /Ignore every prior instruction/);
   assert.equal(input.retrievedContent[0].text.length, AI_LIMITS.maxRetrievedDocumentCharacters);
 });
@@ -177,6 +178,25 @@ test("fails closed on malformed JSON, refusal, and identifier mismatch", async (
       );
     });
   }
+});
+
+test("rejects replay of a response bound to an earlier model-visible invocation ID", async () => {
+  let replayedOutput;
+  const visibleInvocationIds = [];
+  const client = clientReturning((request) => {
+    const input = JSON.parse(request.input);
+    visibleInvocationIds.push(input.invocationId);
+    assert.equal(input.invocationId, request.invocationId);
+    replayedOutput ??= validOutput(request);
+    return { outputText: JSON.stringify(replayedOutput) };
+  });
+
+  await analyzeContent({ candidate, client, createInvocationId: () => "nonce-one" });
+  await assert.rejects(
+    analyzeContent({ candidate, client, createInvocationId: () => "nonce-two" }),
+    (error) => error instanceof AiAnalysisError && error.code === "INVOCATION_MISMATCH",
+  );
+  assert.deepEqual(visibleInvocationIds, ["relevance-nonce-one", "relevance-nonce-two"]);
 });
 
 test("fails closed when output exceeds evidence bounds", async () => {

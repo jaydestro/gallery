@@ -371,6 +371,7 @@ export async function invokeStructured({
   if (!client || typeof client.invoke !== "function") {
     throw new AiAnalysisError("INVALID_PROVIDER", "AI client must implement invoke(request).");
   }
+  const modelInput = { ...input, invocationId };
   const controller = new AbortController();
   let timer;
   const timeout = new Promise((resolve, reject) => {
@@ -386,7 +387,7 @@ export async function invokeStructured({
         invocationId,
         operation,
         systemInstructions,
-        input: JSON.stringify(input),
+        input: JSON.stringify(modelInput),
         schema,
         maxOutputTokens,
         tools: [],

@@ -319,7 +319,7 @@ export async function runAiAnalysis({
     createInvocationId,
     timeoutMilliseconds,
   });
-  let grounding = { score: 1, claims: [] };
+  let grounding = { status: "not-evaluated", claims: [] };
   let groundingEvaluation = "not-evaluated";
   let groundingInvocationId = null;
 
@@ -332,7 +332,7 @@ export async function runAiAnalysis({
       createInvocationId,
       timeoutMilliseconds,
     });
-    grounding = groundingStage.grounding;
+    grounding = { status: "evaluated", ...groundingStage.grounding };
     groundingEvaluation = "evaluated";
     groundingInvocationId = groundingStage.invocationId;
     if (groundingInvocationId === analysisStage.invocationId) {
@@ -377,13 +377,28 @@ function azureEndpoint(environment) {
   const value = requiredEnvironmentValue(environment, "AZURE_OPENAI_ENDPOINT");
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password) throw new Error("not HTTPS");
-    url.pathname = url.pathname.replace(/\/+$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
+    const approvedHost = (
+      /^(?:[a-z0-9-]+\.)*?[a-z0-9-]+\.openai\.azure\.com$/i.test(url.hostname) ||
+      /^(?:[a-z0-9-]+\.)*?[a-z0-9-]+\.services\.ai\.azure\.com$/i.test(url.hostname)
+    );
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      !approvedHost ||
+      !["", "/"].includes(url.pathname) ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error("endpoint is not an approved Azure AI root");
+    }
+    return url.origin;
   } catch {
-    throw new AiAnalysisError("AZURE_CONFIG_INVALID", "AZURE_OPENAI_ENDPOINT must be an HTTPS URL without credentials.");
+    throw new AiAnalysisError(
+      "AZURE_CONFIG_INVALID",
+      "AZURE_OPENAI_ENDPOINT must be the HTTPS root of *.openai.azure.com or *.services.ai.azure.com.",
+    );
   }
 }
 
@@ -394,6 +409,7 @@ function responseSchemaName(operation) {
 function responsesRequest(request, deployment) {
   return {
     model: deployment,
+    store: false,
     instructions: request.systemInstructions,
     input: [{ role: "user", content: [{ type: "input_text", text: request.input }] }],
     tools: [],
@@ -412,6 +428,7 @@ function responsesRequest(request, deployment) {
 
 function chatRequest(request) {
   return {
+    store: false,
     messages: [
       { role: "system", content: request.systemInstructions },
       { role: "user", content: request.input },
@@ -535,8 +552,14 @@ export function createFixtureClient(fixtureCase) {
         return { outputText: fixtureResponse.malformedOutput };
       }
       const input = JSON.parse(request.input);
+      if (input.invocationId !== request.invocationId) {
+        throw new AiAnalysisError(
+          "FIXTURE_INVALID",
+          "Fixture requests must expose the invocation ID to the model.",
+        );
+      }
       const replacements = {
-        "$INVOCATION_ID": request.invocationId,
+        "$INVOCATION_ID": input.invocationId,
         "$CANDIDATE_ID": input.candidate.candidateId,
         "$SUMMARY": input.proposedSummary ?? "",
       };
@@ -661,9 +684,14 @@ function comparableFixtureAnalysis(expectedAnalysis, fixtureCase, candidate, cat
       if (typeof value === "string") replacements[value] = candidate.canonicalUrl;
     }
   }
+  const comparable = replaceFixtureTokens(structuredClone(expectedAnalysis), replacements);
+  const grounding = comparable.generatedSummary === null
+    ? { status: "not-evaluated", claims: [] }
+    : { status: "evaluated", ...comparable.grounding };
   return {
-    ...replaceFixtureTokens(structuredClone(expectedAnalysis), replacements),
+    ...comparable,
     candidateId: candidate.identityKey,
+    grounding,
   };
 }
 

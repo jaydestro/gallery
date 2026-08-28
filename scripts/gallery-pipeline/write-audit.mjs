@@ -15,10 +15,12 @@ import {
 } from "./build-catalog-change.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-const catalogSchema = JSON.parse(await readFile(
-  path.resolve(moduleDirectory, "..", "..", ".github", "gallery-pipeline", "catalog.schema.json"),
-  "utf8",
-));
+const [catalogSchema, healthSchema] = await Promise.all(
+  ["catalog.schema.json", "health.schema.json"].map(async (fileName) => JSON.parse(await readFile(
+    path.resolve(moduleDirectory, "..", "..", ".github", "gallery-pipeline", fileName),
+    "utf8",
+  ))),
+);
 const AUDIT_VERSION = "1.0.0";
 
 export class AuditWriteError extends Error {
@@ -84,6 +86,7 @@ export const AUDIT_LOG_SCHEMA = Object.freeze({
 const schemaAjv = new Ajv2020({ allErrors: true, strict: true, validateFormats: true });
 addFormats(schemaAjv);
 schemaAjv.addSchema(catalogSchema);
+schemaAjv.addSchema({ ...healthSchema, $id: "urn:gallery-pipeline:schema:health:1.0.0" });
 schemaAjv.addSchema(CATALOG_CHANGE_PLAN_SCHEMA);
 const validateAuditSchema = schemaAjv.compile(AUDIT_LOG_SCHEMA);
 
@@ -128,7 +131,7 @@ export function emptyAuditLog() {
   return { version: AUDIT_VERSION, entries: [] };
 }
 
-export function verifyAuditLog(auditLog) {
+export function verifyAuditLog(auditLog, { trustedRepository } = {}) {
   if (!validateAuditSchema(auditLog)) {
     fail("AUDIT_SCHEMA_INVALID", `Audit log is invalid: ${schemaMessage(validateAuditSchema)}`);
   }
@@ -150,7 +153,7 @@ export function verifyAuditLog(auditLog) {
     for (let operationIndex = 0; operationIndex < entry.operations.length; operationIndex += 1) {
       const operation = entry.operations[operationIndex];
       try {
-        validateCatalogChangeOperation(operation);
+        validateCatalogChangeOperation(operation, { trustedRepository });
       } catch (error) {
         fail("AUDIT_CHAIN_INVALID", `Audit operation ${operation.operationId} is invalid.`, {
           cause: error instanceof Error ? error.message : String(error),
@@ -180,9 +183,9 @@ export function verifyAuditLog(auditLog) {
   return auditLog;
 }
 
-export function appendAuditPlan(auditLog, plan) {
-  verifyAuditLog(auditLog);
-  validateCatalogChangePlan(plan);
+export function appendAuditPlan(auditLog, plan, { trustedRepository } = {}) {
+  verifyAuditLog(auditLog, { trustedRepository });
+  validateCatalogChangePlan(plan, { trustedRepository });
   const planFingerprint = hashCanonicalValue(plan);
   const existingRun = auditLog.entries.find((entry) => entry.runId === plan.runId);
   if (existingRun) {
@@ -205,18 +208,23 @@ export function appendAuditPlan(auditLog, plan) {
   const previousHash = entries.at(-1)?.entryHash ?? null;
   entries.push(auditEntry(plan, entries.length + 1, previousHash));
   const appended = { version: AUDIT_VERSION, entries };
-  verifyAuditLog(appended);
+  verifyAuditLog(appended, { trustedRepository });
   if (!isDeepStrictEqual(appended.entries.slice(0, auditLog.entries.length), auditLog.entries)) {
     fail("AUDIT_CHAIN_INVALID", "Audit append changed an existing entry.");
   }
   return appended;
 }
 
-export function writeAudit({ plan, auditLog = emptyAuditLog(), mode = "plan-only" } = {}) {
+export function writeAudit({
+  plan,
+  auditLog = emptyAuditLog(),
+  mode = "plan-only",
+  trustedRepository,
+} = {}) {
   if (mode !== "plan-only") {
     fail("WRITE_MODE_DISABLED", "Audit generation is plan-only and has no filesystem write mode.");
   }
-  const proposedAuditLog = appendAuditPlan(auditLog, plan);
+  const proposedAuditLog = appendAuditPlan(auditLog, plan, { trustedRepository });
   return {
     mode,
     changed: proposedAuditLog.entries.length !== auditLog.entries.length,

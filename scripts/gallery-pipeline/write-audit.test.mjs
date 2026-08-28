@@ -10,28 +10,35 @@ import addFormats from "ajv-formats";
 import {
   AUDIT_LOG_SCHEMA,
   AuditWriteError,
-  appendAuditPlan,
+  appendAuditPlan as appendAuditPlanWithContext,
   emptyAuditLog,
-  verifyAuditLog,
-  writeAudit,
+  verifyAuditLog as verifyAuditLogWithContext,
+  writeAudit as writeAuditWithContext,
 } from "./write-audit.mjs";
 import {
   CATALOG_CHANGE_PLAN_SCHEMA,
   buildCatalogChangePlan,
+  catalogChangeOperationId,
   hashCanonicalValue,
 } from "./build-catalog-change.mjs";
-import { makePlanInput } from "./build-catalog-change.fixtures.mjs";
+import { makeHealthEntry, makePlanInput } from "./build-catalog-change.fixtures.mjs";
 
 const rootDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const catalogSchema = JSON.parse(await readFile(
   path.join(rootDirectory, ".github", "gallery-pipeline", "catalog.schema.json"),
   "utf8",
 ));
+const healthSchema = JSON.parse(await readFile(
+  path.join(rootDirectory, ".github", "gallery-pipeline", "health.schema.json"),
+  "utf8",
+));
 const ajv = new Ajv2020({ allErrors: true, strict: true, validateFormats: true });
 addFormats(ajv);
 ajv.addSchema(catalogSchema);
+ajv.addSchema({ ...healthSchema, $id: "urn:gallery-pipeline:schema:health:1.0.0" });
 ajv.addSchema(CATALOG_CHANGE_PLAN_SCHEMA);
 const validateAuditSchema = ajv.compile(AUDIT_LOG_SCHEMA);
+const trustedRepository = "example/gallery";
 
 function clone(value) {
   return structuredClone(value);
@@ -45,14 +52,20 @@ function fixturePlan() {
   return buildCatalogChangePlan(makePlanInput());
 }
 
+function appendAuditPlan(auditLog, plan) {
+  return appendAuditPlanWithContext(auditLog, plan, { trustedRepository });
+}
+
+function verifyAuditLog(auditLog) {
+  return verifyAuditLogWithContext(auditLog, { trustedRepository });
+}
+
+function writeAudit(options) {
+  return writeAuditWithContext({ ...options, trustedRepository });
+}
+
 function operationIdFor(operation) {
-  const transition = {
-    type: operation.type,
-    targetId: operation.targetId,
-    before: operation.before,
-    after: operation.after,
-  };
-  return `${operation.runId}:${operation.type}:${operation.targetId}:${hashCanonicalValue(transition).slice(0, 24)}`;
+  return catalogChangeOperationId(operation);
 }
 
 function singleOperationPlan(operation, runId, generatedAt) {
@@ -150,6 +163,7 @@ test("allows a later repeated transition after restoration with a distinct run-s
     type: "restore",
     before: clone(quarantine.after),
     after: clone(quarantine.before),
+    healthAfter: makeHealthEntry(quarantine.targetId, quarantine.after.canonicalSource),
     reasonCodes: ["RESTORE_PLANNED"],
   };
   const restorationPlan = singleOperationPlan(
@@ -193,6 +207,7 @@ test("rejects hash-valid audit entries with conflicting operations for one targe
     ...clone(update),
     type: "quarantine",
     after: { ...clone(update.before), lifecycleStatus: "quarantined" },
+    healthAfter: makeHealthEntry(update.targetId, update.before.canonicalSource, "quarantined"),
     reasonCodes: ["QUARANTINE_PLANNED"],
   };
   quarantine.operationId = operationIdFor(quarantine);

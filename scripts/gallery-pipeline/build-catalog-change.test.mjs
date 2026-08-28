@@ -11,11 +11,13 @@ import {
   CATALOG_CHANGE_PLAN_SCHEMA,
   CatalogChangePlanError,
   buildCatalogChangePlan,
+  catalogChangeOperationId,
   hashCanonicalValue,
   replayCatalogChangePlan,
 } from "./build-catalog-change.mjs";
 import {
   makeCandidate,
+  makeHealthEntry,
   makePlanInput,
   makeRecord,
 } from "./build-catalog-change.fixtures.mjs";
@@ -26,6 +28,10 @@ const catalogSchema = JSON.parse(await readFile(
   path.join(rootDirectory, ".github", "gallery-pipeline", "catalog.schema.json"),
   "utf8",
 ));
+const healthSchema = JSON.parse(await readFile(
+  path.join(rootDirectory, ".github", "gallery-pipeline", "health.schema.json"),
+  "utf8",
+));
 const realCatalog = JSON.parse(await readFile(path.join(rootDirectory, "static", "templates.json"), "utf8"));
 const repositoryPolicy = JSON.parse(await readFile(
   path.join(rootDirectory, ".github", "gallery-pipeline", "policy.json"),
@@ -34,6 +40,7 @@ const repositoryPolicy = JSON.parse(await readFile(
 const ajv = new Ajv2020({ allErrors: true, strict: true, validateFormats: true });
 addFormats(ajv);
 ajv.addSchema(catalogSchema);
+ajv.addSchema({ ...healthSchema, $id: "urn:gallery-pipeline:schema:health:1.0.0" });
 const validatePlanSchema = ajv.compile(CATALOG_CHANGE_PLAN_SCHEMA);
 
 function clone(value) {
@@ -45,13 +52,7 @@ function expectCode(code) {
 }
 
 function operationIdFor(operation) {
-  const transition = {
-    type: operation.type,
-    targetId: operation.targetId,
-    before: operation.before,
-    after: operation.after,
-  };
-  return `${operation.runId}:${operation.type}:${operation.targetId}:${hashCanonicalValue(transition).slice(0, 24)}`;
+  return catalogChangeOperationId(operation);
 }
 
 function refreshOperationId(operation) {
@@ -97,7 +98,10 @@ test("builds a deterministic schema-valid plan for all catalog mutation types", 
   assert.deepEqual(input, untouched);
 
   const replayed = replayCatalogChangePlan(plan, input);
-  assert.deepEqual(replayCatalogChangePlan(plan, replayed), replayed);
+  assert.deepEqual(
+    replayCatalogChangePlan(plan, replayed, { trustedRepository: input.trustedRepository }),
+    replayed,
+  );
   assert.equal(replayed.activeRecords.find((record) => record.id === "quarantine-item").lifecycleStatus, "quarantined");
   assert.equal(replayed.retiredRecords.find((record) => record.id === "retire-item").lifecycleStatus, "retired");
   assert.equal(replayed.activeRecords.find((record) => record.id === "restore-item").lifecycleStatus, "active");
@@ -173,8 +177,20 @@ test("accepts the real 109-record catalog only with its exact source-sharing pol
     plannedAt: emptyPlan.generatedAt,
     before: retiringMember,
     after: { ...retiringMember, lifecycleStatus: "retired" },
+    healthAfter: makeHealthEntry(retiringMember.id, retiringMember.canonicalSource, "retired"),
     reasonCodes: ["RETIRE_PLANNED"],
-    evidenceReferences: [{ kind: "policy", id: "1.0.0" }],
+    evidenceReferences: [{
+      kind: "health",
+      id: retiringMember.id,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      source: retiringMember.canonicalSource,
+    }],
+    decisionRunUrl: "https://github.com/example/gallery/actions/runs/123456789",
+    decisionPullRequestUrl: "https://github.com/example/gallery/pull/42",
+    decisionRepositoryOwner: "example",
+    decisionRepositoryName: "gallery",
+    decisionRunId: "123456789",
+    decisionPullRequestNumber: "42",
   };
   refreshOperationId(retirement);
   assert.throws(
@@ -182,7 +198,7 @@ test("accepts the real 109-record catalog only with its exact source-sharing pol
       ...emptyPlan,
       summary: { ...emptyPlan.summary, retire: 1, total: 1 },
       operations: [retirement],
-    }, { activeRecords: realCatalog, retiredRecords: [] }),
+    }, { activeRecords: realCatalog, retiredRecords: [] }, { trustedRepository: "example/gallery" }),
     expectCode("SOURCE_SHARING_POLICY_STALE"),
   );
 
@@ -196,6 +212,7 @@ test("accepts the real 109-record catalog only with its exact source-sharing pol
     plannedAt: emptyPlan.generatedAt,
     before: unrelatedRecord,
     after: { ...unrelatedRecord, canonicalSource: allowance.canonicalSource },
+    healthAfter: makeHealthEntry(unrelatedRecord.id, allowance.canonicalSource),
     reasonCodes: ["UPDATE_PLANNED"],
     evidenceReferences: [{ kind: "policy", id: "1.0.0" }],
   };
@@ -219,6 +236,92 @@ test("is deterministic when independently ordered input collections are reversed
   reordered.freshness.healthSnapshot.entries.reverse();
 
   assert.deepEqual(buildCatalogChangePlan(reordered), buildCatalogChangePlan(input));
+});
+
+test("binds retirement URLs to supplied GitHub repository, run, and pull request metadata", () => {
+  const missingTrustedRepository = makePlanInput();
+  delete missingTrustedRepository.trustedRepository;
+  assert.throws(() => buildCatalogChangePlan(missingTrustedRepository), expectCode("MISSING_GATE"));
+
+  const foreignRepository = makePlanInput();
+  foreignRepository.decisionRepositoryOwner = "foreign-owner";
+  foreignRepository.decisionRepositoryName = "foreign-gallery";
+  foreignRepository.decisionRunUrl = "https://github.com/foreign-owner/foreign-gallery/actions/runs/123456789";
+  foreignRepository.decisionPullRequestUrl = "https://github.com/foreign-owner/foreign-gallery/pull/42";
+  assert.throws(() => buildCatalogChangePlan(foreignRepository), expectCode("PROVENANCE_INVALID"));
+
+  const malformedTrustedRepository = makePlanInput();
+  malformedTrustedRepository.trustedRepository = "example/gallery/extra";
+  assert.throws(() => buildCatalogChangePlan(malformedTrustedRepository), expectCode("PROVENANCE_INVALID"));
+
+  const caseMismatchedRepository = makePlanInput();
+  caseMismatchedRepository.trustedRepository = "Example/gallery";
+  assert.throws(() => buildCatalogChangePlan(caseMismatchedRepository), expectCode("PROVENANCE_INVALID"));
+
+  const missingRunUrl = makePlanInput();
+  delete missingRunUrl.decisionRunUrl;
+  assert.throws(() => buildCatalogChangePlan(missingRunUrl), expectCode("MISSING_GATE"));
+
+  const missingRunMetadata = makePlanInput();
+  delete missingRunMetadata.decisionRunId;
+  assert.throws(() => buildCatalogChangePlan(missingRunMetadata), expectCode("MISSING_GATE"));
+
+  const invalidPullRequestUrl = makePlanInput();
+  invalidPullRequestUrl.decisionPullRequestUrl = "http://github.com/example/gallery/pull/42";
+  assert.throws(() => buildCatalogChangePlan(invalidPullRequestUrl), expectCode("SCHEMA_INVALID"));
+
+  const mismatchedRepository = makePlanInput();
+  mismatchedRepository.decisionRepositoryName = "different-gallery";
+  assert.throws(() => buildCatalogChangePlan(mismatchedRepository), expectCode("PROVENANCE_INVALID"));
+
+  const disguisedRunUrl = makePlanInput();
+  disguisedRunUrl.decisionRunUrl = `${disguisedRunUrl.decisionRunUrl}/attempts/1`;
+  assert.throws(() => buildCatalogChangePlan(disguisedRunUrl), expectCode("PROVENANCE_INVALID"));
+
+  const queryBearingPullUrl = makePlanInput();
+  queryBearingPullUrl.decisionPullRequestUrl = `${queryBearingPullUrl.decisionPullRequestUrl}?diff=split`;
+  assert.throws(() => buildCatalogChangePlan(queryBearingPullUrl), expectCode("PROVENANCE_INVALID"));
+
+  const input = makePlanInput();
+  const plan = buildCatalogChangePlan(input);
+  const retire = plan.operations.find((operation) => operation.type === "retire");
+  assert.equal(retire.decisionRunUrl, input.decisionRunUrl);
+  assert.equal(retire.decisionPullRequestUrl, input.decisionPullRequestUrl);
+  assert.equal(retire.decisionRepositoryOwner, input.decisionRepositoryOwner);
+  assert.equal(retire.decisionRepositoryName, input.decisionRepositoryName);
+  assert.equal(retire.decisionRunId, input.decisionRunId);
+  assert.equal(retire.decisionPullRequestNumber, input.decisionPullRequestNumber);
+  assert(plan.operations.filter((operation) => operation.type !== "retire").every((operation) => (
+    operation.decisionRunUrl === undefined && operation.decisionPullRequestUrl === undefined
+  )));
+
+  const missingReplayUrl = clone(plan);
+  delete missingReplayUrl.operations.find((operation) => operation.type === "retire").decisionRunUrl;
+  assert.equal(validatePlanSchema(missingReplayUrl), false);
+  assert.throws(() => replayCatalogChangePlan(missingReplayUrl, input), expectCode("PLAN_SCHEMA_INVALID"));
+
+  const alteredReplayUrl = clone(plan);
+  alteredReplayUrl.operations.find((operation) => operation.type === "retire").decisionRunUrl =
+    "https://github.com/example/gallery/actions/runs/987654321";
+  assert.throws(() => replayCatalogChangePlan(alteredReplayUrl, input), expectCode("PROVENANCE_INVALID"));
+});
+
+test("preserves untouched active order and appends records moved into each envelope deterministically", () => {
+  const input = makePlanInput();
+  const plan = buildCatalogChangePlan(input);
+  const replayed = replayCatalogChangePlan(plan, input);
+
+  assert.deepEqual(
+    replayed.activeRecords.map((record) => record.id),
+    [
+      ...input.activeRecords
+        .filter((record) => record.id !== "retire-item")
+        .map((record) => record.id),
+      "publish-item",
+      "restore-item",
+    ],
+  );
+  assert.deepEqual(replayed.retiredRecords.map((record) => record.id), ["retire-item"]);
 });
 
 test("fails closed when a candidate is missing an AI or freshness gate", () => {
@@ -702,6 +805,7 @@ test("rejects replay output that would create a duplicate canonical URL", () => 
   operation.after.canonicalSource = input.activeRecords.find(
     (record) => record.id === "quarantine-item",
   ).canonicalSource;
+  operation.healthAfter.canonicalSource = operation.after.canonicalSource;
   refreshOperationId(operation);
 
   assert.throws(

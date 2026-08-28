@@ -88,6 +88,7 @@ test("builds an Azure Responses request with bearer auth, strict JSON, and no to
   assert.equal("api-key" in request.options.headers, false);
   assert.equal(JSON.stringify(request).includes("must-not-be-used"), false);
   assert.equal(body.model, "gallery-evaluator");
+  assert.equal(body.store, false);
   assert.deepEqual(body.tools, []);
   assert.equal(body.text.format.strict, true);
   assert.equal(body.instructions, providerRequest.systemInstructions);
@@ -111,6 +112,7 @@ test("builds an Azure chat-compatible request with the same bearer-only constrai
   assert.match(request.url, /\/openai\/deployments\/gallery-evaluator\/chat\/completions\?api-version=/);
   assert.equal(request.options.headers.authorization, "Bearer fixture-bearer-token");
   assert.equal("api-key" in request.options.headers, false);
+  assert.equal(body.store, false);
   assert.deepEqual(body.tools, []);
   assert.deepEqual(body.messages.map((message) => message.role), ["system", "user"]);
   assert.equal(body.response_format.json_schema.strict, true);
@@ -128,6 +130,30 @@ test("requires an HTTPS endpoint, deployment, and bearer token from environment"
     }),
     (error) => error instanceof AiAnalysisError && error.code === "AZURE_CONFIG_INVALID",
   );
+  for (const endpoint of [
+    "https://openai.azure.com",
+    "https://fixture.openai.azure.com.evil.example",
+    "https://fixture.openai.azure.com/openai",
+    "https://fixture.openai.azure.com?api-version=preview",
+    "https://fixture.openai.azure.com:8443",
+    "https://example.com",
+  ]) {
+    assert.throws(
+      () => createAzureOpenAIClient({
+        environment: { ...azureEnvironment, AZURE_OPENAI_ENDPOINT: endpoint },
+        fetchImpl: async () => {},
+      }),
+      (error) => error instanceof AiAnalysisError && error.code === "AZURE_CONFIG_INVALID",
+      endpoint,
+    );
+  }
+  assert.doesNotThrow(() => createAzureOpenAIClient({
+    environment: {
+      ...azureEnvironment,
+      AZURE_OPENAI_ENDPOINT: "https://fixture.services.ai.azure.com/",
+    },
+    fetchImpl: async () => {},
+  }));
 });
 
 test("composes independently invoked relevance and grounding into strict analysis.schema output", async () => {
@@ -143,6 +169,7 @@ test("composes independently invoked relevance and grounding into strict analysi
   });
 
   assert.equal(result.analysis.candidateId, prepared.candidate.identityKey);
+  assert.equal(result.analysis.grounding.status, "evaluated");
   assert.equal(result.analysis.grounding.claims.length, 2);
   assert.equal(result.invocations.relevance, "relevance-id-1");
   assert.equal(result.invocations.grounding, "grounding-id-2");
@@ -153,7 +180,7 @@ test("composes independently invoked relevance and grounding into strict analysi
   assert.doesNotThrow(() => validateFinalAnalysis(result.analysis));
 });
 
-test("represents skipped grounding as not-evaluated outside the schema-compatible analysis", async () => {
+test("represents skipped grounding explicitly without a fabricated score", async () => {
   const fixtureCase = fixtureCases.cases.find((item) => item.candidateId === "incidental-monitoring");
   const prepared = prepareFixtureAnalysisCase(fixtureCase);
   const client = createFixtureClient(fixtureCase);
@@ -166,7 +193,7 @@ test("represents skipped grounding as not-evaluated outside the schema-compatibl
 
   assert.equal(result.evaluationState.grounding, "not-evaluated");
   assert.equal(result.invocations.grounding, null);
-  assert.deepEqual(result.analysis.grounding, { score: 1, claims: [] });
+  assert.deepEqual(result.analysis.grounding, { status: "not-evaluated", claims: [] });
   assert.equal(client.requests.length, 1);
   assert.doesNotThrow(() => validateFinalAnalysis(result.analysis));
 });

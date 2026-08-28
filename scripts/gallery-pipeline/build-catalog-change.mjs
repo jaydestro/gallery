@@ -25,6 +25,7 @@ const [catalogSchema, analysisSchema, healthSchema, retiredEntriesSchema, exempt
 const PLAN_VERSION = "1.0.0";
 const FRESHNESS_VERSION = "1.0.0";
 const SUPPORTED_POLICY_VERSION = "1.0.0";
+const HEALTH_SCHEMA_ID = "urn:gallery-pipeline:schema:health:1.0.0";
 const SUPPORTED_CONTRACT_VERSIONS = Object.freeze({
   policy: "1.0.0",
   catalog: "2.0.0",
@@ -57,6 +58,9 @@ const AI_FLAGS = Object.freeze({
 const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const RECORD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const SEMANTIC_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9._-]+$/;
+const GITHUB_NUMERIC_ID_PATTERN = /^[1-9][0-9]*$/;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const FRESHNESS_RECOMMENDATION_BY_STATUS = Object.freeze({
   healthy: "keep",
@@ -126,6 +130,14 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
         id: { type: "string", minLength: 1 },
         observedAt: { type: "string", format: "date-time" },
         source: { type: "string", format: "uri" },
+        status: { type: "string", minLength: 1 },
+        consecutiveFindings: { type: "integer", minimum: 0 },
+        gracePeriodStartedAt: {
+          oneOf: [
+            { type: "null" },
+            { type: "string", format: "date-time" },
+          ],
+        },
       },
     },
     operation: {
@@ -139,6 +151,7 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
         "plannedAt",
         "before",
         "after",
+        "healthAfter",
         "reasonCodes",
         "evidenceReferences",
       ],
@@ -150,6 +163,7 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
         plannedAt: { type: "string", format: "date-time" },
         before: { $ref: "#/$defs/recordOrNull" },
         after: { $ref: "urn:gallery-pipeline:schema:catalog:2.0.0#/$defs/v2Record" },
+        healthAfter: { $ref: `${HEALTH_SCHEMA_ID}#/$defs/healthEntry` },
         reasonCodes: {
           type: "array",
           minItems: 1,
@@ -161,7 +175,47 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
           minItems: 1,
           items: { $ref: "#/$defs/evidenceReference" },
         },
+        decisionRunUrl: { type: "string", format: "uri" },
+        decisionPullRequestUrl: { type: "string", format: "uri" },
+        decisionRepositoryOwner: { type: "string", pattern: GITHUB_OWNER_PATTERN.source },
+        decisionRepositoryName: { type: "string", pattern: GITHUB_REPOSITORY_PATTERN.source },
+        decisionRunId: { type: "string", pattern: GITHUB_NUMERIC_ID_PATTERN.source },
+        decisionPullRequestNumber: { type: "string", pattern: GITHUB_NUMERIC_ID_PATTERN.source },
       },
+      allOf: [{
+        if: {
+          properties: { type: { const: "retire" } },
+          required: ["type"],
+        },
+        then: {
+          properties: {
+            decisionRunUrl: { type: "string", format: "uri" },
+            decisionPullRequestUrl: { type: "string", format: "uri" },
+            decisionRepositoryOwner: { type: "string", pattern: GITHUB_OWNER_PATTERN.source },
+            decisionRepositoryName: { type: "string", pattern: GITHUB_REPOSITORY_PATTERN.source },
+            decisionRunId: { type: "string", pattern: GITHUB_NUMERIC_ID_PATTERN.source },
+            decisionPullRequestNumber: { type: "string", pattern: GITHUB_NUMERIC_ID_PATTERN.source },
+          },
+          required: [
+            "decisionRunUrl",
+            "decisionPullRequestUrl",
+            "decisionRepositoryOwner",
+            "decisionRepositoryName",
+            "decisionRunId",
+            "decisionPullRequestNumber",
+          ],
+        },
+        else: {
+          properties: {
+            decisionRunUrl: false,
+            decisionPullRequestUrl: false,
+            decisionRepositoryOwner: false,
+            decisionRepositoryName: false,
+            decisionRunId: false,
+            decisionPullRequestNumber: false,
+          },
+        },
+      }],
     },
   },
 });
@@ -169,13 +223,13 @@ export const CATALOG_CHANGE_PLAN_SCHEMA = Object.freeze({
 const schemaAjv = new Ajv2020({ allErrors: true, strict: true, validateFormats: true });
 addFormats(schemaAjv);
 schemaAjv.addSchema(catalogSchema);
-schemaAjv.addSchema(healthSchema, "gallery-health-schema");
+schemaAjv.addSchema({ ...healthSchema, $id: HEALTH_SCHEMA_ID });
 const validateV2Record = schemaAjv.compile({
   $ref: "urn:gallery-pipeline:schema:catalog:2.0.0#/$defs/v2Record",
 });
 const validateAnalysis = schemaAjv.compile(analysisSchema);
 const validateHealthSnapshot = schemaAjv.compile(healthSchema);
-const validateHealthEntry = schemaAjv.compile({ $ref: "gallery-health-schema#/$defs/healthEntry" });
+const validateHealthEntry = schemaAjv.compile({ $ref: `${HEALTH_SCHEMA_ID}#/$defs/healthEntry` });
 const validateRetiredEntries = schemaAjv.compile(retiredEntriesSchema);
 const validateExemptions = schemaAjv.compile(exemptionsSchema);
 const validatePlan = schemaAjv.compile(CATALOG_CHANGE_PLAN_SCHEMA);
@@ -237,6 +291,97 @@ function requireHttpsUrl(value, name) {
   return input;
 }
 
+function requireImmutableHttpsUrl(value, name) {
+  if (typeof value !== "string" || value === "" || value !== value.trim()) {
+    fail("MISSING_GATE", `${name} must be a non-empty, trimmed string.`);
+  }
+  return requireHttpsUrl(value, name);
+}
+
+function requirePattern(value, name, pattern) {
+  const input = requireString(value, name);
+  if (!pattern.test(input)) fail("SCHEMA_INVALID", `${name} has an invalid format.`);
+  return input;
+}
+
+function trustedRepositoryIdentity(value) {
+  if (typeof value !== "string" || value === "") {
+    fail("MISSING_GATE", "trustedRepository must identify the current repository as owner/name.");
+  }
+  if (value !== value.trim()) {
+    fail("PROVENANCE_INVALID", "trustedRepository must be a trimmed owner/name identity.");
+  }
+  const parts = value.split("/");
+  if (parts.length !== 2) {
+    fail("PROVENANCE_INVALID", "trustedRepository must be exactly owner/name.");
+  }
+  const [owner, repository] = parts;
+  if (
+    !GITHUB_OWNER_PATTERN.test(owner) ||
+    !GITHUB_REPOSITORY_PATTERN.test(repository) ||
+    repository.length > 100 ||
+    [".", ".."].includes(repository)
+  ) {
+    fail("PROVENANCE_INVALID", "trustedRepository has an invalid GitHub owner/name format.");
+  }
+  return { owner, repository };
+}
+
+function retirementDecisionProvenance({
+  decisionRunUrl,
+  decisionPullRequestUrl,
+  decisionRepositoryOwner,
+  decisionRepositoryName,
+  decisionRunId,
+  decisionPullRequestNumber,
+}, scope, trustedRepository) {
+  const trusted = trustedRepositoryIdentity(trustedRepository);
+  const owner = requirePattern(
+    decisionRepositoryOwner,
+    `${scope} decisionRepositoryOwner`,
+    GITHUB_OWNER_PATTERN,
+  );
+  const repository = requirePattern(
+    decisionRepositoryName,
+    `${scope} decisionRepositoryName`,
+    GITHUB_REPOSITORY_PATTERN,
+  );
+  const actionsRunId = requirePattern(
+    decisionRunId,
+    `${scope} decisionRunId`,
+    GITHUB_NUMERIC_ID_PATTERN,
+  );
+  const pullRequestNumber = requirePattern(
+    decisionPullRequestNumber,
+    `${scope} decisionPullRequestNumber`,
+    GITHUB_NUMERIC_ID_PATTERN,
+  );
+  if (owner !== trusted.owner || repository !== trusted.repository) {
+    fail(
+      "PROVENANCE_INVALID",
+      `${scope} repository ${owner}/${repository} does not match trusted current repository ${trusted.owner}/${trusted.repository}.`,
+    );
+  }
+  const runUrl = requireImmutableHttpsUrl(decisionRunUrl, `${scope} decisionRunUrl`);
+  const pullRequestUrl = requireImmutableHttpsUrl(
+    decisionPullRequestUrl,
+    `${scope} decisionPullRequestUrl`,
+  );
+  const expectedRunUrl = `https://github.com/${owner}/${repository}/actions/runs/${actionsRunId}`;
+  const expectedPullRequestUrl = `https://github.com/${owner}/${repository}/pull/${pullRequestNumber}`;
+  if (runUrl !== expectedRunUrl || pullRequestUrl !== expectedPullRequestUrl) {
+    fail("PROVENANCE_INVALID", `${scope} URLs do not match the supplied GitHub repository, run, and pull request metadata.`);
+  }
+  return {
+    decisionRunUrl: runUrl,
+    decisionPullRequestUrl: pullRequestUrl,
+    decisionRepositoryOwner: owner,
+    decisionRepositoryName: repository,
+    decisionRunId: actionsRunId,
+    decisionPullRequestNumber: pullRequestNumber,
+  };
+}
+
 function requireBoolean(value, name) {
   if (typeof value !== "boolean") fail("MISSING_GATE", `${name} must be a boolean.`);
   return value;
@@ -293,6 +438,10 @@ function validatePolicyInput(policy) {
   const exemptionPolicy = requireObject(policy.exemptions, "policy.exemptions");
   if (!Number.isSafeInteger(exemptionPolicy.maximumDurationDays) || exemptionPolicy.maximumDurationDays < 1) {
     fail("MISSING_GATE", "policy.exemptions.maximumDurationDays must be a positive integer.");
+  }
+  const audit = requireObject(policy.audit, "policy.audit");
+  if (!Number.isSafeInteger(audit.retentionDays) || audit.retentionDays < 1) {
+    fail("MISSING_GATE", "policy.audit.retentionDays must be a positive integer.");
   }
   const automation = requireObject(policy.automation, "policy.automation");
   requireBoolean(automation.emergencyDisable, "policy.automation.emergencyDisable");
@@ -900,30 +1049,96 @@ function evidenceReferences({ id, candidate, analysis, health, freshness, policy
   if (catalogScope) references.push({ kind: `${catalogScope}-record`, id });
   if (candidate) references.push({ kind: "candidate", id: candidate.identityKey, source: candidate.canonicalUrl });
   if (analysis) references.push({ kind: "analysis", id: analysis.candidateId });
-  references.push({ kind: "health", id, observedAt: health.checkedAt, source: health.canonicalSource });
   references.push({
+    kind: "health",
+    id,
+    observedAt: health.checkedAt,
+    source: health.canonicalSource,
+    status: health.status,
+    consecutiveFindings: health.consecutiveFindings,
+    gracePeriodStartedAt: health.gracePeriodStartedAt,
+  });
+  const freshnessReference = {
     kind: "freshness",
     id,
     observedAt: freshness.reportGeneratedAt,
     source: freshness.canonicalSource,
-  });
+  };
+  if (freshness.health !== null) {
+    freshnessReference.status = freshness.health.status;
+    freshnessReference.consecutiveFindings = freshness.health.consecutiveFindings;
+    freshnessReference.gracePeriodStartedAt = freshness.health.gracePeriodStartedAt;
+  }
+  references.push(freshnessReference);
   references.push({ kind: "policy", id: policy.version });
   return references;
 }
 
-function makeOperation({ type, targetId, runId, plannedAt, before, after, reasons, references }) {
-  const transition = { type, targetId, before, after };
-  return {
-    operationId: `${runId}:${type}:${targetId}:${hashCanonicalValue(transition).slice(0, 24)}`,
+function operationIdentityPayload(operation) {
+  const payload = {
+    type: operation.type,
+    targetId: operation.targetId,
+    before: operation.before,
+    after: operation.after,
+    healthAfter: operation.healthAfter,
+    reasonCodes: operation.reasonCodes,
+    evidenceReferences: operation.evidenceReferences,
+  };
+  if (operation.type === "retire") {
+    payload.decisionRunUrl = operation.decisionRunUrl;
+    payload.decisionPullRequestUrl = operation.decisionPullRequestUrl;
+    payload.decisionRepositoryOwner = operation.decisionRepositoryOwner;
+    payload.decisionRepositoryName = operation.decisionRepositoryName;
+    payload.decisionRunId = operation.decisionRunId;
+    payload.decisionPullRequestNumber = operation.decisionPullRequestNumber;
+  }
+  return payload;
+}
+
+export function catalogChangeOperationId(operation) {
+  return `${operation.runId}:${operation.type}:${operation.targetId}:${hashCanonicalValue(operationIdentityPayload(operation)).slice(0, 24)}`;
+}
+
+function makeOperation({
+  type,
+  targetId,
+  runId,
+  plannedAt,
+  before,
+  after,
+  healthAfter,
+  reasons,
+  references,
+  decisionRunUrl,
+  decisionPullRequestUrl,
+  decisionRepositoryOwner,
+  decisionRepositoryName,
+  decisionRunId,
+  decisionPullRequestNumber,
+  trustedRepository,
+}) {
+  const operation = {
     type,
     targetId,
     runId,
     plannedAt,
     before: before === null ? null : clone(before),
     after: clone(after),
+    healthAfter: clone(healthAfter),
     reasonCodes: reasons,
     evidenceReferences: references,
   };
+  if (type === "retire") {
+    Object.assign(operation, retirementDecisionProvenance({
+      decisionRunUrl,
+      decisionPullRequestUrl,
+      decisionRepositoryOwner,
+      decisionRepositoryName,
+      decisionRunId,
+      decisionPullRequestNumber,
+    }, `Retirement ${targetId}`, trustedRepository));
+  }
+  return { operationId: catalogChangeOperationId(operation), ...operation };
 }
 
 function lifecycleDecision(id, health, freshness) {
@@ -1029,7 +1244,7 @@ export function compareCatalogOperations(left, right) {
   );
 }
 
-export function validateCatalogChangePlan(plan) {
+export function validateCatalogChangePlan(plan, { trustedRepository } = {}) {
   if (!validatePlan(plan)) {
     fail("PLAN_SCHEMA_INVALID", `Catalog change plan is invalid: ${schemaMessage(validatePlan)}`);
   }
@@ -1037,7 +1252,7 @@ export function validateCatalogChangePlan(plan) {
   const targetIds = new Set();
   for (let index = 0; index < plan.operations.length; index += 1) {
     const operation = plan.operations[index];
-    validateCatalogChangeOperation(operation);
+    validateCatalogChangeOperation(operation, { trustedRepository });
     if (index > 0 && compareCatalogOperations(plan.operations[index - 1], operation) > 0) {
       fail("PLAN_SCHEMA_INVALID", "Plan operations are not in canonical type and target order.");
     }
@@ -1081,9 +1296,15 @@ function expectedBeforeLocation(operation) {
     : "active";
 }
 
-function validateTransition(operation) {
+function validateTransition(operation, trustedRepository) {
   validateRecord(operation.after, `Operation ${operation.operationId} after`);
   if (operation.before !== null) validateRecord(operation.before, `Operation ${operation.operationId} before`);
+  if (!validateHealthEntry(operation.healthAfter)) {
+    fail(
+      "SCHEMA_INVALID",
+      `Operation ${operation.operationId} healthAfter is invalid: ${schemaMessage(validateHealthEntry)}`,
+    );
+  }
   if (operation.after.id !== operation.targetId || (operation.before && operation.before.id !== operation.targetId)) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} changes its target ID.`);
   }
@@ -1096,6 +1317,40 @@ function validateTransition(operation) {
   }[operation.type];
   if (operation.after.lifecycleStatus !== expectedStatus) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has an invalid after lifecycle status.`);
+  }
+  const expectedHealthStatus = {
+    publish: "healthy",
+    update: "healthy",
+    quarantine: "quarantined",
+    retire: "retired",
+    restore: "healthy",
+  }[operation.type];
+  if (
+    operation.healthAfter.galleryId !== operation.targetId ||
+    operation.healthAfter.canonicalSource !== operation.after.canonicalSource ||
+    operation.healthAfter.status !== expectedHealthStatus
+  ) {
+    fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} has mismatched healthAfter state.`);
+  }
+  if (operation.type === "retire") {
+    retirementDecisionProvenance(operation, `Operation ${operation.operationId}`, trustedRepository);
+    const lifecycleEvidence = operation.evidenceReferences.filter((reference) => (
+      ["health", "freshness"].includes(reference.kind) &&
+      reference.observedAt !== undefined &&
+      reference.source === operation.after.canonicalSource
+    ));
+    if (lifecycleEvidence.length === 0) {
+      fail("NON_IDEMPOTENT_REPLAY", `Retirement ${operation.operationId} lacks source-bound lifecycle evidence.`);
+    }
+  } else if ([
+    "decisionRunUrl",
+    "decisionPullRequestUrl",
+    "decisionRepositoryOwner",
+    "decisionRepositoryName",
+    "decisionRunId",
+    "decisionPullRequestNumber",
+  ].some((field) => operation[field] !== undefined)) {
+    fail("PLAN_SCHEMA_INVALID", `Non-retirement operation ${operation.operationId} contains retirement provenance.`);
   }
   if (operation.type === "publish" && operation.before !== null) {
     fail("NON_IDEMPOTENT_REPLAY", `Publish operation ${operation.operationId} must have a null before value.`);
@@ -1161,28 +1416,79 @@ function assertRetirementEligible(id, decisionHealth, decisionFreshness, policy,
   }
 }
 
-export function validateCatalogChangeOperation(operation) {
-  validateTransition(operation);
-  const transition = {
-    type: operation.type,
-    targetId: operation.targetId,
-    before: operation.before,
-    after: operation.after,
-  };
-  const expectedOperationId = `${operation.runId}:${operation.type}:${operation.targetId}:${hashCanonicalValue(transition).slice(0, 24)}`;
+function replayRetirementEvidence(operation, policy, plannedAt) {
+  const byKind = new Map();
+  const maximumAgeMilliseconds = decisionEvidenceWindowMilliseconds(policy);
+  for (const kind of ["health", "freshness"]) {
+    const references = operation.evidenceReferences.filter((reference) => reference.kind === kind);
+    if (references.length !== 1) {
+      fail("MISSING_GATE", `Retirement for ${operation.targetId} requires exactly one ${kind} evidence reference.`);
+    }
+    const [reference] = references;
+    if (reference.id !== operation.targetId || reference.source !== operation.after.canonicalSource) {
+      fail("CONFLICTING_OPERATIONS", `Retirement ${kind} evidence does not match ${operation.targetId}.`);
+    }
+    requireCurrentRunTimestamp(
+      reference.observedAt,
+      `Retirement ${operation.targetId} ${kind} evidence observedAt`,
+      plannedAt,
+      maximumAgeMilliseconds,
+    );
+    requireString(reference.status, `Retirement ${operation.targetId} ${kind} evidence status`);
+    if (!Number.isSafeInteger(reference.consecutiveFindings) || reference.consecutiveFindings < 0) {
+      fail("MISSING_GATE", `Retirement ${operation.targetId} ${kind} evidence consecutiveFindings is invalid.`);
+    }
+    if (reference.gracePeriodStartedAt !== null) {
+      normalizeTimestamp(
+        reference.gracePeriodStartedAt,
+        `Retirement ${operation.targetId} ${kind} evidence gracePeriodStartedAt`,
+      );
+    }
+    byKind.set(kind, reference);
+  }
+  const healthReference = byKind.get("health");
+  for (const field of ["status", "consecutiveFindings", "gracePeriodStartedAt"]) {
+    if (healthReference[field] !== operation.healthAfter[field]) {
+      fail("CONFLICTING_OPERATIONS", `Retirement health evidence ${field} does not match healthAfter.`);
+    }
+  }
+  assertRetirementEligible(
+    operation.targetId,
+    healthReference,
+    { health: byKind.get("freshness") },
+    policy,
+    plannedAt,
+  );
+}
+
+export function validateCatalogChangePlanPolicy(plan, policy, { trustedRepository } = {}) {
+  validateCatalogChangePlan(plan, { trustedRepository });
+  validatePolicyInput(policy);
+  validatePolicyForOperations(policy, plan.operations);
+  for (const operation of plan.operations) {
+    if (operation.type === "retire") replayRetirementEvidence(operation, policy, plan.generatedAt);
+  }
+  return plan;
+}
+
+export function validateCatalogChangeOperation(operation, { trustedRepository } = {}) {
+  validateTransition(operation, trustedRepository);
+  const expectedOperationId = catalogChangeOperationId(operation);
   if (operation.operationId !== expectedOperationId) {
     fail("NON_IDEMPOTENT_REPLAY", `Operation ${operation.operationId} does not match its transition content.`);
   }
   return operation;
 }
 
-export function replayCatalogChangePlan(plan, state) {
-  validateCatalogChangePlan(plan);
+export function replayCatalogChangePlan(plan, state, { trustedRepository = state?.trustedRepository } = {}) {
+  validateCatalogChangePlan(plan, { trustedRepository });
   const records = stateRecords(state);
   const active = new Map(records.active.map((record) => [record.id, clone(record)]));
   const retired = new Map(records.retired.map((record) => [record.id, clone(record)]));
+  const activeOrder = records.active.map((record) => record.id);
+  const retiredOrder = records.retired.map((record) => record.id);
   for (const operation of plan.operations) {
-    validateTransition(operation);
+    validateTransition(operation, trustedRepository);
     const afterLocation = expectedAfterLocation(operation.type);
     const afterMap = afterLocation === "active" ? active : retired;
     const otherAfterMap = afterLocation === "active" ? retired : active;
@@ -1203,11 +1509,20 @@ export function replayCatalogChangePlan(plan, state) {
     }
     active.delete(operation.targetId);
     retired.delete(operation.targetId);
+    const activeIndex = activeOrder.indexOf(operation.targetId);
+    const retiredIndex = retiredOrder.indexOf(operation.targetId);
     afterMap.set(operation.targetId, clone(operation.after));
+    if (afterLocation === "active") {
+      if (retiredIndex !== -1) retiredOrder.splice(retiredIndex, 1);
+      if (activeIndex === -1) activeOrder.push(operation.targetId);
+    } else {
+      if (activeIndex !== -1) activeOrder.splice(activeIndex, 1);
+      if (retiredIndex === -1) retiredOrder.push(operation.targetId);
+    }
   }
   const replayed = {
-    activeRecords: sortedRecords([...active.values()]),
-    retiredRecords: sortedRecords([...retired.values()]),
+    activeRecords: activeOrder.map((id) => active.get(id)),
+    retiredRecords: retiredOrder.map((id) => retired.get(id)),
   };
   indexRecords(replayed.activeRecords, replayed.retiredRecords);
   validateSupersededReferences(replayed.activeRecords, replayed.retiredRecords);
@@ -1225,6 +1540,13 @@ export function buildCatalogChangePlan({
   retiredRecords,
   policy,
   exemptions,
+  decisionRunUrl,
+  decisionPullRequestUrl,
+  decisionRepositoryOwner,
+  decisionRepositoryName,
+  decisionRunId,
+  decisionPullRequestNumber,
+  trustedRepository,
 }) {
   const normalizedRunId = requireString(runId, "runId");
   const plannedAt = normalizeTimestamp(generatedAt, "generatedAt");
@@ -1308,6 +1630,7 @@ export function buildCatalogChangePlan({
       targetId: galleryId,
       runId: normalizedRunId,
       plannedAt,
+      healthAfter: decisionHealth,
       reasons: reasonCodes(type, analysis.reasonCodes, decisionHealth.healthReasons),
       references: evidenceReferences({
         id: galleryId,
@@ -1379,6 +1702,7 @@ export function buildCatalogChangePlan({
       plannedAt,
       before: record,
       after,
+      healthAfter: decisionHealth,
       reasons: reasonCodes(decision, decisionHealth.healthReasons, decisionFreshness.health?.healthReasons),
       references: evidenceReferences({
         id: record.id,
@@ -1387,6 +1711,13 @@ export function buildCatalogChangePlan({
         policy,
         catalogScope: "active",
       }),
+      decisionRunUrl: decision === "retire" ? decisionRunUrl : undefined,
+      decisionPullRequestUrl: decision === "retire" ? decisionPullRequestUrl : undefined,
+      decisionRepositoryOwner: decision === "retire" ? decisionRepositoryOwner : undefined,
+      decisionRepositoryName: decision === "retire" ? decisionRepositoryName : undefined,
+      decisionRunId: decision === "retire" ? decisionRunId : undefined,
+      decisionPullRequestNumber: decision === "retire" ? decisionPullRequestNumber : undefined,
+      trustedRepository: decision === "retire" ? trustedRepository : undefined,
     }));
   }
 
@@ -1416,6 +1747,13 @@ export function buildCatalogChangePlan({
     retiredRecords: sortedRecords(retired),
     policy,
     exemptions: exemptionState.value,
+    decisionRunUrl,
+    decisionPullRequestUrl,
+    decisionRepositoryOwner,
+    decisionRepositoryName,
+    decisionRunId,
+    decisionPullRequestNumber,
+    trustedRepository,
   };
   const plan = validateCatalogChangePlan({
     version: PLAN_VERSION,
@@ -1425,10 +1763,10 @@ export function buildCatalogChangePlan({
     inputFingerprint: hashCanonicalValue(fingerprintInput),
     summary: planSummary(operations),
     operations,
-  });
+  }, { trustedRepository });
   const initialState = { activeRecords: active, retiredRecords: retired };
-  const firstReplay = replayCatalogChangePlan(plan, initialState);
-  const secondReplay = replayCatalogChangePlan(plan, firstReplay);
+  const firstReplay = replayCatalogChangePlan(plan, initialState, { trustedRepository });
+  const secondReplay = replayCatalogChangePlan(plan, firstReplay, { trustedRepository });
   if (!isDeepStrictEqual(firstReplay, secondReplay)) {
     fail("NON_IDEMPOTENT_REPLAY", "Catalog change plan did not produce an idempotent replay.");
   }
