@@ -584,6 +584,10 @@ test("gallery proposal verification always publishes token-safe diagnostics", as
   );
   assert.match(
     normalizedWorkflow,
+    /"gallery-health-report\.json,proposed-gallery-health\.json,gallery-health-receipt\.json"\s*\\\n\s*"true"/,
+  );
+  assert.match(
+    normalizedWorkflow,
     /expected_names='\["discovery","freshness","health","modelAnalysis"\]'/,
   );
   assert.match(normalizedWorkflow, /receipt\.reportFileHash !== reportHash/);
@@ -594,6 +598,12 @@ test("gallery proposal verification always publishes token-safe diagnostics", as
   assert.match(normalizedWorkflow, /report\.provenance\?\.\[field\] !== model\[field\]/);
   assert.match(normalizedWorkflow, /--model-analysis "\$model_analysis"/);
   assert.match(normalizedWorkflow, /--model-analysis-receipt "\$model_analysis_receipt"/);
+  assert.match(
+    normalizedWorkflow,
+    /health="\$\(single_file proposal-inputs\/health proposed-gallery-health\.json\)"/,
+  );
+  assert.match(normalizedWorkflow, /--health-report "\$health_report"/);
+  assert.match(normalizedWorkflow, /--health-receipt "\$health_receipt"/);
 
   assert.match(permissions, /^  contents:\s*read\s*$/m);
   assert.match(permissions, /^  actions:\s*read\s*$/m);

@@ -21,6 +21,11 @@ import {
   validateCatalogChangePlanPolicy,
 } from "./build-catalog-change.mjs";
 import { GROUNDING_SYSTEM_INSTRUCTIONS } from "./verify-summary.mjs";
+import {
+  HEALTH_ARTIFACT_FILES,
+  hashHealthBytes,
+  replayHealthPersistenceProposal,
+} from "./persist-health.mjs";
 import { appendAuditPlan, emptyAuditLog } from "./write-audit.mjs";
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
@@ -129,7 +134,9 @@ const upstreamArtifactSchema = {
 const DEFAULT_INPUT_PATHS = Object.freeze({
   discovery: path.join("gallery-reports", "discovery.json"),
   candidateGates: path.join("gallery-reports", "candidate-gates.json"),
-  health: "gallery-health-report.json",
+  health: HEALTH_ARTIFACT_FILES.proposedHealth,
+  healthReport: HEALTH_ARTIFACT_FILES.report,
+  healthReceipt: HEALTH_ARTIFACT_FILES.receipt,
   freshness: "gallery-freshness.json",
   activeCatalog: path.join("static", "templates.json"),
   retired: path.join("static", "retired-templates.json"),
@@ -294,6 +301,7 @@ export const CATALOG_PROPOSAL_RECEIPT_SCHEMA = Object.freeze({
     "trustedRef",
     "trustedSha",
     "upstreamArtifacts",
+    "healthArtifact",
     "inputFingerprint",
     "reportFingerprint",
     "inputs",
@@ -314,6 +322,28 @@ export const CATALOG_PROPOSAL_RECEIPT_SCHEMA = Object.freeze({
       minItems: BASE_UPSTREAM_ARTIFACT_NAMES.length,
       maxItems: Object.keys(UPSTREAM_ARTIFACT_SPECS).length,
       items: upstreamArtifactSchema,
+    },
+    healthArtifact: {
+      oneOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["report", "proposedHealth", "receipt"],
+          properties: Object.fromEntries(Object.entries(HEALTH_ARTIFACT_FILES).map(([name, fileName]) => [
+            name,
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["path", "sha256"],
+              properties: {
+                path: { const: fileName },
+                sha256: { type: "string", pattern: SHA256_DIGEST_PATTERN },
+              },
+            },
+          ])),
+        },
+      ],
     },
     inputFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
     reportFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
@@ -585,6 +615,47 @@ function validateUpstreamArtifacts(input, modelRequired) {
   }
 }
 
+function verifyHealthArtifact({ activeCatalog, health, report, receipt, upstreamArtifacts, now }) {
+  const producer = Array.isArray(upstreamArtifacts?.data)
+    ? upstreamArtifacts.data.find((artifact) => artifact?.name === "health")
+    : null;
+  if (!producer) {
+    fail("HEALTH_ARTIFACT_INVALID", "The verified health producer artifact is missing.");
+  }
+  try {
+    replayHealthPersistenceProposal({
+      currentHealthBytes: health.bytes,
+      catalogBytes: activeCatalog.bytes,
+      reportBytes: report.bytes,
+      proposedHealthBytes: health.bytes,
+      receiptBytes: receipt.bytes,
+      expectedRun: {
+        repository: producer.repository,
+        runId: producer.runId,
+        runAttempt: producer.runAttempt,
+        sourceRef: producer.sourceRef,
+        sourceSha: producer.sourceSha,
+        observedAt: receipt.data?.observedAt,
+      },
+      now,
+    });
+  } catch (error) {
+    fail(
+      "HEALTH_ARTIFACT_INVALID",
+      `Health artifact verification failed: ${error instanceof Error ? error.message : String(error)}`,
+      { causeCode: typeof error?.code === "string" ? error.code : null },
+    );
+  }
+  return Object.fromEntries(Object.entries({
+    report,
+    proposedHealth: health,
+    receipt,
+  }).map(([name, snapshot]) => [name, {
+    path: HEALTH_ARTIFACT_FILES[name],
+    sha256: hashHealthBytes(snapshot.bytes),
+  }]));
+}
+
 function inputFingerprintFor(input) {
   return hashCanonicalValue({
     discovery: input.discovery,
@@ -605,6 +676,7 @@ function inputFingerprintFor(input) {
     trustedRef: input.trustedRef ?? null,
     trustedSha: input.trustedSha ?? null,
     upstreamArtifacts: input.upstreamArtifacts ?? null,
+    healthArtifact: input.healthArtifact ?? null,
   });
 }
 
@@ -1305,6 +1377,7 @@ function finalizeResult({
     trustedRef: input.trustedRef,
     trustedSha: input.trustedSha,
     upstreamArtifacts: clone(input.upstreamArtifacts),
+    healthArtifact: clone(input.healthArtifact ?? null),
     inputFingerprint,
     reportFingerprint: hashCanonicalValue(report),
     inputs: inputReceiptEntries(input),
@@ -1751,7 +1824,9 @@ function usage() {
     "  --candidate-gates path            Candidate-gate report JSON",
     "  --model-analysis path             Precomputed model-analysis report JSON",
     "  --model-analysis-receipt path     Receipt binding the model-analysis report",
-    "  --health path                     Health snapshot JSON",
+    "  --health path                     Proposed health snapshot JSON",
+    "  --health-report path              Health producer report JSON",
+    "  --health-receipt path             Receipt binding the health artifact files",
     "  --freshness path                  Freshness report JSON",
     "  --active path                     Current active catalog JSON",
     "  --retired path                    Current retired catalog JSON",
@@ -1784,6 +1859,8 @@ function parseArguments(arguments_) {
     ["--model-analysis", "modelAnalysis"],
     ["--model-analysis-receipt", "modelAnalysisReceipt"],
     ["--health", "health"],
+    ["--health-report", "healthReport"],
+    ["--health-receipt", "healthReceipt"],
     ["--freshness", "freshness"],
     ["--active", "activeCatalog"],
     ["--retired", "retired"],
@@ -1877,7 +1954,18 @@ async function readOptionalJsonSnapshot(filePath) {
   }
 }
 
-async function loadFileInputs(options, env) {
+async function readHealthArtifactSnapshot(filePath, name) {
+  try {
+    return await readJsonSnapshot(filePath);
+  } catch (error) {
+    fail(
+      "HEALTH_ARTIFACT_INVALID",
+      `${name} is missing or malformed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function loadFileInputs(options, env, now) {
   const resolveInput = (name) => path.resolve(REPOSITORY_ROOT, options.paths[name] ?? DEFAULT_INPUT_PATHS[name]);
   const [
     discovery,
@@ -1885,6 +1973,8 @@ async function loadFileInputs(options, env) {
     modelAnalysis,
     modelAnalysisReceipt,
     health,
+    healthReport,
+    healthReceipt,
     freshness,
     activeCatalog,
     retired,
@@ -1899,7 +1989,9 @@ async function loadFileInputs(options, env) {
     readJsonSnapshot(resolveInput("candidateGates")),
     options.paths.modelAnalysis ? readJsonSnapshot(resolveInput("modelAnalysis")) : null,
     options.paths.modelAnalysisReceipt ? readJsonSnapshot(resolveInput("modelAnalysisReceipt")) : null,
-    readJsonSnapshot(resolveInput("health")),
+    readHealthArtifactSnapshot(resolveInput("health"), "Proposed health snapshot"),
+    readHealthArtifactSnapshot(resolveInput("healthReport"), "Health report"),
+    readHealthArtifactSnapshot(resolveInput("healthReceipt"), "Health receipt"),
     readOptionalJsonSnapshot(resolveInput("freshness")),
     readJsonSnapshot(resolveInput("activeCatalog")),
     readJsonSnapshot(resolveInput("retired")),
@@ -1912,6 +2004,14 @@ async function loadFileInputs(options, env) {
   ]);
   const sourceDiscoveryArtifact = upstreamArtifacts?.data
     .find((artifact) => artifact?.name === "discovery");
+  const healthArtifact = verifyHealthArtifact({
+    activeCatalog,
+    health,
+    report: healthReport,
+    receipt: healthReceipt,
+    upstreamArtifacts,
+    now,
+  });
   const modelAnalysisVerification = modelAnalysis && sourceDiscoveryArtifact
     ? createModelAnalysisVerification({
       modelAnalysis: modelAnalysis.bytes,
@@ -1945,6 +2045,7 @@ async function loadFileInputs(options, env) {
     policy: policy.data,
     analysisSchema: analysisSchema.data,
     upstreamArtifacts: upstreamArtifacts?.data ?? null,
+    healthArtifact,
     retirementProvenance: retirementProvenance?.data ?? null,
   };
 }
@@ -2017,7 +2118,7 @@ export async function main(
     if (options.trustedRef) input.trustedRef = options.trustedRef;
     if (options.trustedSha) input.trustedSha = options.trustedSha;
   } else {
-    input = await loadFileInputs(options, env);
+    input = await loadFileInputs(options, env, now);
   }
   const result = proposeCatalogChanges(input, { now });
   await writeCatalogProposalArtifacts(options.reportDirectory, result);

@@ -10,6 +10,7 @@ import {
   makePlanInput,
 } from "./build-catalog-change.fixtures.mjs";
 import { hashCanonicalValue } from "./build-catalog-change.mjs";
+import { createHealthPersistenceArtifacts } from "./persist-health.mjs";
 import { emptyAuditLog } from "./write-audit.mjs";
 
 function clone(value) {
@@ -273,6 +274,30 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
     policy: makeEnabledPolicy(),
     retirementProvenance: null,
   };
+}
+
+export function makeHealthArtifactFixture(input, { now = FIXTURE_TIME } = {}) {
+  const healthProducer = input.upstreamArtifacts.find((artifact) => artifact.name === "health");
+  if (!healthProducer) throw new TypeError("input must include a health producer artifact");
+  const prettyJsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  return createHealthPersistenceArtifacts({
+    catalog: input.activeCatalog,
+    catalogBytes: prettyJsonBytes(input.activeCatalog),
+    priorHealth: input.health,
+    priorHealthBytes: prettyJsonBytes(input.health),
+    proposedHealth: input.health,
+    run: {
+      repository: healthProducer.repository,
+      runId: healthProducer.runId,
+      runAttempt: healthProducer.runAttempt,
+      sourceRef: healthProducer.sourceRef,
+      sourceSha: healthProducer.sourceSha,
+      observedAt: input.generatedAt,
+    },
+    summary: {},
+    sources: [],
+    now,
+  });
 }
 
 export function makeDisabledProposalFixture(options) {

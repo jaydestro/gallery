@@ -476,7 +476,8 @@ jobs:
             "gallery-health-" \
             "$HEALTH_RUN_ID" \
             "proposal-inputs/health" \
-            "gallery-health-report.json" || resolution_failed=1
+            "gallery-health-report.json,proposed-gallery-health.json,gallery-health-receipt.json" \
+            "true" || resolution_failed=1
           resolve_artifact \
             "freshness" \
             "evaluate-repository-freshness.yml" \
@@ -599,7 +600,9 @@ jobs:
           }
           discovery="$(single_file proposal-inputs/discovery discovery.json)"
           candidate_gates="$(single_file proposal-inputs/discovery candidate-gates.json)"
-          health="$(single_file proposal-inputs/health gallery-health-report.json)"
+          health="$(single_file proposal-inputs/health proposed-gallery-health.json)"
+          health_report="$(single_file proposal-inputs/health gallery-health-report.json)"
+          health_receipt="$(single_file proposal-inputs/health gallery-health-receipt.json)"
           freshness="$(single_file proposal-inputs/freshness gallery-freshness.json)"
           model_analysis=""
           model_analysis_receipt=""
@@ -613,6 +616,8 @@ jobs:
             --discovery "$discovery"
             --candidate-gates "$candidate_gates"
             --health "$health"
+            --health-report "$health_report"
+            --health-receipt "$health_receipt"
             --freshness "$freshness"
             --active static/templates.json
             --retired static/retired-templates.json

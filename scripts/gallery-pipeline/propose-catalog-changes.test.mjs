@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,9 +28,11 @@ import {
 } from "./propose-catalog-changes.mjs";
 import {
   makeDisabledProposalFixture as makeUnboundDisabledProposalFixture,
+  makeHealthArtifactFixture,
   makePartialProposalFixture as makeUnboundPartialProposalFixture,
   makeProposalFixture as makeUnboundProposalFixture,
 } from "./propose-catalog-changes.fixtures.mjs";
+import { hashHealthBytes } from "./persist-health.mjs";
 import { verifyAuditLog } from "./write-audit.mjs";
 
 const REPOSITORY_POLICY_PATH = fileURLToPath(new URL(
@@ -55,6 +57,27 @@ function clone(value) {
 
 function prettyJsonBytes(value) {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function mutateJsonFile(filePath, mutate) {
+  const value = JSON.parse(await readFile(filePath, "utf8"));
+  mutate(value);
+  await writeFile(filePath, prettyJsonBytes(value));
+}
+
+async function resealHealthProvenance(directory, field, value) {
+  const reportPath = path.join(directory, "gallery-health-report.json");
+  const receiptPath = path.join(directory, "gallery-health-receipt.json");
+  const report = JSON.parse(await readFile(reportPath, "utf8"));
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  report.provenance[field] = value;
+  receipt[field] = value;
+  const reportBytes = prettyJsonBytes(report);
+  receipt.outputs.report.sha256 = hashHealthBytes(reportBytes);
+  await Promise.all([
+    writeFile(reportPath, reportBytes),
+    writeFile(receiptPath, prettyJsonBytes(receipt)),
+  ]);
 }
 
 function modelVerification(input) {
@@ -381,12 +404,12 @@ test("rejects tampered model reports and receipts as one failed producer", () =>
 test("CLI recomputes model receipt hashes from the actual input file bytes", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "gallery-proposal-receipt-inputs-"));
   const input = makeProposalFixture({ candidateCount: 1 });
+  const healthArtifacts = makeHealthArtifactFixture(input, { now: FIXTURE_NOW });
   const fileValues = {
     "discovery.json": input.discovery,
     "candidate-gates.json": input.candidateGates,
     "model-analysis.json": input.modelAnalysis,
     "model-analysis-receipt.json": input.modelAnalysisReceipt,
-    "health.json": input.health,
     "freshness.json": input.freshness,
     "active.json": input.activeCatalog,
     "retired.json": input.retired,
@@ -403,7 +426,9 @@ test("CLI recomputes model receipt hashes from the actual input file bytes", asy
     "--candidate-gates", filePath("candidate-gates.json"),
     "--model-analysis", filePath("model-analysis.json"),
     "--model-analysis-receipt", filePath("model-analysis-receipt.json"),
-    "--health", filePath("health.json"),
+    "--health", filePath("proposed-gallery-health.json"),
+    "--health-report", filePath("gallery-health-report.json"),
+    "--health-receipt", filePath("gallery-health-receipt.json"),
     "--freshness", filePath("freshness.json"),
     "--active", filePath("active.json"),
     "--retired", filePath("retired.json"),
@@ -423,6 +448,9 @@ test("CLI recomputes model receipt hashes from the actual input file bytes", asy
   try {
     await Promise.all(Object.entries(fileValues).map(([name, value]) => (
       writeFile(filePath(name), prettyJsonBytes(value))
+    )));
+    await Promise.all(Object.entries(healthArtifacts.artifactBytes).map(([name, bytes]) => (
+      writeFile(filePath(name), bytes)
     )));
     const verified = await main(argumentsFor(filePath("verified")), {
       stdout: { write() {} },
@@ -445,6 +473,291 @@ test("CLI recomputes model receipt hashes from the actual input file bytes", asy
       "MODEL_ANALYSIS_RECEIPT_INVALID",
     ]);
     assert.equal(tampered.result.report.summary.operations, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI consumes the live three-file health artifact and blocks cleanly when policy is disabled", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "gallery-proposal-live-health-"));
+  const input = makeDisabledProposalFixture({ candidateCount: 1 });
+  input.policy = repositoryPolicy;
+  const healthArtifacts = makeHealthArtifactFixture(input, { now: FIXTURE_NOW });
+  assert.equal(healthArtifacts.report.entries, undefined);
+  assert.throws(() => proposeCatalogChanges({
+    ...input,
+    health: healthArtifacts.report,
+  }, { now: FIXTURE_NOW }), (error) => (
+    error instanceof CatalogProposalError &&
+    error.code === "INPUT_INVALID" &&
+    /health\.entries/.test(error.message)
+  ));
+  const filePath = (name) => path.join(root, name);
+  const fileValues = {
+    "discovery.json": input.discovery,
+    "candidate-gates.json": input.candidateGates,
+    "freshness.json": input.freshness,
+    "active.json": input.activeCatalog,
+    "retired.json": input.retired,
+    "audit.json": input.audit,
+    "exemptions.json": input.exemptions,
+    "policy.json": input.policy,
+    "analysis-schema.json": input.analysisSchema,
+    "upstream-artifacts.json": input.upstreamArtifacts,
+  };
+
+  try {
+    await Promise.all(Object.entries(fileValues).map(([name, value]) => (
+      writeFile(filePath(name), prettyJsonBytes(value))
+    )));
+    await Promise.all(Object.entries(healthArtifacts.artifactBytes).map(([name, bytes]) => (
+      writeFile(filePath(name), bytes)
+    )));
+    const outcome = await main([
+      "--report-directory", filePath("proposal"),
+      "--discovery", filePath("discovery.json"),
+      "--candidate-gates", filePath("candidate-gates.json"),
+      "--health", filePath("proposed-gallery-health.json"),
+      "--health-report", filePath("gallery-health-report.json"),
+      "--health-receipt", filePath("gallery-health-receipt.json"),
+      "--freshness", filePath("freshness.json"),
+      "--active", filePath("active.json"),
+      "--retired", filePath("retired.json"),
+      "--audit", filePath("audit.json"),
+      "--exemptions", filePath("exemptions.json"),
+      "--policy", filePath("policy.json"),
+      "--analysis-schema", filePath("analysis-schema.json"),
+      "--upstream-artifacts", filePath("upstream-artifacts.json"),
+      "--run-id", input.runId,
+      "--generated-at", input.generatedAt,
+      "--workflow-started-at", input.workflowStartedAt,
+      "--trusted-repository", input.trustedRepository,
+      "--trusted-ref", input.trustedRef,
+      "--trusted-sha", input.trustedSha,
+    ], {
+      stdout: { write() {} },
+      env: {},
+      now: FIXTURE_NOW,
+    });
+
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(outcome.result.report.status, "blocked");
+    assert.equal(outcome.result.report.summary.plans, 0);
+    assert.equal(outcome.result.report.summary.operations, 0);
+    assert.deepEqual(outcome.result.proposedState.health, healthArtifacts.proposedHealth);
+    assert.deepEqual(outcome.result.receipt.healthArtifact, {
+      report: healthArtifacts.receipt.outputs.report,
+      proposedHealth: healthArtifacts.receipt.outputs.proposedHealth,
+      receipt: {
+        path: "gallery-health-receipt.json",
+        sha256: hashHealthBytes(healthArtifacts.artifactBytes["gallery-health-receipt.json"]),
+      },
+    });
+    validateCatalogProposalReport(outcome.result.report);
+    validateCatalogProposalReceipt(outcome.result.receipt);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects missing, tampered, and mismatched live health artifacts", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "gallery-proposal-health-tamper-"));
+  const input = makeDisabledProposalFixture({ candidateCount: 1 });
+  input.policy = repositoryPolicy;
+  const healthArtifacts = makeHealthArtifactFixture(input, { now: FIXTURE_NOW });
+  const healthFile = (directory, name) => path.join(directory, name);
+  const rewriteReport = async (directory, mutate) => {
+    const reportPath = healthFile(directory, "gallery-health-report.json");
+    const receiptPath = healthFile(directory, "gallery-health-receipt.json");
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    mutate(report);
+    const reportBytes = prettyJsonBytes(report);
+    receipt.outputs.report.sha256 = hashHealthBytes(reportBytes);
+    await Promise.all([
+      writeFile(reportPath, reportBytes),
+      writeFile(receiptPath, prettyJsonBytes(receipt)),
+    ]);
+  };
+  const definitions = [
+    {
+      name: "missing report",
+      mutate: (directory) => rm(healthFile(directory, "gallery-health-report.json")),
+    },
+    {
+      name: "missing proposed state",
+      mutate: (directory) => rm(healthFile(directory, "proposed-gallery-health.json")),
+    },
+    {
+      name: "missing receipt",
+      mutate: (directory) => rm(healthFile(directory, "gallery-health-receipt.json")),
+    },
+    {
+      name: "malformed receipt",
+      mutate: (directory) => writeFile(healthFile(directory, "gallery-health-receipt.json"), "{")
+    },
+    {
+      name: "unexpected receipt field",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.untrusted = true; },
+      ),
+    },
+    {
+      name: "receipt report path",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.outputs.report.path = "other.json"; },
+      ),
+    },
+    {
+      name: "report raw bytes",
+      mutate: async (directory) => {
+        const reportPath = healthFile(directory, "gallery-health-report.json");
+        await writeFile(reportPath, Buffer.concat([await readFile(reportPath), Buffer.from(" ")]));
+      },
+    },
+    {
+      name: "proposed state raw bytes",
+      mutate: async (directory) => {
+        const proposedPath = healthFile(directory, "proposed-gallery-health.json");
+        await writeFile(proposedPath, Buffer.concat([await readFile(proposedPath), Buffer.from(" ")]));
+      },
+    },
+    {
+      name: "report output hash",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.outputs.report.sha256 = `sha256:${"0".repeat(64)}`; },
+      ),
+    },
+    {
+      name: "proposed state output hash",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.outputs.proposedHealth.sha256 = `sha256:${"0".repeat(64)}`; },
+      ),
+    },
+    {
+      name: "active catalog raw bytes",
+      mutate: async (directory) => {
+        const activePath = path.join(directory, "active.json");
+        await writeFile(activePath, Buffer.concat([await readFile(activePath), Buffer.from(" ")]));
+      },
+    },
+    {
+      name: "catalog input hash",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.inputs.catalog.sha256 = `sha256:${"0".repeat(64)}`; },
+      ),
+    },
+    {
+      name: "receipt mode",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.mode = "write"; },
+      ),
+    },
+    {
+      name: "receipt mutation flag",
+      mutate: (directory) => mutateJsonFile(
+        healthFile(directory, "gallery-health-receipt.json"),
+        (receipt) => { receipt.mutationPerformed = true; },
+      ),
+    },
+    {
+      name: "report mode",
+      mutate: (directory) => rewriteReport(directory, (report) => { report.mode = "write"; }),
+    },
+    {
+      name: "report mutation flag",
+      mutate: (directory) => rewriteReport(
+        directory,
+        (report) => { report.mutationPerformed = true; },
+      ),
+    },
+    {
+      name: "report proposed-state binding",
+      mutate: (directory) => rewriteReport(
+        directory,
+        (report) => { report.healthSnapshot.entries = []; },
+      ),
+    },
+    {
+      name: "report input binding",
+      mutate: (directory) => rewriteReport(directory, (report) => {
+        report.provenance.inputs.catalog.sha256 = `sha256:${"0".repeat(64)}`;
+      }),
+    },
+    ...[
+      ["repository", "attacker/gallery"],
+      ["runId", "9999"],
+      ["runAttempt", 2],
+      ["sourceRef", "refs/heads/other"],
+      ["sourceSha", "f".repeat(40)],
+    ].map(([field, value]) => ({
+      name: `re-sealed producer ${field}`,
+      mutate: (directory) => resealHealthProvenance(directory, field, value),
+    })),
+  ];
+
+  try {
+    for (const [index, definition] of definitions.entries()) {
+      await t.test(definition.name, async () => {
+        const directory = path.join(root, `case-${String(index).padStart(2, "0")}`);
+        await mkdir(directory);
+        const fileValues = {
+          "discovery.json": input.discovery,
+          "candidate-gates.json": input.candidateGates,
+          "freshness.json": input.freshness,
+          "active.json": input.activeCatalog,
+          "retired.json": input.retired,
+          "audit.json": input.audit,
+          "exemptions.json": input.exemptions,
+          "policy.json": input.policy,
+          "analysis-schema.json": input.analysisSchema,
+          "upstream-artifacts.json": input.upstreamArtifacts,
+        };
+        await Promise.all([
+          ...Object.entries(fileValues).map(([name, value]) => (
+            writeFile(path.join(directory, name), prettyJsonBytes(value))
+          )),
+          ...Object.entries(healthArtifacts.artifactBytes).map(([name, bytes]) => (
+            writeFile(path.join(directory, name), bytes)
+          )),
+        ]);
+        await definition.mutate(directory);
+        await assert.rejects(main([
+          "--report-directory", path.join(directory, "proposal"),
+          "--discovery", path.join(directory, "discovery.json"),
+          "--candidate-gates", path.join(directory, "candidate-gates.json"),
+          "--health", path.join(directory, "proposed-gallery-health.json"),
+          "--health-report", path.join(directory, "gallery-health-report.json"),
+          "--health-receipt", path.join(directory, "gallery-health-receipt.json"),
+          "--freshness", path.join(directory, "freshness.json"),
+          "--active", path.join(directory, "active.json"),
+          "--retired", path.join(directory, "retired.json"),
+          "--audit", path.join(directory, "audit.json"),
+          "--exemptions", path.join(directory, "exemptions.json"),
+          "--policy", path.join(directory, "policy.json"),
+          "--analysis-schema", path.join(directory, "analysis-schema.json"),
+          "--upstream-artifacts", path.join(directory, "upstream-artifacts.json"),
+          "--run-id", input.runId,
+          "--generated-at", input.generatedAt,
+          "--workflow-started-at", input.workflowStartedAt,
+          "--trusted-repository", input.trustedRepository,
+          "--trusted-ref", input.trustedRef,
+          "--trusted-sha", input.trustedSha,
+        ], {
+          stdout: { write() {} },
+          env: {},
+          now: FIXTURE_NOW,
+        }), (error) => (
+          error instanceof CatalogProposalError && error.code === "HEALTH_ARTIFACT_INVALID"
+        ));
+      });
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -487,6 +800,13 @@ test("proposal workflow selects only exact same-repository ref and SHA artifacts
   assert.match(workflow, /--trusted-ref/);
   assert.match(workflow, /--workflow-started-at/);
   assert.match(workflow, /--analysis-schema/);
+  assert.match(
+    workflow,
+    /"gallery-health-report\.json,proposed-gallery-health\.json,gallery-health-receipt\.json"\s*\\\n\s*"true"/,
+  );
+  assert.match(workflow, /health="\$\(single_file proposal-inputs\/health proposed-gallery-health\.json\)"/);
+  assert.match(workflow, /--health-report "\$health_report"/);
+  assert.match(workflow, /--health-receipt "\$health_receipt"/);
   assert.match(workflow, /if: always\(\)/);
 
   const verification = workflow.indexOf(
