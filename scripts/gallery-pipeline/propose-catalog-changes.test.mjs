@@ -17,16 +17,18 @@ import {
 } from "./build-catalog-change.fixtures.mjs";
 import {
   CatalogProposalError,
+  createModelAnalysisVerification,
   createModelAnalysisReceipt,
+  expectedModelAnalysisConfigurationHashes,
   main,
   proposeCatalogChanges,
   validateCatalogProposalReceipt,
   validateCatalogProposalReport,
 } from "./propose-catalog-changes.mjs";
 import {
-  makeDisabledProposalFixture,
-  makePartialProposalFixture,
-  makeProposalFixture,
+  makeDisabledProposalFixture as makeUnboundDisabledProposalFixture,
+  makePartialProposalFixture as makeUnboundPartialProposalFixture,
+  makeProposalFixture as makeUnboundProposalFixture,
 } from "./propose-catalog-changes.fixtures.mjs";
 import { verifyAuditLog } from "./write-audit.mjs";
 
@@ -38,11 +40,63 @@ const PROPOSAL_WORKFLOW_PATH = fileURLToPath(new URL(
   "../../.github/workflows/propose-gallery-changes.yml",
   import.meta.url,
 ));
+const ANALYSIS_SCHEMA_PATH = fileURLToPath(new URL(
+  "../../.github/gallery-pipeline/analysis.schema.json",
+  import.meta.url,
+));
 const repositoryPolicy = JSON.parse(await readFile(REPOSITORY_POLICY_PATH, "utf8"));
+const repositoryAnalysisSchema = JSON.parse(await readFile(ANALYSIS_SCHEMA_PATH, "utf8"));
 const FIXTURE_NOW = "2026-08-27T12:05:00.000Z";
 
 function clone(value) {
   return structuredClone(value);
+}
+
+function prettyJsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function modelVerification(input) {
+  const sourceDiscoveryArtifact = input.upstreamArtifacts
+    .find((artifact) => artifact?.name === "discovery");
+  return createModelAnalysisVerification({
+    modelAnalysis: prettyJsonBytes(input.modelAnalysis),
+    discovery: prettyJsonBytes(input.discovery),
+    candidateGates: prettyJsonBytes(input.candidateGates),
+    activeCatalog: prettyJsonBytes(input.activeCatalog),
+    retiredCatalog: prettyJsonBytes(input.retired),
+    policy: prettyJsonBytes(input.policy),
+    analysisSchema: prettyJsonBytes(input.analysisSchema),
+    sourceDiscoveryArtifact: prettyJsonBytes(sourceDiscoveryArtifact),
+  });
+}
+
+function bindModelAnalysis(input) {
+  input.analysisSchema = clone(repositoryAnalysisSchema);
+  if (!input.modelAnalysis) {
+    input.modelAnalysisVerification = null;
+    return input;
+  }
+  Object.assign(
+    input.modelAnalysis.configuration,
+    expectedModelAnalysisConfigurationHashes(input),
+  );
+  input.modelAnalysis.fileHashes = modelVerification(input).fileHashes;
+  input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
+  input.modelAnalysisVerification = modelVerification(input);
+  return input;
+}
+
+function makeProposalFixture(options) {
+  return bindModelAnalysis(makeUnboundProposalFixture(options));
+}
+
+function makePartialProposalFixture(options) {
+  return bindModelAnalysis(makeUnboundPartialProposalFixture(options));
+}
+
+function makeDisabledProposalFixture(options) {
+  return bindModelAnalysis(makeUnboundDisabledProposalFixture(options));
 }
 
 function ledgerEntry(result, subjectType, subjectId) {
@@ -68,8 +122,19 @@ function retargetFirstCandidateForUpdate(input, target) {
   input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
 }
 
-function proposeFixture(input) {
-  return proposeCatalogChanges(input, { now: FIXTURE_NOW });
+function proposeFixture(input, { preserveModelBindings = false } = {}) {
+  const cloneableInput = { ...input };
+  delete cloneableInput.aiClient;
+  const executionInput = clone(cloneableInput);
+  if (input.aiClient) executionInput.aiClient = input.aiClient;
+  if (executionInput.modelAnalysis) {
+    if (preserveModelBindings) {
+      executionInput.modelAnalysisVerification = modelVerification(executionInput);
+    } else {
+      bindModelAnalysis(executionInput);
+    }
+  }
+  return proposeCatalogChanges(executionInput, { now: FIXTURE_NOW });
 }
 
 test("requires an explicit current run timestamp after all evidence and within the workflow window", () => {
@@ -149,10 +214,174 @@ test("requires exact upstream producer provenance and persists it in the proposa
   }
 });
 
-test("proposal workflow selects only exact same-repository ref and SHA artifacts", async () => {
-  const workflow = await readFile(PROPOSAL_WORKFLOW_PATH, "utf8");
+test("rejects tampered model reports and receipts as one failed producer", () => {
+  const cases = [
+    ...[
+      "discovery",
+      "candidateGates",
+      "activeCatalog",
+      "retiredCatalog",
+      "policy",
+      "analysisSchema",
+      "sourceDiscoveryArtifact",
+    ].map((name, index) => ({
+      name: `${name} input file hash`,
+      reseal: true,
+      mutate(input) {
+        input.modelAnalysis.fileHashes[name] = `sha256:${String(index).repeat(64)}`;
+      },
+    })),
+    ...["promptHash", "schemaHash", "policyHash", "catalogHash"].map((name, index) => ({
+      name: `${name} recomputation`,
+      reseal: true,
+      mutate(input) {
+        input.modelAnalysis.configuration[name] = `sha256:${String(index + 4).repeat(64)}`;
+      },
+    })),
+    {
+      name: "discovery artifact binding",
+      reseal: true,
+      mutate(input) {
+        input.modelAnalysis.provenance.sourceDiscoveryArtifact.digest = `sha256:${"f".repeat(64)}`;
+      },
+    },
+    {
+      name: "model producer binding",
+      reseal: true,
+      mutate(input) { input.modelAnalysis.provenance.runId = "9999"; },
+    },
+    {
+      name: "eligible set hash",
+      reseal: true,
+      mutate(input) { input.modelAnalysis.eligibleSet.hash = `sha256:${"e".repeat(64)}`; },
+    },
+    {
+      name: "duplicate analysis",
+      reseal: true,
+      mutate(input) { input.modelAnalysis.analyses[1] = clone(input.modelAnalysis.analyses[0]); },
+    },
+    {
+      name: "extra analysis",
+      reseal: true,
+      mutate(input) {
+        input.modelAnalysis.analyses.push({
+          ...clone(input.modelAnalysis.analyses[0]),
+          candidateId: "learn-document:extra",
+        });
+      },
+    },
+    {
+      name: "raw report hash",
+      mutate(input) { input.modelAnalysisReceipt.reportFileHash = `sha256:${"0".repeat(64)}`; },
+    },
+    {
+      name: "canonical report fingerprint",
+      mutate(input) { input.modelAnalysisReceipt.reportFingerprint = `sha256:${"0".repeat(64)}`; },
+    },
+    {
+      name: "unexpected receipt data",
+      mutate(input) { input.modelAnalysisReceipt.token = "must-not-be-accepted"; },
+    },
+  ];
 
-  for (const input of ["discovery_run_id", "health_run_id", "freshness_run_id"]) {
+  for (const definition of cases) {
+    const input = makeProposalFixture({ candidateCount: 2 });
+    definition.mutate(input);
+    if (definition.reseal) {
+      input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
+    }
+    const result = proposeFixture(input, { preserveModelBindings: true });
+    assert.equal(result.report.status, "blocked", definition.name);
+    assert.equal(result.report.summary.operations, 0, definition.name);
+    assert.deepEqual(
+      result.report.stage.reasonCodes,
+      ["MODEL_ANALYSIS_RECEIPT_INVALID"],
+      definition.name,
+    );
+  }
+});
+
+test("CLI recomputes model receipt hashes from the actual input file bytes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "gallery-proposal-receipt-inputs-"));
+  const input = makeProposalFixture({ candidateCount: 1 });
+  const fileValues = {
+    "discovery.json": input.discovery,
+    "candidate-gates.json": input.candidateGates,
+    "model-analysis.json": input.modelAnalysis,
+    "model-analysis-receipt.json": input.modelAnalysisReceipt,
+    "health.json": input.health,
+    "freshness.json": input.freshness,
+    "active.json": input.activeCatalog,
+    "retired.json": input.retired,
+    "audit.json": input.audit,
+    "exemptions.json": input.exemptions,
+    "policy.json": input.policy,
+    "analysis-schema.json": input.analysisSchema,
+    "upstream-artifacts.json": input.upstreamArtifacts,
+  };
+  const filePath = (name) => path.join(root, name);
+  const argumentsFor = (reportDirectory) => [
+    "--report-directory", reportDirectory,
+    "--discovery", filePath("discovery.json"),
+    "--candidate-gates", filePath("candidate-gates.json"),
+    "--model-analysis", filePath("model-analysis.json"),
+    "--model-analysis-receipt", filePath("model-analysis-receipt.json"),
+    "--health", filePath("health.json"),
+    "--freshness", filePath("freshness.json"),
+    "--active", filePath("active.json"),
+    "--retired", filePath("retired.json"),
+    "--audit", filePath("audit.json"),
+    "--exemptions", filePath("exemptions.json"),
+    "--policy", filePath("policy.json"),
+    "--analysis-schema", filePath("analysis-schema.json"),
+    "--upstream-artifacts", filePath("upstream-artifacts.json"),
+    "--run-id", input.runId,
+    "--generated-at", input.generatedAt,
+    "--workflow-started-at", input.workflowStartedAt,
+    "--trusted-repository", input.trustedRepository,
+    "--trusted-ref", input.trustedRef,
+    "--trusted-sha", input.trustedSha,
+  ];
+
+  try {
+    await Promise.all(Object.entries(fileValues).map(([name, value]) => (
+      writeFile(filePath(name), prettyJsonBytes(value))
+    )));
+    const verified = await main(argumentsFor(filePath("verified")), {
+      stdout: { write() {} },
+      env: {},
+      now: FIXTURE_NOW,
+    });
+    assert.equal(verified.result.report.status, "complete");
+
+    await writeFile(
+      filePath("discovery.json"),
+      `${JSON.stringify(input.discovery, null, 2)} \n`,
+    );
+    const tampered = await main(argumentsFor(filePath("tampered")), {
+      stdout: { write() {} },
+      env: {},
+      now: FIXTURE_NOW,
+    });
+    assert.equal(tampered.result.report.status, "blocked");
+    assert.deepEqual(tampered.result.report.stage.reasonCodes, [
+      "MODEL_ANALYSIS_RECEIPT_INVALID",
+    ]);
+    assert.equal(tampered.result.report.summary.operations, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("proposal workflow selects only exact same-repository ref and SHA artifacts", async () => {
+  const workflow = (await readFile(PROPOSAL_WORKFLOW_PATH, "utf8")).replaceAll("\r\n", "\n");
+
+  for (const input of [
+    "discovery_run_id",
+    "health_run_id",
+    "freshness_run_id",
+    "model_analysis_run_id",
+  ]) {
     assert.match(workflow, new RegExp(`^      ${input}:\\r?$`, "m"));
   }
   assert.match(workflow, /^permissions:\r?\n  contents: read\r?\n  actions: read\r?$/m);
@@ -180,7 +409,42 @@ test("proposal workflow selects only exact same-repository ref and SHA artifacts
   assert.match(workflow, /--trusted-sha/);
   assert.match(workflow, /--trusted-ref/);
   assert.match(workflow, /--workflow-started-at/);
+  assert.match(workflow, /--analysis-schema/);
   assert.match(workflow, /if: always\(\)/);
+
+  const verification = workflow.indexOf(
+    "      - name: Verify trusted default-branch SHA and discovery artifact metadata",
+  );
+  const checkout = workflow.indexOf("      - name: Check out exact verified default-branch SHA");
+  const setup = workflow.indexOf("      - name: Set up Node.js");
+  const install = workflow.indexOf("      - name: Install dependencies");
+  const resolution = workflow.indexOf("      - name: Resolve and verify exact upstream artifacts");
+  const proposal = workflow.indexOf("      - name: Generate report-only catalog proposals");
+  for (const [name, index] of Object.entries({
+    verification,
+    checkout,
+    setup,
+    install,
+    resolution,
+    proposal,
+  })) {
+    assert.notEqual(index, -1, `Missing ${name} workflow step`);
+  }
+  assert(verification < checkout);
+  assert(checkout < setup);
+  assert(setup < install);
+  assert(install < resolution);
+  assert(resolution < proposal);
+  const trustedShell = workflow.slice(verification, checkout);
+  assert.match(trustedShell, /gh api "repos\/\$\{GH_REPO\}"/);
+  assert.match(trustedShell, /branches\/\$\{encoded_branch\}/);
+  assert.match(trustedShell, /gallery-discovery-\$\{discovery_run_id\}-\$\{discovery_run_attempt\}/);
+  assert.match(trustedShell, /\.digest \| test\("\^sha256:/);
+  assert.doesNotMatch(trustedShell, /^\s*(?:node|npm|git)\s/m);
+  assert.match(
+    workflow.slice(checkout, setup),
+    /ref: \$\{\{ steps\.trust\.outputs\.trusted_sha \}\}/,
+  );
 });
 
 function retirementProvenance() {
@@ -497,18 +761,15 @@ test("partial or indeterminate upstream reports yield evidence reports and zero 
   assert.deepEqual(indeterminateResult.proposedState.audit, indeterminate.audit);
 });
 
-test("rejects only candidates missing precomputed analysis or required publication facts", () => {
+test("fails the model artifact closed for missing analysis and rejects missing publication facts", () => {
   const missingAnalysis = makeProposalFixture({ candidateCount: 3 });
-  const removedAnalysis = missingAnalysis.modelAnalysis.analyses.pop();
+  missingAnalysis.modelAnalysis.analyses.pop();
   missingAnalysis.modelAnalysisReceipt = createModelAnalysisReceipt(missingAnalysis.modelAnalysis);
   const analysisResult = proposeFixture(missingAnalysis);
-  assert.equal(analysisResult.report.status, "complete");
-  assert.equal(analysisResult.report.summary.operations, 2);
-  assert.equal(analysisResult.report.summary.rejectedCandidates, 1);
-  assert.deepEqual(
-    ledgerEntry(analysisResult, "candidate", removedAnalysis.candidateId).reasonCodes,
-    ["MODEL_ANALYSIS_MISSING"],
-  );
+  assert.equal(analysisResult.report.status, "blocked");
+  assert.equal(analysisResult.report.summary.operations, 0);
+  assert.equal(analysisResult.report.summary.rejectedCandidates, 3);
+  assert.deepEqual(analysisResult.report.stage.reasonCodes, ["MODEL_ANALYSIS_RECEIPT_INVALID"]);
 
   const missingFacts = makeProposalFixture({ candidateCount: 3 });
   const candidateId = missingFacts.discovery.candidates[0].identityKey;
@@ -618,8 +879,6 @@ test("orders operations canonically and sequential proposals replay idempotently
   const reordered = clone(input);
   reordered.discovery.candidates.reverse();
   reordered.candidateGates.eligible.reverse();
-  reordered.modelAnalysis.analyses.reverse();
-  reordered.modelAnalysisReceipt = createModelAnalysisReceipt(reordered.modelAnalysis);
   reordered.health.entries.reverse();
   reordered.freshness.entries.reverse();
   reordered.freshness.healthSnapshot.entries.reverse();

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   FIXTURE_TIME,
   makeAnalysis,
@@ -34,8 +36,16 @@ function proposalCandidate(number) {
 function modelAnalysisReceipt(modelAnalysis) {
   return {
     schemaVersion: "1.0.0",
-    reportFingerprint: hashCanonicalValue(modelAnalysis),
+    reportFile: "model-analysis.json",
+    reportFileHash: `sha256:${createHash("sha256")
+      .update(`${JSON.stringify(modelAnalysis, null, 2)}\n`)
+      .digest("hex")}`,
+    reportFingerprint: `sha256:${hashCanonicalValue(modelAnalysis)}`,
     analysisCount: modelAnalysis.analyses.length,
+    eligibleSet: clone(modelAnalysis.eligibleSet),
+    provenance: clone(modelAnalysis.provenance),
+    configuration: clone(modelAnalysis.configuration),
+    fileHashes: clone(modelAnalysis.fileHashes),
   };
 }
 
@@ -74,6 +84,7 @@ function upstreamArtifact(name, workflowPath, runId, artifactId, digestCharacter
     discovery: "gallery-discovery-",
     health: "gallery-health-",
     freshness: "gallery-freshness-",
+    modelAnalysis: "gallery-candidate-analysis-",
   }[name];
   return {
     name,
@@ -98,11 +109,79 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
     makeHealthEntry(record.id, record.canonicalSource)
   ));
   const freshnessEntries = healthEntries.map((entry) => makeFreshnessEntry(entry));
+  const upstreamArtifacts = [
+    upstreamArtifact(
+      "discovery",
+      ".github/workflows/discover-content.yml",
+      "1001",
+      "2001",
+      "a",
+    ),
+    upstreamArtifact(
+      "health",
+      ".github/workflows/scan-gallery-health.yml",
+      "1002",
+      "2002",
+      "b",
+    ),
+    upstreamArtifact(
+      "freshness",
+      ".github/workflows/evaluate-repository-freshness.yml",
+      "1003",
+      "2003",
+      "c",
+    ),
+    upstreamArtifact(
+      "modelAnalysis",
+      ".github/workflows/analyze-gallery-candidates.yml",
+      "1004",
+      "2004",
+      "d",
+    ),
+  ];
+  const eligibleIds = candidates.map((candidate) => candidate.identityKey)
+    .sort((left, right) => left.localeCompare(right));
+  const modelArtifact = upstreamArtifacts.find((entry) => entry.name === "modelAnalysis");
   const modelAnalysis = {
     schemaVersion: "1.0.0",
-    mode: "precomputed",
+    mode: "live-candidate-analysis",
+    mutationPerformed: false,
     status: "complete",
     generatedAt: FIXTURE_TIME,
+    provenance: {
+      repository: modelArtifact.repository,
+      workflowId: modelArtifact.workflowId,
+      workflowPath: modelArtifact.workflowPath,
+      runId: modelArtifact.runId,
+      runAttempt: modelArtifact.runAttempt,
+      sourceRef: modelArtifact.sourceRef,
+      sourceSha: modelArtifact.sourceSha,
+      sourceDiscoveryArtifact: clone(upstreamArtifacts.find((entry) => entry.name === "discovery")),
+    },
+    configuration: {
+      endpointOriginHash: `sha256:${"1".repeat(64)}`,
+      deploymentId: "fixture-gallery-model",
+      apiMode: "responses",
+      apiVersion: "v1",
+      promptHash: `sha256:${"2".repeat(64)}`,
+      schemaHash: `sha256:${"3".repeat(64)}`,
+      policyHash: `sha256:${"4".repeat(64)}`,
+      catalogHash: `sha256:${"5".repeat(64)}`,
+    },
+    fileHashes: {
+      discovery: `sha256:${"6".repeat(64)}`,
+      candidateGates: `sha256:${"7".repeat(64)}`,
+      activeCatalog: `sha256:${"8".repeat(64)}`,
+      retiredCatalog: `sha256:${"9".repeat(64)}`,
+      policy: `sha256:${"a".repeat(64)}`,
+      analysisSchema: `sha256:${"b".repeat(64)}`,
+      sourceDiscoveryArtifact: `sha256:${"c".repeat(64)}`,
+    },
+    eligibleSet: {
+      count: eligibleIds.length,
+      candidateIds: eligibleIds,
+      hash: `sha256:${hashCanonicalValue(eligibleIds)}`,
+    },
     analyses: candidates.map((candidate) => makeAnalysis(candidate, "publish")),
   };
   return {
@@ -112,29 +191,7 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
     trustedRepository: "example/gallery",
     trustedRef: "refs/heads/main",
     trustedSha: "0123456789abcdef0123456789abcdef01234567",
-    upstreamArtifacts: [
-      upstreamArtifact(
-        "discovery",
-        ".github/workflows/discover-content.yml",
-        "1001",
-        "2001",
-        "a",
-      ),
-      upstreamArtifact(
-        "health",
-        ".github/workflows/scan-gallery-health.yml",
-        "1002",
-        "2002",
-        "b",
-      ),
-      upstreamArtifact(
-        "freshness",
-        ".github/workflows/evaluate-repository-freshness.yml",
-        "1003",
-        "2003",
-        "c",
-      ),
-    ],
+    upstreamArtifacts,
     discovery: {
       schemaVersion: "1.0.0",
       mode: "dry-run",
@@ -218,6 +275,8 @@ export function makeDisabledProposalFixture(options) {
   }
   fixture.modelAnalysis = null;
   fixture.modelAnalysisReceipt = null;
+  fixture.upstreamArtifacts = fixture.upstreamArtifacts
+    .filter((artifact) => artifact.name !== "modelAnalysis");
   return fixture;
 }
 

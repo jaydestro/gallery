@@ -8,6 +8,7 @@ const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIRECTORY = path.resolve(TEST_DIRECTORY, "../..");
 const WORKFLOW_DIRECTORY = path.join(ROOT_DIRECTORY, ".github", "workflows");
 const WORKFLOW_FILES = [
+  "analyze-gallery-candidates.yml",
   "deploy.yml",
   "evaluate-pipeline-policy.yml",
   "propose-gallery-changes.yml",
@@ -139,9 +140,62 @@ test("policy pull requests run only the secretless deterministic evaluation", as
   assert.doesNotMatch(workflow, /\$\{\{\s*secrets\./);
 });
 
+test("live candidate analysis is trusted, protected, least-privilege, and token-safe", async () => {
+  const workflow = await readWorkflow("analyze-gallery-candidates.yml");
+  const triggers = yamlSection(workflow, "on");
+  const dispatch = yamlSection(triggers, "workflow_dispatch", 2);
+  const input = yamlSection(dispatch, "discovery_run_id", 6);
+  const analyzeJob = yamlSection(workflow, "analyze", 2);
+  const permissions = yamlSection(analyzeJob, "permissions", 4);
+
+  assert.doesNotMatch(triggers, /schedule:|push:|pull_request|workflow_run:/);
+  assert.match(input, /^        required:\s*true\s*$/m);
+  assert.match(workflow, /^permissions:\s*\{\}\s*$/m);
+  assert.match(analyzeJob, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(
+    analyzeJob,
+    /github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\)/,
+  );
+  assert.match(analyzeJob, /github\.repository == github\.event\.repository\.full_name/);
+  assert.match(analyzeJob, /^    environment:\s*gallery-candidate-analysis\s*$/m);
+  assert.match(permissions, /^      contents:\s*read\s*$/m);
+  assert.match(permissions, /^      actions:\s*read\s*$/m);
+  assert.match(permissions, /^      id-token:\s*write\s*$/m);
+  assert.equal(workflow.match(/^\s+id-token:\s*write\s*$/gm)?.length, 1);
+  assert.doesNotMatch(workflow, /\$\{\{\s*secrets\.|pull_request_target|gh run download|GITHUB_ENV/);
+  assert.match(workflow, /\.repository\.full_name/);
+  assert.match(workflow, /\.head_repository\.full_name/);
+  assert.match(workflow, /\.workflow_id/);
+  assert.match(workflow, /\.path == "\.github\/workflows\/discover-content\.yml"/);
+  assert.match(workflow, /\.head_branch/);
+  assert.match(workflow, /\.head_sha/);
+  assert.match(workflow, /\.run_attempt/);
+  assert.match(workflow, /\.conclusion == "success"/);
+  assert.match(workflow, /actions\/artifacts\/\$\{artifact_id\}\/zip/);
+  assert.match(workflow, /sha256sum/);
+  assert.match(workflow, /zipinfo -1/);
+  assert.match(workflow, /expected_entries=\("candidate-gates\.json" "discovery\.json"\)/);
+  assert.match(workflow, /\[ ! -f "\$report_path" \] \|\| \[ -L "\$report_path" \]/);
+  assert.match(workflow, /\.status == "complete"/);
+  assert.match(workflow, /all\(\.automation\.ai\[\]; \. == true\)/);
+  assert.match(workflow, /--resource "https:\/\/cognitiveservices\.azure\.com\/"/);
+  assert.match(workflow, /echo "::add-mask::\$token"/);
+  assert.match(workflow, /AZURE_OPENAI_BEARER_TOKEN="\$token" npm run gallery:analyze:candidates/);
+  assert.doesNotMatch(workflow, /AZURE_OPENAI_BEARER_TOKEN:\s*\$\{\{/);
+  assert.match(workflow, /model-analysis\.json/);
+  assert.match(workflow, /model-analysis-receipt\.json/);
+  assert.doesNotMatch(
+    workflow,
+    /gallery:evaluate:model|labels\.json|evaluation-set|fixtures\/model-evaluation/,
+  );
+});
+
 test("gallery proposal verification always publishes token-safe diagnostics", async () => {
   const workflow = await readWorkflow("propose-gallery-changes.yml");
   const normalizedWorkflow = workflow.replaceAll("\r\n", "\n");
+  const triggers = yamlSection(normalizedWorkflow, "on");
+  const dispatch = yamlSection(triggers, "workflow_dispatch", 2);
+  const modelInput = yamlSection(dispatch, "model_analysis_run_id", 6);
   const permissions = yamlSection(normalizedWorkflow, "permissions");
   const proposeJob = yamlSection(normalizedWorkflow, "propose", 2);
   const directorySetup = normalizedWorkflow.indexOf(
@@ -189,6 +243,31 @@ test("gallery proposal verification always publishes token-safe diagnostics", as
   assert.match(finalizer, /exit "\$exit_code"/);
   assert.doesNotMatch(finalizer, /GH_TOKEN|github\.token|\$\{\{\s*secrets\.|printenv|set -x/);
   assert.match(normalizedWorkflow, /^          overall_status="verified"\s*$/m);
+  assert.match(modelInput, /^        required:\s*false\s*$/m);
+  assert.match(
+    normalizedWorkflow,
+    /model_analysis_run_id is required when AI policy flags are enabled/,
+  );
+  assert.match(normalizedWorkflow, /all\(\.automation\.ai\[\]; \. == true\)/);
+  assert.match(normalizedWorkflow, /"analyze-gallery-candidates\.yml"/);
+  assert.match(normalizedWorkflow, /"\.github\/workflows\/analyze-gallery-candidates\.yml"/);
+  assert.match(normalizedWorkflow, /"gallery-candidate-analysis-"/);
+  assert.match(
+    normalizedWorkflow,
+    /"model-analysis\.json,model-analysis-receipt\.json"\s*\\\n\s+"true"/,
+  );
+  assert.match(
+    normalizedWorkflow,
+    /expected_names='\["discovery","freshness","health","modelAnalysis"\]'/,
+  );
+  assert.match(normalizedWorkflow, /receipt\.reportFileHash !== reportHash/);
+  assert.match(
+    normalizedWorkflow,
+    /isDeepStrictEqual\(report\.provenance\?\.sourceDiscoveryArtifact, discovery\)/,
+  );
+  assert.match(normalizedWorkflow, /report\.provenance\?\.\[field\] !== model\[field\]/);
+  assert.match(normalizedWorkflow, /--model-analysis "\$model_analysis"/);
+  assert.match(normalizedWorkflow, /--model-analysis-receipt "\$model_analysis_receipt"/);
 
   assert.match(permissions, /^  contents:\s*read\s*$/m);
   assert.match(permissions, /^  actions:\s*read\s*$/m);

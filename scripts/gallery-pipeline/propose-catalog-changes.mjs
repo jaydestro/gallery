@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 
+import { ANALYSIS_SYSTEM_INSTRUCTIONS } from "./analyze-content.mjs";
 import { validateDeterministicGate } from "./ai-analysis.mjs";
 import { applyCatalogPlan } from "./apply-catalog-plan.mjs";
 import {
@@ -18,6 +20,7 @@ import {
   replayCatalogChangePlan,
   validateCatalogChangePlanPolicy,
 } from "./build-catalog-change.mjs";
+import { GROUNDING_SYSTEM_INSTRUCTIONS } from "./verify-summary.mjs";
 import { appendAuditPlan, emptyAuditLog } from "./write-audit.mjs";
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +48,21 @@ const UPSTREAM_ARTIFACT_SPECS = Object.freeze({
     workflowPath: ".github/workflows/evaluate-repository-freshness.yml",
     artifactPrefix: "gallery-freshness-",
   }),
+  modelAnalysis: Object.freeze({
+    workflowPath: ".github/workflows/analyze-gallery-candidates.yml",
+    artifactPrefix: "gallery-candidate-analysis-",
+  }),
 });
+const BASE_UPSTREAM_ARTIFACT_NAMES = Object.freeze(["discovery", "health", "freshness"]);
+const MODEL_ANALYSIS_FILE_HASH_NAMES = Object.freeze([
+  "activeCatalog",
+  "analysisSchema",
+  "candidateGates",
+  "discovery",
+  "policy",
+  "retiredCatalog",
+  "sourceDiscoveryArtifact",
+]);
 const EVIDENCE_TIMESTAMP_FIELDS = new Set([
   "checkedAt",
   "completedAt",
@@ -117,6 +134,7 @@ const DEFAULT_INPUT_PATHS = Object.freeze({
   audit: path.join("static", "catalog-audit.json"),
   exemptions: path.join(".github", "gallery-pipeline", "exemptions.json"),
   policy: path.join(".github", "gallery-pipeline", "policy.json"),
+  analysisSchema: path.join(".github", "gallery-pipeline", "analysis.schema.json"),
 });
 
 export class CatalogProposalError extends Error {
@@ -291,7 +309,7 @@ export const CATALOG_PROPOSAL_RECEIPT_SCHEMA = Object.freeze({
     trustedSha: { type: "string", pattern: GIT_SHA_PATTERN },
     upstreamArtifacts: {
       type: "array",
-      minItems: Object.keys(UPSTREAM_ARTIFACT_SPECS).length,
+      minItems: BASE_UPSTREAM_ARTIFACT_NAMES.length,
       maxItems: Object.keys(UPSTREAM_ARTIFACT_SPECS).length,
       items: upstreamArtifactSchema,
     },
@@ -488,7 +506,7 @@ function invalidUpstreamArtifacts(message, details = {}) {
   fail("UPSTREAM_ARTIFACTS_INVALID", message, details);
 }
 
-function validateUpstreamArtifacts(input) {
+function validateUpstreamArtifacts(input, modelRequired) {
   const repository = typeof input.trustedRepository === "string" ? input.trustedRepository.trim() : "";
   const trustedRef = typeof input.trustedRef === "string" ? input.trustedRef.trim() : "";
   const trustedSha = typeof input.trustedSha === "string" ? input.trustedSha.trim() : "";
@@ -504,7 +522,10 @@ function validateUpstreamArtifacts(input) {
   if (!Array.isArray(input.upstreamArtifacts)) {
     invalidUpstreamArtifacts("upstreamArtifacts must be an array.");
   }
-  if (input.upstreamArtifacts.length !== Object.keys(UPSTREAM_ARTIFACT_SPECS).length) {
+  const expectedNames = modelRequired
+    ? [...BASE_UPSTREAM_ARTIFACT_NAMES, "modelAnalysis"]
+    : [...BASE_UPSTREAM_ARTIFACT_NAMES];
+  if (input.upstreamArtifacts.length !== expectedNames.length) {
     invalidUpstreamArtifacts("Exactly one artifact from each expected producer is required.");
   }
 
@@ -550,6 +571,9 @@ function validateUpstreamArtifacts(input) {
     seenRunIds.add(artifact.runId);
     seenArtifactIds.add(artifact.artifactId);
   }
+  if (expectedNames.some((name) => !seenNames.has(name))) {
+    invalidUpstreamArtifacts("Exactly one artifact from each expected producer is required.");
+  }
 }
 
 function inputFingerprintFor(input) {
@@ -558,6 +582,7 @@ function inputFingerprintFor(input) {
     candidateGates: input.candidateGates,
     modelAnalysis: input.modelAnalysis ?? null,
     modelAnalysisReceipt: input.modelAnalysisReceipt ?? null,
+    modelAnalysisVerification: input.modelAnalysisVerification ?? null,
     health: input.health,
     freshness: input.freshness,
     activeCatalog: input.activeCatalog,
@@ -565,6 +590,7 @@ function inputFingerprintFor(input) {
     audit: input.audit ?? emptyAuditLog(),
     exemptions: input.exemptions,
     policy: input.policy,
+    analysisSchema: input.analysisSchema ?? null,
     retirementProvenance: input.retirementProvenance ?? null,
     trustedRepository: input.trustedRepository ?? null,
     trustedRef: input.trustedRef ?? null,
@@ -596,6 +622,15 @@ function policyBlockReasons(policy) {
   const maximum = policy.batching?.maxEntriesPerPullRequest;
   if (!Number.isSafeInteger(maximum) || maximum < 1) reasons.push("BATCH_POLICY_INVALID");
   return uniqueReasonCodes(reasons);
+}
+
+function aiPolicyEnabled(policy) {
+  const flags = policy?.automation?.ai;
+  return Boolean(
+    flags &&
+    Object.values(flags).length > 0 &&
+    Object.values(flags).every((value) => value === true)
+  );
 }
 
 function reportStatus(value) {
@@ -669,15 +704,173 @@ function analysisIndex(modelAnalysis) {
   return { index, duplicates };
 }
 
-function validateModelAnalysisReceipt(modelAnalysis, receipt) {
+function prefixedCanonicalHash(value) {
+  return `sha256:${hashCanonicalValue(value)}`;
+}
+
+function prettyJsonHash(value) {
+  return `sha256:${createHash("sha256")
+    .update(`${JSON.stringify(value, null, 2)}\n`)
+    .digest("hex")}`;
+}
+
+function bytesHash(value) {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+export function expectedModelAnalysisConfigurationHashes(input) {
+  return {
+    promptHash: prefixedCanonicalHash({
+      analysis: ANALYSIS_SYSTEM_INSTRUCTIONS,
+      grounding: GROUNDING_SYSTEM_INSTRUCTIONS,
+    }),
+    schemaHash: prefixedCanonicalHash(input.analysisSchema),
+    policyHash: prefixedCanonicalHash(input.policy),
+    catalogHash: prefixedCanonicalHash({
+      active: input.activeCatalog,
+      retired: input.retired,
+    }),
+  };
+}
+
+export function createModelAnalysisVerification({
+  modelAnalysis,
+  discovery,
+  candidateGates,
+  activeCatalog,
+  retiredCatalog,
+  policy,
+  analysisSchema,
+  sourceDiscoveryArtifact,
+}) {
+  return {
+    reportFileHash: bytesHash(modelAnalysis),
+    fileHashes: {
+      discovery: bytesHash(discovery),
+      candidateGates: bytesHash(candidateGates),
+      activeCatalog: bytesHash(activeCatalog),
+      retiredCatalog: bytesHash(retiredCatalog),
+      policy: bytesHash(policy),
+      analysisSchema: bytesHash(analysisSchema),
+      sourceDiscoveryArtifact: bytesHash(sourceDiscoveryArtifact),
+    },
+  };
+}
+
+function validateModelAnalysisReceipt(modelAnalysis, receipt, input) {
   if (!receipt) return ["MODEL_ANALYSIS_RECEIPT_MISSING"];
-  const fingerprint = hashCanonicalValue(modelAnalysis);
-  const count = analysisValues(modelAnalysis).length;
-  if (
-    receipt.schemaVersion !== REPORT_VERSION ||
-    receipt.reportFingerprint !== fingerprint ||
-    receipt.analysisCount !== count
-  ) {
+  try {
+    const analyses = analysisValues(modelAnalysis);
+    const analysisIds = analyses.map((analysis) => requireString(
+      analysis?.candidateId,
+      "model analysis candidateId",
+    ));
+    const eligibleIds = input.candidateGates.eligible
+      .map((entry) => requireString(entry?.candidate?.identityKey, "eligible candidate ID"))
+      .sort((left, right) => left.localeCompare(right));
+    const expectedEligibleSet = {
+      count: eligibleIds.length,
+      candidateIds: eligibleIds,
+      hash: prefixedCanonicalHash(eligibleIds),
+    };
+    const expectedReceiptKeys = [
+      "analysisCount",
+      "configuration",
+      "eligibleSet",
+      "fileHashes",
+      "provenance",
+      "reportFile",
+      "reportFileHash",
+      "reportFingerprint",
+      "schemaVersion",
+    ].sort();
+    const actualReceiptKeys = Object.keys(requireObject(receipt, "model analysis receipt")).sort();
+    const artifacts = new Map(input.upstreamArtifacts.map((artifact) => [artifact.name, artifact]));
+    const discoveryArtifact = artifacts.get("discovery");
+    const modelArtifact = artifacts.get("modelAnalysis");
+    const provenance = requireObject(modelAnalysis.provenance, "model analysis provenance");
+    const producerFields = [
+      ["repository", "repository"],
+      ["workflowId", "workflowId"],
+      ["workflowPath", "workflowPath"],
+      ["runId", "runId"],
+      ["runAttempt", "runAttempt"],
+      ["sourceRef", "sourceRef"],
+      ["sourceSha", "sourceSha"],
+    ];
+    const configuration = requireObject(modelAnalysis.configuration, "model analysis configuration");
+    const requiredConfigurationKeys = [
+      "apiMode",
+      "apiVersion",
+      "catalogHash",
+      "deploymentId",
+      "endpointOriginHash",
+      "policyHash",
+      "promptHash",
+      "schemaHash",
+    ].sort();
+    const fileHashes = requireObject(modelAnalysis.fileHashes, "model analysis fileHashes");
+    const verification = requireObject(
+      input.modelAnalysisVerification,
+      "model analysis verification",
+    );
+    const expectedFileHashes = requireObject(
+      verification.fileHashes,
+      "model analysis verification fileHashes",
+    );
+    const expectedConfigurationHashes = expectedModelAnalysisConfigurationHashes(input);
+    const validHashes = Object.values(expectedFileHashes).every((hash) => (
+      typeof hash === "string" && new RegExp(SHA256_DIGEST_PATTERN).test(hash)
+    ));
+    if (
+      modelAnalysis.schemaVersion !== REPORT_VERSION ||
+      modelAnalysis.mode !== "live-candidate-analysis" ||
+      modelAnalysis.mutationPerformed !== false ||
+      modelAnalysis.status !== "complete" ||
+      !isDeepStrictEqual(analysisIds, eligibleIds) ||
+      new Set(analysisIds).size !== analysisIds.length ||
+      !isDeepStrictEqual(modelAnalysis.eligibleSet, expectedEligibleSet) ||
+      !isDeepStrictEqual(actualReceiptKeys, expectedReceiptKeys) ||
+      receipt.schemaVersion !== REPORT_VERSION ||
+      receipt.reportFile !== "model-analysis.json" ||
+      typeof verification.reportFileHash !== "string" ||
+      !new RegExp(SHA256_DIGEST_PATTERN).test(verification.reportFileHash) ||
+      receipt.reportFileHash !== verification.reportFileHash ||
+      receipt.reportFingerprint !== prefixedCanonicalHash(modelAnalysis) ||
+      receipt.analysisCount !== analyses.length ||
+      !isDeepStrictEqual(receipt.eligibleSet, expectedEligibleSet) ||
+      !modelArtifact ||
+      !isDeepStrictEqual(provenance.sourceDiscoveryArtifact, discoveryArtifact) ||
+      producerFields.some(([reportField, artifactField]) => (
+        provenance[reportField] !== modelArtifact[artifactField]
+      )) ||
+      !isDeepStrictEqual(receipt.provenance, provenance) ||
+      !isDeepStrictEqual(Object.keys(configuration).sort(), requiredConfigurationKeys) ||
+      !["responses", "chat"].includes(configuration.apiMode) ||
+      typeof configuration.apiVersion !== "string" ||
+      configuration.apiVersion.trim() === "" ||
+      typeof configuration.deploymentId !== "string" ||
+      configuration.deploymentId.trim() === "" ||
+      [
+        configuration.endpointOriginHash,
+        configuration.promptHash,
+        configuration.schemaHash,
+        configuration.policyHash,
+        configuration.catalogHash,
+      ].some((hash) => typeof hash !== "string" || !new RegExp(SHA256_DIGEST_PATTERN).test(hash)) ||
+      Object.entries(expectedConfigurationHashes).some(([name, hash]) => (
+        configuration[name] !== hash
+      )) ||
+      !isDeepStrictEqual(receipt.configuration, configuration) ||
+      !isDeepStrictEqual(Object.keys(fileHashes).sort(), MODEL_ANALYSIS_FILE_HASH_NAMES) ||
+      !isDeepStrictEqual(Object.keys(expectedFileHashes).sort(), MODEL_ANALYSIS_FILE_HASH_NAMES) ||
+      !validHashes ||
+      !isDeepStrictEqual(fileHashes, expectedFileHashes) ||
+      !isDeepStrictEqual(receipt.fileHashes, fileHashes)
+    ) {
+      return ["MODEL_ANALYSIS_RECEIPT_INVALID"];
+    }
+  } catch {
     return ["MODEL_ANALYSIS_RECEIPT_INVALID"];
   }
   return [];
@@ -901,6 +1094,7 @@ function inputReceiptEntries(input) {
     candidateGates: input.candidateGates,
     modelAnalysis: input.modelAnalysis,
     modelAnalysisReceipt: input.modelAnalysisReceipt,
+    modelAnalysisVerification: input.modelAnalysisVerification,
     health: input.health,
     freshness: input.freshness,
     activeCatalog: input.activeCatalog,
@@ -908,6 +1102,7 @@ function inputReceiptEntries(input) {
     audit: input.audit,
     exemptions: input.exemptions,
     policy: input.policy,
+    analysisSchema: input.analysisSchema,
     retirementProvenance: input.retirementProvenance,
     upstreamArtifacts: input.upstreamArtifacts,
   };
@@ -1093,8 +1288,14 @@ export function validateCatalogProposalReceipt(receipt) {
 export function createModelAnalysisReceipt(modelAnalysis) {
   return {
     schemaVersion: REPORT_VERSION,
-    reportFingerprint: hashCanonicalValue(modelAnalysis),
+    reportFile: "model-analysis.json",
+    reportFileHash: prettyJsonHash(modelAnalysis),
+    reportFingerprint: prefixedCanonicalHash(modelAnalysis),
     analysisCount: analysisValues(modelAnalysis).length,
+    eligibleSet: clone(modelAnalysis.eligibleSet),
+    provenance: clone(modelAnalysis.provenance),
+    configuration: clone(modelAnalysis.configuration),
+    fileHashes: clone(modelAnalysis.fileHashes),
   };
 }
 
@@ -1118,15 +1319,15 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
   requireObject(input.exemptions, "exemptions");
   requireObject(input.policy, "policy");
 
-  validateUpstreamArtifacts(input);
+  const policyReasons = policyBlockReasons(input.policy);
+  const modelRequired = aiPolicyEnabled(input.policy);
+  validateUpstreamArtifacts(input, modelRequired);
   const inputFingerprint = inputFingerprintFor(input);
   const { generatedAt } = validateRunTimestamps(input, now);
   const runId = input.runId
     ? requireString(input.runId, "runId")
     : `proposal-${inputFingerprint.slice(0, 24)}`;
   const ledger = initialLedger(input.discovery, input.candidateGates);
-  const policyReasons = policyBlockReasons(input.policy);
-  const modelRequired = policyReasons.length === 0;
   const upstream = upstreamState(input, modelRequired);
   const upstreamFailure = upstreamBlock(upstream);
   const initialState = baseProposedState(input);
@@ -1156,7 +1357,11 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
   requireObject(input.freshness.healthSnapshot, "freshness.healthSnapshot");
   requireArray(input.freshness.healthSnapshot.entries, "freshness.healthSnapshot.entries");
 
-  const receiptReasons = validateModelAnalysisReceipt(input.modelAnalysis, input.modelAnalysisReceipt);
+  const receiptReasons = validateModelAnalysisReceipt(
+    input.modelAnalysis,
+    input.modelAnalysisReceipt,
+    input,
+  );
   if (receiptReasons.length > 0) {
     rejectPendingCandidates(ledger, input.candidateGates, receiptReasons);
     return finalizeResult({
@@ -1418,6 +1623,7 @@ function usage() {
     "  --audit path                      Current audit JSON (empty when absent)",
     "  --exemptions path                 Current exemptions JSON",
     "  --policy path                     Current policy JSON",
+    "  --analysis-schema path            Candidate-analysis output schema JSON",
     "  --upstream-artifacts path         Verified producer artifact provenance JSON",
     "  --retirement-provenance path      Existing retirement PR provenance JSON",
     "  --run-id value                    Deterministic proposal run ID",
@@ -1449,6 +1655,7 @@ function parseArguments(arguments_) {
     ["--audit", "audit"],
     ["--exemptions", "exemptions"],
     ["--policy", "policy"],
+    ["--analysis-schema", "analysisSchema"],
     ["--upstream-artifacts", "upstreamArtifacts"],
     ["--retirement-provenance", "retirementProvenance"],
   ]);
@@ -1518,13 +1725,17 @@ function parseArguments(arguments_) {
   return options;
 }
 
-async function readJson(filePath) {
-  return JSON.parse(await readFile(path.resolve(filePath), "utf8"));
+async function readJsonSnapshot(filePath) {
+  const bytes = await readFile(path.resolve(filePath));
+  return {
+    bytes,
+    data: JSON.parse(bytes.toString("utf8")),
+  };
 }
 
-async function readOptionalJson(filePath) {
+async function readOptionalJsonSnapshot(filePath) {
   try {
-    return await readJson(filePath);
+    return await readJsonSnapshot(filePath);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -1545,23 +1756,39 @@ async function loadFileInputs(options, env) {
     audit,
     exemptions,
     policy,
+    analysisSchema,
     upstreamArtifacts,
     retirementProvenance,
   ] = await Promise.all([
-    readJson(resolveInput("discovery")),
-    readJson(resolveInput("candidateGates")),
-    options.paths.modelAnalysis ? readJson(resolveInput("modelAnalysis")) : null,
-    options.paths.modelAnalysisReceipt ? readJson(resolveInput("modelAnalysisReceipt")) : null,
-    readJson(resolveInput("health")),
-    readOptionalJson(resolveInput("freshness")),
-    readJson(resolveInput("activeCatalog")),
-    readJson(resolveInput("retired")),
-    readOptionalJson(resolveInput("audit")),
-    readJson(resolveInput("exemptions")),
-    readJson(resolveInput("policy")),
-    options.paths.upstreamArtifacts ? readJson(resolveInput("upstreamArtifacts")) : null,
-    options.paths.retirementProvenance ? readJson(resolveInput("retirementProvenance")) : null,
+    readJsonSnapshot(resolveInput("discovery")),
+    readJsonSnapshot(resolveInput("candidateGates")),
+    options.paths.modelAnalysis ? readJsonSnapshot(resolveInput("modelAnalysis")) : null,
+    options.paths.modelAnalysisReceipt ? readJsonSnapshot(resolveInput("modelAnalysisReceipt")) : null,
+    readJsonSnapshot(resolveInput("health")),
+    readOptionalJsonSnapshot(resolveInput("freshness")),
+    readJsonSnapshot(resolveInput("activeCatalog")),
+    readJsonSnapshot(resolveInput("retired")),
+    readOptionalJsonSnapshot(resolveInput("audit")),
+    readJsonSnapshot(resolveInput("exemptions")),
+    readJsonSnapshot(resolveInput("policy")),
+    readJsonSnapshot(resolveInput("analysisSchema")),
+    options.paths.upstreamArtifacts ? readJsonSnapshot(resolveInput("upstreamArtifacts")) : null,
+    options.paths.retirementProvenance ? readJsonSnapshot(resolveInput("retirementProvenance")) : null,
   ]);
+  const sourceDiscoveryArtifact = upstreamArtifacts?.data
+    .find((artifact) => artifact?.name === "discovery");
+  const modelAnalysisVerification = modelAnalysis && sourceDiscoveryArtifact
+    ? createModelAnalysisVerification({
+      modelAnalysis: modelAnalysis.bytes,
+      discovery: discovery.bytes,
+      candidateGates: candidateGates.bytes,
+      activeCatalog: activeCatalog.bytes,
+      retiredCatalog: retired.bytes,
+      policy: policy.bytes,
+      analysisSchema: analysisSchema.bytes,
+      sourceDiscoveryArtifact: Buffer.from(`${JSON.stringify(sourceDiscoveryArtifact, null, 2)}\n`),
+    })
+    : null;
   return {
     runId: options.runId ?? (env.GITHUB_RUN_ID ? `proposal-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT ?? "1"}` : undefined),
     generatedAt: options.generatedAt,
@@ -1569,20 +1796,63 @@ async function loadFileInputs(options, env) {
     trustedRepository: options.trustedRepository ?? env.GITHUB_REPOSITORY,
     trustedRef: options.trustedRef,
     trustedSha: options.trustedSha,
-    discovery,
-    candidateGates,
-    modelAnalysis,
-    modelAnalysisReceipt,
-    health,
-    freshness,
-    activeCatalog,
-    retired,
-    audit: audit ?? emptyAuditLog(),
-    exemptions,
-    policy,
-    upstreamArtifacts,
-    retirementProvenance,
+    discovery: discovery.data,
+    candidateGates: candidateGates.data,
+    modelAnalysis: modelAnalysis?.data ?? null,
+    modelAnalysisReceipt: modelAnalysisReceipt?.data ?? null,
+    modelAnalysisVerification,
+    health: health.data,
+    freshness: freshness?.data ?? null,
+    activeCatalog: activeCatalog.data,
+    retired: retired.data,
+    audit: audit?.data ?? emptyAuditLog(),
+    exemptions: exemptions.data,
+    policy: policy.data,
+    analysisSchema: analysisSchema.data,
+    upstreamArtifacts: upstreamArtifacts?.data ?? null,
+    retirementProvenance: retirementProvenance?.data ?? null,
   };
+}
+
+function prettyJsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function bindFixtureModelAnalysis(input) {
+  if (!input.analysisSchema) {
+    input.analysisSchema = (await readJsonSnapshot(
+      path.join(REPOSITORY_ROOT, DEFAULT_INPUT_PATHS.analysisSchema),
+    )).data;
+  }
+  if (!input.modelAnalysis) {
+    input.modelAnalysisVerification = null;
+    return input;
+  }
+  Object.assign(
+    input.modelAnalysis.configuration,
+    expectedModelAnalysisConfigurationHashes(input),
+  );
+  const sourceDiscoveryArtifact = input.upstreamArtifacts
+    .find((artifact) => artifact?.name === "discovery");
+  const verificationInputs = {
+    discovery: prettyJsonBytes(input.discovery),
+    candidateGates: prettyJsonBytes(input.candidateGates),
+    activeCatalog: prettyJsonBytes(input.activeCatalog),
+    retiredCatalog: prettyJsonBytes(input.retired),
+    policy: prettyJsonBytes(input.policy),
+    analysisSchema: prettyJsonBytes(input.analysisSchema),
+    sourceDiscoveryArtifact: prettyJsonBytes(sourceDiscoveryArtifact),
+  };
+  input.modelAnalysis.fileHashes = createModelAnalysisVerification({
+    modelAnalysis: prettyJsonBytes(input.modelAnalysis),
+    ...verificationInputs,
+  }).fileHashes;
+  input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
+  input.modelAnalysisVerification = createModelAnalysisVerification({
+    modelAnalysis: prettyJsonBytes(input.modelAnalysis),
+    ...verificationInputs,
+  });
+  return input;
 }
 
 export function catalogProposalExitCode(report) {
@@ -1604,7 +1874,7 @@ export async function main(
       const fixtureModule = await import("./propose-catalog-changes.fixtures.mjs");
       return fixtureModule.makeProposalFixture({ candidateCount: 146 });
     });
-    input = await fixtureLoader();
+    input = await bindFixtureModelAnalysis(clone(await fixtureLoader()));
     if (options.runId) input.runId = options.runId;
     if (options.generatedAt) input.generatedAt = options.generatedAt;
     if (options.workflowStartedAt) input.workflowStartedAt = options.workflowStartedAt;

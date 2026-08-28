@@ -373,7 +373,7 @@ function requiredEnvironmentValue(environment, name) {
   return value.trim();
 }
 
-function azureEndpoint(environment) {
+export function azureEndpointOrigin(environment) {
   const value = requiredEnvironmentValue(environment, "AZURE_OPENAI_ENDPOINT");
   try {
     const url = new URL(value);
@@ -481,7 +481,7 @@ export function createAzureOpenAIClient({
   if (typeof fetchImpl !== "function") {
     throw new AiAnalysisError("AZURE_CONFIG_INVALID", "A fetch implementation is required.");
   }
-  const endpoint = azureEndpoint(environment);
+  const endpoint = azureEndpointOrigin(environment);
   const deployment = requiredEnvironmentValue(environment, "AZURE_OPENAI_DEPLOYMENT");
   const bearerToken = requiredEnvironmentValue(environment, "AZURE_OPENAI_BEARER_TOKEN");
 
