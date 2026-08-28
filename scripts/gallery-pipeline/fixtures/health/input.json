@@ -1,0 +1,46 @@
+{
+  "checkedAt": "2026-08-27T12:00:00.000Z",
+  "githubToken": null,
+  "catalog": [
+    {
+      "id": "fixture-recovery",
+      "canonicalSource": "https://example.com/gallery-sample"
+    }
+  ],
+  "previousHealth": {
+    "version": "1.0.0",
+    "entries": [
+      {
+        "galleryId": "fixture-recovery",
+        "canonicalSource": "https://example.com/gallery-sample",
+        "checkedAt": "2026-07-01T12:00:00.000Z",
+        "status": "needs-review",
+        "healthScore": 75,
+        "components": {
+          "availabilityIntegrity": 0,
+          "maintenanceFreshness": 25,
+          "sampleUsability": 20,
+          "productRelevance": 20,
+          "galleryValue": 10
+        },
+        "healthReasons": [
+          "SOURCE_HTTP_404"
+        ],
+        "consecutiveFindings": 1,
+        "gracePeriodStartedAt": "2026-07-01T12:00:00.000Z",
+        "sourceState": {
+          "availability": "broken",
+          "archived": null,
+          "disabled": null,
+          "lastMeaningfulChange": null
+        },
+        "evidence": []
+      }
+    ]
+  },
+  "responses": {
+    "HEAD https://example.com/gallery-sample": {
+      "status": 200
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "entries": [
+    {
+      "record": {
+        "id": "retired-unrelated",
+        "canonicalSource": "https://github.com/AzureCosmosDB/retired-unrelated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discoveredAt": "2026-08-27T12:00:00Z",
+  "githubToken": "fixture-token",
+  "limits": {
+    "githubPageSize": 1,
+    "githubListingPages": 2,
+    "githubSearchPages": 1,
+    "githubRepositories": 2,
+    "githubSearchQueries": 1,
+    "githubFilesPerRepository": 1,
+    "feedEntries": 10,
+    "sitemapFiles": 1,
+    "learnDocuments": 10
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "https://api.github.com/orgs/AzureCosmosDB/repos?type=public&sort=updated&direction=desc&per_page=1&page=1": {
+    "body": [
+      {
+        "id": 7001,
+        "name": "cosmos-demo",
+        "full_name": "AzureCosmosDB/cosmos-demo",
+        "html_url": "https://github.com/AzureCosmosDB/cosmos-demo",
+        "owner": { "login": "AzureCosmosDB" },
+        "description": "An Azure Cosmos DB sample",
+        "private": false,
+        "disabled": false,
+        "archived": false,
+        "size": 20,
+        "default_branch": "main",
+        "created_at": "2026-01-02T00:00:00Z",
+        "pushed_at": "2026-08-20T00:00:00Z",
+        "topics": []
+      }
+    ]
+  },
+  "https://api.github.com/orgs/AzureCosmosDB/repos?type=public&sort=updated&direction=desc&per_page=1&page=2": {
+    "body": []
+  },
+  "https://api.github.com/search/code?q=Microsoft.Azure.Cosmos+org%3AAzureCosmosDB&sort=indexed&order=desc&per_page=1&page=1": {
+    "body": {
+      "total_count": 1,
+      "incomplete_results": false,
+      "items": [
+        {
+          "path": "package.json",
+          "url": "https://api.github.com/repos/AzureCosmosDB/cosmos-demo/contents/package.json?ref=main",
+          "repository": {
+            "id": 7001,
+            "name": "cosmos-demo",
+            "full_name": "AzureCosmosDB/cosmos-demo",
+            "html_url": "https://github.com/AzureCosmosDB/cosmos-demo",
+            "owner": { "login": "AzureCosmosDB" }
+          }
+        }
+      ]
+    }
+  },
+  "https://api.github.com/repos/AzureCosmosDB/cosmos-demo/readme": {
+    "body": {
+      "encoding": "base64",
+      "content": "QXp1cmUgQ29zbW9zIERCIHNhbXBsZS4="
+    }
+  },
+  "https://api.github.com/repos/AzureCosmosDB/cosmos-demo/contents/package.json?ref=main": {
+    "body": {
+      "encoding": "base64",
+      "content": "eyJkZXBlbmRlbmNpZXMiOnsiQGF6dXJlL2Nvc21vcyI6Il40LjAuMCJ9fQ=="
+    }
+  },
+  "https://devblogs.microsoft.com/cosmosdb/feed/": {
+    "headers": { "content-type": "application/rss+xml" },
+    "body": "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Azure Cosmos DB Blog</title><item><guid>https://devblogs.microsoft.com/cosmosdb/?p=9001</guid><link>https://devblogs.microsoft.com/cosmosdb/vector-index-update/?utm_source=rss</link><title>Vector indexing in Azure Cosmos DB</title><description><![CDATA[New vector indexing controls for Azure Cosmos DB.]]></description><pubDate>Wed, 26 Aug 2026 09:00:00 GMT</pubDate></item></channel></rss>"
+  },
+  "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": {
+    "headers": { "content-type": "application/xml" },
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search</loc><lastmod>2026-08-25</lastmod></url></urlset>"
+  }
+}

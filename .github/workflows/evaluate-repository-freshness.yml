@@ -34,4 +34,15 @@ jobs:
         run: npm ci
 
       - name: Evaluate repository freshness in dry-run mode
-        run: npm run gallery:freshness -- --dry-run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/gallery-pipeline/score-freshness.mjs --dry-run > gallery-freshness.json
+
+      - name: Upload freshness report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-freshness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gallery-freshness.json
+          if-no-files-found: error
+          retention-days: 30

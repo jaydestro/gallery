@@ -1,0 +1,38 @@
+{
+  "version": "1.0.0",
+  "sources": [
+    {
+      "id": "github-org-azurecosmosdb",
+      "type": "github-organization",
+      "endpoint": "https://api.github.com/orgs/AzureCosmosDB",
+      "organization": "AzureCosmosDB",
+      "trustTier": "first-party",
+      "enabled": true,
+      "ownerLabel": "Azure Cosmos DB"
+    },
+    {
+      "id": "devblogs-cosmos-db-rss",
+      "type": "rss-feed",
+      "endpoint": "https://devblogs.microsoft.com/cosmosdb/feed/",
+      "trustTier": "first-party",
+      "enabled": true,
+      "ownerLabel": "Azure Cosmos DB Blog"
+    },
+    {
+      "id": "learn-cosmos-db",
+      "type": "documentation-root",
+      "endpoint": "https://learn.microsoft.com/azure/cosmos-db/",
+      "trustTier": "first-party",
+      "enabled": true,
+      "ownerLabel": "Microsoft Learn"
+    },
+    {
+      "id": "disabled-feed",
+      "type": "rss-feed",
+      "endpoint": "https://example.com/feed.xml",
+      "trustTier": "first-party",
+      "enabled": false,
+      "ownerLabel": "Disabled"
+    }
+  ]
+}

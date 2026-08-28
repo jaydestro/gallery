@@ -34,4 +34,15 @@ jobs:
         run: npm ci
 
       - name: Scan gallery health in dry-run mode
-        run: npm run gallery:health -- --dry-run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/gallery-pipeline/scan-health.mjs --dry-run > gallery-health-report.json
+
+      - name: Upload health report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-health-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gallery-health-report.json
+          if-no-files-found: error
+          retention-days: 30
