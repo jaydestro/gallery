@@ -115,8 +115,10 @@ test("returns an ordered dry-run report with one timestamp and never invokes AI"
 
   assert.equal(report.mode, "dry-run");
   assert.equal(report.mutationPerformed, false);
+  assert.equal(report.status, "complete");
   assert.equal(report.startedAt, fixture.checkedAt);
   assert.equal(report.completedAt, fixture.checkedAt);
+  assert.equal(report.summary.indeterminateAvailabilityChecks, 0);
   assert.deepEqual(
     report.eligible.map((item) => item.candidate.identityKey),
     ["blog-post:alpha", "blog-post:beta"],
@@ -127,7 +129,7 @@ test("returns an ordered dry-run report with one timestamp and never invokes AI"
   assert.equal(writeInvocations, 0);
 });
 
-test("uses AI gate validation for approved corroborating evidence and rejects invented evidence", async () => {
+test("uses deterministic gate validation for approved corroborating evidence and rejects invented evidence", async () => {
   const valid = githubCandidate("corroborated");
   const invalid = blogCandidate("invented", {
     evidence: [{ type: "invented-signal", value: "Claimed Cosmos evidence" }],
@@ -460,4 +462,28 @@ test("enforces maxCandidatesPerRun after stable identity sorting", async () => {
     reasonCodes: ["BATCH_CANDIDATE_LIMIT_EXCEEDED"],
   }]);
   assert.equal(calls.length, 2);
+});
+
+test("marks mixed resolved and indeterminate availability as partial", async () => {
+  const healthy = blogCandidate("mixed-healthy");
+  const indeterminate = blogCandidate("mixed-indeterminate");
+  const report = await runCandidateGates(gateOptions({
+    candidates: [indeterminate, healthy],
+    fetchImpl: async (input) => {
+      if (new URL(input).pathname.endsWith("mixed-indeterminate")) {
+        const error = new Error("fixture timeout details");
+        error.name = "AbortError";
+        throw error;
+      }
+      return new Response(null, { status: 200 });
+    },
+  }));
+
+  assert.equal(report.status, "partial");
+  assert.equal(report.summary.indeterminateAvailabilityChecks, 1);
+  assert.deepEqual(report.eligible.map((item) => item.candidate.identityKey), [healthy.identityKey]);
+  assert.deepEqual(report.rejected, [{
+    candidateId: indeterminate.identityKey,
+    reasonCodes: ["SOURCE_TIMEOUT"],
+  }]);
 });

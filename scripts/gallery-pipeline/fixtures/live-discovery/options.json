@@ -1,6 +1,9 @@
 {
   "discoveredAt": "2026-08-27T12:00:00Z",
   "githubToken": "fixture-token",
+  "lookup": [
+    { "address": "20.12.34.56", "family": 4 }
+  ],
   "limits": {
     "githubPageSize": 1,
     "githubListingPages": 2,

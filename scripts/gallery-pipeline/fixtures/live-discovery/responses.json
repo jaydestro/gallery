@@ -59,5 +59,23 @@
   "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": {
     "headers": { "content-type": "application/xml" },
     "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search</loc><lastmod>2026-08-25</lastmod></url></urlset>"
+  },
+  "https://github.com/AzureCosmosDB/cosmos-demo": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/vector-index-update/": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/vector-index-update": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/?p=9001": {
+    "status": 200
+  },
+  "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search": {
+    "status": 200
+  },
+  "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search": {
+    "status": 200
   }
 }

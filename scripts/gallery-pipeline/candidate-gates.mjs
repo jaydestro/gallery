@@ -385,6 +385,14 @@ export async function runCandidateGates(options = {}) {
   const availabilityByUrl = new Map(
     checkedSources.map(([url, result]) => [url, availabilityFor(result, reportTime)]),
   );
+  const indeterminateAvailabilityChecks = [...availabilityByUrl.values()]
+    .filter((availability) => availability.classification === "indeterminate")
+    .length;
+  const status = indeterminateAvailabilityChecks === 0
+    ? "complete"
+    : indeterminateAvailabilityChecks === availabilityByUrl.size
+      ? "indeterminate"
+      : "partial";
 
   const eligible = [];
   for (const item of ready) {
@@ -405,11 +413,13 @@ export async function runCandidateGates(options = {}) {
     schemaVersion: "1.0.0",
     mode: "dry-run",
     mutationPerformed: false,
+    status,
     startedAt: reportTime,
     completedAt: reportTime,
     summary: {
       candidates: envelopes.length,
       availabilityChecks: urls.length,
+      indeterminateAvailabilityChecks,
       eligible: eligible.length,
       rejected: rejected.length,
     },

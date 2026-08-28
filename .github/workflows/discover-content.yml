@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   discover:
-    name: Discover content without mutation
-    if: vars.GALLERY_PIPELINE_DRY_RUN_ENABLED == 'true'
+    name: Discover and gate content without mutation
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -33,16 +32,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Discover content in dry-run mode
+      - name: Discover and gate content in report-only mode
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/gallery-pipeline/discover-content.mjs --dry-run > gallery-discovery.json
+        run: npm run gallery:discover -- --dry-run --report-directory gallery-reports
 
-      - name: Upload discovery report
+      - name: Upload discovery and candidate gate reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gallery-discovery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: gallery-discovery.json
+          path: |
+            gallery-reports/discovery.json
+            gallery-reports/candidate-gates.json
           if-no-files-found: error
           retention-days: 30
