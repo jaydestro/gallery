@@ -8,22 +8,27 @@ import {
   discoverYouTube,
   isYouTubeDiscoveryEnabled,
   isYouTubeSourceConfigured,
+  officialYouTubeFeedUrl,
 } from "./discover/youtube.mjs";
-import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
+import { canonicalizeLearnUrl, extractYouTubeVideoId } from "./shared/canonicalize.mjs";
 import { safeFetch } from "./shared/safe-fetch.mjs";
 
 const GITHUB_HOST = "api.github.com";
 const LEARN_HOST = "learn.microsoft.com";
 const YOUTUBE_API_HOST = "youtube.googleapis.com";
 const YOUTUBE_API_ENDPOINT = `https://${YOUTUBE_API_HOST}/youtube/v3`;
+const YOUTUBE_FEED_HOST = "www.youtube.com";
 const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 const YOUTUBE_UPLOADS_PLAYLIST_ID = /^UU[A-Za-z0-9_-]{22}$/;
+const YOUTUBE_THUMBNAIL_HOST = /^(?:i(?:[1-9])?\.ytimg\.com|img\.youtube\.com)$/;
 const YOUTUBE_VIDEO_BATCH_SIZE = 50;
 const MAX_XML_DEPTH = 64;
 const MAX_XML_NODES = 10_000;
 const LEARN_ROOT_PATH = "/azure/cosmos-db";
 const POLICY_MAX_REDIRECTS = 5;
 const DISCOVERY_DEADLINE_REASON = "DISCOVERY_DEADLINE_EXCEEDED";
+const DISCOVERY_CADENCES = new Set(["all", "daily", "weekly"]);
 
 const DEFAULT_LIMITS = Object.freeze({
   githubPageSize: 50,
@@ -353,6 +358,132 @@ export function parseFeedXml(xml) {
         mediaContent?.attributes.url ?? entryImageUrl ?? feedImageUrl,
     };
   });
+}
+
+function validYouTubeTimestamp(value) {
+  return typeof value === "string" && value !== "" && !Number.isNaN(new Date(value).valueOf());
+}
+
+function parseYouTubeFeedEntry(entry, source, index) {
+  const entryNumber = index + 1;
+  const videoId = nodeText(firstChild(entry, "videoid"));
+  if (!YOUTUBE_VIDEO_ID.test(videoId)) {
+    throw new TypeError(`YouTube feed entry ${entryNumber} has an invalid yt:videoId`);
+  }
+  if (nodeText(firstChild(entry, "id")) !== `yt:video:${videoId}`) {
+    throw new TypeError(`YouTube feed entry ${videoId} has a mismatched Atom id`);
+  }
+
+  const channelId = nodeText(firstChild(entry, "channelid"));
+  if (!YOUTUBE_CHANNEL_ID.test(channelId) || channelId !== source.channelId) {
+    throw new TypeError(`YouTube feed entry ${videoId} channel ID does not match ${source.channelId}`);
+  }
+
+  const title = plainText(nodeText(firstChild(entry, "title")));
+  const publishedAt = nodeText(firstChild(entry, "published"));
+  const updatedAt = nodeText(firstChild(entry, "updated"));
+  const author = firstChild(entry, "author");
+  const channelTitle = plainText(nodeText(firstChild(author, "name")));
+  const channelUrl = nodeText(firstChild(author, "uri"));
+  const expectedChannelUrl = `https://www.youtube.com/channel/${channelId}`;
+  const alternateLink = children(entry, "link").find(
+    (node) => !node.attributes.rel || node.attributes.rel === "alternate",
+  );
+  if (!title) throw new TypeError(`YouTube feed entry ${videoId} is missing its title`);
+  if (!validYouTubeTimestamp(publishedAt) || !validYouTubeTimestamp(updatedAt)) {
+    throw new TypeError(`YouTube feed entry ${videoId} has an invalid published or updated timestamp`);
+  }
+  if (!channelTitle || channelUrl !== expectedChannelUrl) {
+    throw new TypeError(`YouTube feed entry ${videoId} has invalid author channel metadata`);
+  }
+  if (extractYouTubeVideoId(alternateLink?.attributes.href) !== videoId) {
+    throw new TypeError(`YouTube feed entry ${videoId} has an invalid alternate URL`);
+  }
+
+  const mediaGroup = firstChild(entry, "group");
+  const descriptionNode = firstChild(mediaGroup, "description");
+  const thumbnailUrl = firstChild(mediaGroup, "thumbnail")?.attributes.url;
+  let thumbnail;
+  try {
+    thumbnail = new URL(thumbnailUrl);
+  } catch {
+    throw new TypeError(`YouTube feed entry ${videoId} has an invalid thumbnail URL`);
+  }
+  if (
+    !descriptionNode ||
+    thumbnail.protocol !== "https:" ||
+    thumbnail.username ||
+    thumbnail.password ||
+    !YOUTUBE_THUMBNAIL_HOST.test(thumbnail.hostname.toLowerCase()) ||
+    !thumbnail.pathname.startsWith(`/vi/${videoId}/`)
+  ) {
+    throw new TypeError(`YouTube feed entry ${videoId} has invalid media metadata`);
+  }
+
+  return {
+    id: videoId,
+    snippet: {
+      title,
+      description: plainText(nodeText(descriptionNode)),
+      publishedAt,
+      channelId,
+      channelTitle,
+      thumbnails: { high: { url: thumbnail.toString() } },
+    },
+    updatedAt,
+    channelUrl,
+  };
+}
+
+export function parseYouTubeFeedXml(xml, source) {
+  const root = parseSafeXml(xml);
+  if (localName(root.name) !== "feed") {
+    throw new TypeError("YouTube official feed root must be Atom feed");
+  }
+  if (!source || source.type !== "youtube-channel" || !YOUTUBE_CHANNEL_ID.test(source.channelId ?? "")) {
+    throw new TypeError("YouTube official feed requires a configured channel source");
+  }
+
+  const expectedChannelUrl = `https://www.youtube.com/channel/${source.channelId}`;
+  const alternateLink = children(root, "link").find(
+    (node) => !node.attributes.rel || node.attributes.rel === "alternate",
+  );
+  const feedAuthor = firstChild(root, "author");
+  if (
+    alternateLink?.attributes.href !== expectedChannelUrl ||
+    nodeText(firstChild(feedAuthor, "uri")) !== expectedChannelUrl
+  ) {
+    throw new TypeError("YouTube official feed channel URL does not match the configured channel");
+  }
+
+  const videos = [];
+  const rejected = [];
+  const issues = [];
+  const seenVideoIds = new Set();
+  for (const [index, entry] of children(root, "entry").entries()) {
+    const reportedVideoId = nodeText(firstChild(entry, "videoid"));
+    try {
+      const video = parseYouTubeFeedEntry(entry, source, index);
+      if (seenVideoIds.has(video.id)) {
+        throw new TypeError(`YouTube official feed contains duplicate video ID ${video.id}`);
+      }
+      seenVideoIds.add(video.id);
+      videos.push(video);
+    } catch (error) {
+      issues.push(cleanError(error));
+      rejected.push({
+        sourceRegistryId: source.id,
+        sourceType: "video",
+        sourceId: YOUTUBE_VIDEO_ID.test(reportedVideoId) ? reportedVideoId : `${source.id}:entry-${index + 1}`,
+        canonicalUrl: YOUTUBE_VIDEO_ID.test(reportedVideoId)
+          ? `https://www.youtube.com/watch?v=${reportedVideoId}`
+          : null,
+        reason: "invalid-youtube-feed-entry",
+        evidence: [],
+      });
+    }
+  }
+  return { videos, rejected, issues };
 }
 
 export function parseSitemapXml(xml) {
@@ -1065,9 +1196,46 @@ async function collectYouTubeVideos(videoIds, playlistId, context, issues) {
   return videoIds.map((videoId) => videosById.get(videoId)).filter(Boolean);
 }
 
+async function collectYouTubeFeed(source, context) {
+  const expectedEndpoint = officialYouTubeFeedUrl(source.channelId);
+  if (!exactEndpoint(source.endpoint, expectedEndpoint)) {
+    throw new TypeError(`YouTube official feed endpoint must exactly match ${expectedEndpoint}`);
+  }
+  context.endpoints.push(source.endpoint);
+  const response = requireSuccess(
+    await fetchBounded(source.endpoint, {
+      trustedHosts: [YOUTUBE_FEED_HOST],
+      fetchOptions: context.fetchOptions,
+      limits: context.limits,
+      headers: { Accept: "application/atom+xml, application/xml, text/xml" },
+    }),
+  );
+  const parsed = parseYouTubeFeedXml(response.text(), source);
+  const videos = parsed.videos.slice(0, context.limits.youtubeCandidates);
+  const candidates = discoverYouTube({ source, videos, discoveredAt: context.discoveredAt });
+  const acceptedIds = new Set(candidates.map((candidate) => candidate.sourceId));
+  const rejected = [
+    ...parsed.rejected,
+    ...videos
+      .filter((video) => !acceptedIds.has(video.id))
+      .map((video) => ({
+        sourceRegistryId: source.id,
+        sourceType: "video",
+        sourceId: video.id,
+        canonicalUrl: `https://www.youtube.com/watch?v=${video.id}`,
+        reason: "insufficient-cosmos-evidence",
+        evidence: [],
+      })),
+  ];
+  return { candidates, rejected, issues: parsed.issues };
+}
+
 async function collectYouTube(source, context) {
   if (!isYouTubeSourceConfigured(source)) {
     throw new TypeError("YouTube source requires one immutable ID matching its source type");
+  }
+  if (source.type === "youtube-channel" && source.transport === "official-feed") {
+    return collectYouTubeFeed(source, context);
   }
   if (!exactEndpoint(source.endpoint, YOUTUBE_API_ENDPOINT)) {
     throw new TypeError(`YouTube source endpoint must exactly match ${YOUTUBE_API_ENDPOINT}`);
@@ -1198,6 +1366,7 @@ export async function runDiscovery({
   githubToken = process.env.GITHUB_TOKEN,
   environment = process.env,
   discoveredAt = new Date().toISOString(),
+  cadence = "all",
   fetchOptions = {},
   limits: limitOverrides = {},
   deadlineMilliseconds = fetchOptions.deadlineMilliseconds,
@@ -1206,6 +1375,9 @@ export async function runDiscovery({
   const timestamp = new Date(discoveredAt);
   if (Number.isNaN(timestamp.valueOf())) throw new TypeError("discoveredAt must be a valid date-time");
   const normalizedTimestamp = timestamp.toISOString();
+  if (!DISCOVERY_CADENCES.has(cadence)) {
+    throw new TypeError("cadence must be one of: all, daily, weekly");
+  }
   if (
     deadlineMilliseconds !== undefined &&
     (!Number.isFinite(deadlineMilliseconds) || deadlineMilliseconds < 0)
@@ -1248,6 +1420,10 @@ export async function runDiscovery({
   };
 
   for (const source of sourceList(trustedSources)) {
+    if (cadence !== "all" && source?.cadence !== cadence) {
+      statuses.push(skippedStatus(source ?? {}, "cadence-not-selected"));
+      continue;
+    }
     if (source?.enabled !== true) {
       statuses.push(skippedStatus(source ?? {}, "source-disabled"));
       continue;
@@ -1336,6 +1512,7 @@ export async function runDiscovery({
     schemaVersion: "1.0.0",
     mode: "dry-run",
     mutationPerformed: false,
+    cadence,
     status: indeterminate > 0 ? "partial" : "complete",
     startedAt: normalizedTimestamp,
     completedAt: normalizedTimestamp,

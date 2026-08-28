@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UC1234567890123456789012"/>
+  <id>yt:channel:1234567890123456789012</id>
+  <yt:channelId>1234567890123456789012</yt:channelId>
+  <title>SQLBits</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/UC1234567890123456789012"/>
+  <author>
+    <name>SQLBits</name>
+    <uri>https://www.youtube.com/channel/UC1234567890123456789012</uri>
+  </author>
+  <published>2020-01-01T00:00:00+00:00</published>
+  <entry>
+    <id>yt:video:6IIUtEFKJec</id>
+    <yt:videoId>6IIUtEFKJec</yt:videoId>
+    <yt:channelId>UC1234567890123456789012</yt:channelId>
+    <title>Build with Azure Cosmos DB</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=6IIUtEFKJec"/>
+    <author>
+      <name>SQLBits</name>
+      <uri>https://www.youtube.com/channel/UC1234567890123456789012</uri>
+    </author>
+    <published>2026-08-26T10:00:00+00:00</published>
+    <updated>2026-08-27T11:00:00+00:00</updated>
+    <media:group>
+      <media:title>Build with Azure Cosmos DB</media:title>
+      <media:thumbnail url="https://i4.ytimg.com/vi/6IIUtEFKJec/hqdefault.jpg" width="480" height="360"/>
+      <media:description>Create a data application with Azure Cosmos DB for NoSQL.</media:description>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:AbCdEfGhI12</id>
+    <yt:videoId>AbCdEfGhI12</yt:videoId>
+    <yt:channelId>UC1234567890123456789012</yt:channelId>
+    <title>SQL Server query tuning</title>
+    <link rel="alternate" href="https://www.youtube.com/shorts/AbCdEfGhI12"/>
+    <author>
+      <name>SQLBits</name>
+      <uri>https://www.youtube.com/channel/UC1234567890123456789012</uri>
+    </author>
+    <published>2026-08-25T10:00:00+00:00</published>
+    <updated>2026-08-25T11:00:00+00:00</updated>
+    <media:group>
+      <media:title>SQL Server query tuning</media:title>
+      <media:thumbnail url="https://i1.ytimg.com/vi/AbCdEfGhI12/hqdefault.jpg" width="480" height="360"/>
+      <media:description>Practical relational query tuning techniques.</media:description>
+    </media:group>
+  </entry>
+</feed>

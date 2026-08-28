@@ -5,7 +5,11 @@ const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
 const PLAYLIST_ID_PATTERN = /^PL(?:[A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{32})$/;
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
-const YOUTUBE_THUMBNAIL_HOSTS = new Set(["i.ytimg.com", "img.youtube.com"]);
+const YOUTUBE_THUMBNAIL_HOST = /^(?:i(?:[1-9])?\.ytimg\.com|img\.youtube\.com)$/;
+
+export function officialYouTubeFeedUrl(channelId) {
+  return `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+}
 
 function officialThumbnailUrl(value) {
   if (typeof value !== "string") return null;
@@ -15,7 +19,7 @@ function officialThumbnailUrl(value) {
       url.protocol === "https:" &&
       !url.username &&
       !url.password &&
-      YOUTUBE_THUMBNAIL_HOSTS.has(url.hostname.toLowerCase())
+      YOUTUBE_THUMBNAIL_HOST.test(url.hostname.toLowerCase())
     ) ? value.trim() : null;
   } catch {
     return null;
@@ -38,7 +42,12 @@ function configuredIds(source = {}) {
 
 export function isYouTubeSourceConfigured(source) {
   const { channelIds, playlistIds } = configuredIds(source);
-  return channelIds.size + playlistIds.size === 1;
+  if (channelIds.size + playlistIds.size !== 1) return false;
+  if (source.type === "youtube-channel" && source.transport === "official-feed") {
+    return source.endpoint === officialYouTubeFeedUrl(source.channelId);
+  }
+  if (source.transport !== undefined && source.transport !== "api") return false;
+  return true;
 }
 
 export function isYouTubeDiscoveryEnabled(source) {
@@ -55,6 +64,7 @@ function normalizedVideo(video) {
     title: snippet.title,
     description: snippet.description ?? "",
     publishedAt: snippet.publishedAt ?? null,
+    updatedAt: video?.updatedAt ?? null,
     channelId: snippet.videoOwnerChannelId ?? snippet.channelId,
     channelTitle: snippet.videoOwnerChannelTitle ?? snippet.channelTitle,
     playlistIds: [video?.playlistId, ...(video?.playlistIds ?? [])].filter(Boolean),
@@ -123,7 +133,7 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
       description: video.description,
       publisher: author,
       publishedAt: video.publishedAt,
-      modifiedAt: null,
+      modifiedAt: video.updatedAt,
       discoveredAt: discoveryTime,
       evidence: [
         { type: "youtube-description", value: video.description || video.title },

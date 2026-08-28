@@ -2,8 +2,19 @@ name: Discover gallery content (dry run)
 
 on:
   schedule:
+    - cron: "17 3 * * *"
     - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      cadence:
+        description: Sources to query
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - daily
+          - weekly
 
 permissions:
   contents: read
@@ -29,7 +40,44 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Resolve discovery cadence
+        id: cadence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_CADENCE: ${{ inputs.cadence }}
+        run: |
+          case "$EVENT_NAME" in
+            schedule)
+              case "$EVENT_SCHEDULE" in
+                "17 3 * * *") cadence="daily" ;;
+                "17 3 * * 1") cadence="weekly" ;;
+                *)
+                  printf 'Unrecognized discovery schedule: %s\n' "$EVENT_SCHEDULE" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            workflow_dispatch)
+              cadence="$DISPATCH_CADENCE"
+              ;;
+            *)
+              printf 'Unsupported discovery event: %s\n' "$EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          case "$cadence" in
+            all|daily|weekly) ;;
+            *)
+              printf 'Invalid discovery cadence: %s\n' "$cadence" >&2
+              exit 1
+              ;;
+          esac
+          printf 'cadence=%s\n' "$cadence" >> "$GITHUB_OUTPUT"
+
       - name: Initialize diagnostic report envelopes
+        env:
+          DISCOVERY_CADENCE: ${{ steps.cadence.outputs.cadence }}
         run: |
           node --input-type=module <<'NODE'
           import {
@@ -43,10 +91,15 @@ jobs:
 
           const reportDirectory = "gallery-reports";
           const timestamp = new Date().toISOString();
+          const cadence = process.env.DISCOVERY_CADENCE;
+          if (!["all", "daily", "weekly"].includes(cadence)) {
+            throw new TypeError("DISCOVERY_CADENCE must be all, daily, or weekly");
+          }
           const discovery = {
             schemaVersion: "1.0.0",
             mode: "dry-run",
             mutationPerformed: false,
+            cadence,
             status: "partial",
             startedAt: timestamp,
             completedAt: timestamp,
@@ -121,7 +174,8 @@ jobs:
       - name: Discover and gate content in report-only mode
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: npm run gallery:discover -- --dry-run --report-directory gallery-reports
+          DISCOVERY_CADENCE: ${{ steps.cadence.outputs.cadence }}
+        run: npm run gallery:discover -- --dry-run --cadence "$DISCOVERY_CADENCE" --report-directory gallery-reports
 
       - name: Upload discovery and candidate gate reports
         if: always()

@@ -109,6 +109,125 @@
       "excludeRules": [
         "entries-without-canonical-url"
       ]
+    },
+    {
+      "id": "youtube-azure-cosmos-db",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9OJ32CzooNJNoP6_iIfxRw",
+      "channelId": "UC9OJ32CzooNJNoP6_iIfxRw",
+      "transport": "official-feed",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Azure Cosmos DB",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-coffee-with-azure-cosmos-db",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UCRA3PMzX6Rz2KrX6bf-XrHA",
+      "channelId": "UCRA3PMzX6Rz2KrX6bf-XrHA",
+      "transport": "official-feed",
+      "trustTier": "curated",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Coffee with Azure Cosmos DB",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-microsoft-azure",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0m-80FnNY2Qb7obvTL_2fA",
+      "channelId": "UC0m-80FnNY2Qb7obvTL_2fA",
+      "transport": "official-feed",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Microsoft Azure",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-microsoft-developer",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsMica-v34Irf9KVTh6xx-g",
+      "channelId": "UCsMica-v34Irf9KVTh6xx-g",
+      "transport": "official-feed",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Microsoft Developer",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-microsoft-reactor",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UCkm6luGCS3hD25jcEhvRMIA",
+      "channelId": "UCkm6luGCS3hD25jcEhvRMIA",
+      "transport": "official-feed",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Microsoft Reactor",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-microsoft-mechanics",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJ9905MRHxwLZ2jeNQGIWxA",
+      "channelId": "UCJ9905MRHxwLZ2jeNQGIWxA",
+      "transport": "official-feed",
+      "trustTier": "first-party",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "Microsoft Mechanics",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
+    },
+    {
+      "id": "youtube-sqlbits",
+      "type": "youtube-channel",
+      "endpoint": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn_9T5oprhCz9whckcRcEgg",
+      "channelId": "UCn_9T5oprhCz9whckcRcEgg",
+      "transport": "official-feed",
+      "trustTier": "curated",
+      "enabled": true,
+      "cadence": "daily",
+      "ownerLabel": "SQLBits",
+      "includeRules": [
+        "require-cosmos-db-material-relevance"
+      ],
+      "excludeRules": [
+        "videos-without-immutable-id"
+      ]
     }
   ]
 }
