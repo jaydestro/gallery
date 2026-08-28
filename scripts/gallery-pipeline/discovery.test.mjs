@@ -305,7 +305,7 @@ test("unavailable official Learn sitemap is indeterminate", async () => {
   assert.equal(result.candidates.length, 0);
 });
 
-test("Learn falls back to the official root index and rejects malicious or out-of-root links", async () => {
+test("Learn follows a same-host redirect to the official root index", async () => {
   const source = {
     id: "learn-cosmos-db",
     type: "documentation-root",
@@ -327,7 +327,11 @@ test("Learn falls back to the official root index and rejects malicious or out-o
     responses: {
       "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": { status: 404 },
       "https://learn.microsoft.com/sitemap.xml": { status: 404 },
-      "https://learn.microsoft.com/azure/cosmos-db/": { body: rootHtml },
+      "https://learn.microsoft.com/azure/cosmos-db/": {
+        status: 302,
+        headers: { location: "/en-us/azure/cosmos-db/" },
+      },
+      "https://learn.microsoft.com/en-us/azure/cosmos-db/": { body: rootHtml },
     },
   });
 
@@ -340,6 +344,34 @@ test("Learn falls back to the official root index and rejects malicious or out-o
   assert.ok(result.candidates[0].evidence.some((item) =>
     item.type === "learn-official-root-index" && item.url === source.endpoint));
   assert.equal(requests.filter((url) => url === source.endpoint).length, 1);
+  assert.equal(requests.filter((url) => url === "https://learn.microsoft.com/en-us/azure/cosmos-db/").length, 1);
+});
+
+test("Learn rejects a cross-host redirect from the official root index", async () => {
+  const source = {
+    id: "learn-cosmos-db",
+    type: "documentation-root",
+    endpoint: "https://learn.microsoft.com/azure/cosmos-db/",
+    trustTier: "first-party",
+    enabled: true,
+    ownerLabel: "Microsoft Learn",
+  };
+  const { result, requests } = await runWithFixtures({
+    sources: [source],
+    responses: {
+      "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": { status: 404 },
+      "https://learn.microsoft.com/sitemap.xml": { status: 404 },
+      "https://learn.microsoft.com/azure/cosmos-db/": {
+        status: 302,
+        headers: { location: "https://evil.example/azure/cosmos-db/" },
+      },
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.equal(result.sources[0].status, "indeterminate");
+  assert.match(result.sources[0].reason, /untrusted hostname: evil\.example/);
+  assert.equal(requests.includes("https://evil.example/azure/cosmos-db/"), false);
 });
 
 test("safe XML parsing rejects declarations and custom entities", () => {

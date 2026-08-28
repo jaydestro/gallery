@@ -13,6 +13,7 @@ const IMMUTABLE_SOURCE_ID = /^[A-Za-z0-9_-]{10,}$/;
 const MAX_XML_DEPTH = 64;
 const MAX_XML_NODES = 10_000;
 const LEARN_ROOT_PATH = "/azure/cosmos-db";
+const POLICY_MAX_REDIRECTS = 5;
 
 const DEFAULT_LIMITS = Object.freeze({
   githubPageSize: 50,
@@ -374,13 +375,16 @@ function assertLearnSitemapEndpoint(value, source) {
   return url;
 }
 
-async function fetchBounded(url, { trustedHosts, headers, fetchOptions, limits }) {
+async function fetchBounded(
+  url,
+  { trustedHosts, headers, fetchOptions, limits, maxRedirects = 0 },
+) {
   return safeFetch(url, {
     ...fetchOptions,
     trustedHosts,
     headers: { ...(fetchOptions.headers ?? {}), ...headers },
     maxBytes: limits.responseBytes,
-    maxRedirects: 0,
+    maxRedirects,
   });
 }
 
@@ -709,6 +713,7 @@ async function fetchLearnRootIndex(source, context) {
     trustedHosts: [LEARN_HOST],
     fetchOptions: context.fetchOptions,
     limits: context.limits,
+    maxRedirects: POLICY_MAX_REDIRECTS,
     headers: { Accept: "text/html" },
   }));
   return response.text();
