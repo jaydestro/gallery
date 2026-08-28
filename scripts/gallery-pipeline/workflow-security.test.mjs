@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +15,7 @@ const WORKFLOW_FILES = [
   "analyze-gallery-candidates.yml",
   "authorize-gallery-change.yml",
   "deploy.yml",
+  "discover-content.yml",
   "evaluate-pipeline-policy.yml",
   "generate-portfolio-report.yml",
   "publish-gallery-changes.yml",
@@ -614,4 +615,102 @@ test("gallery validation exposes one stable universal PR and merge-queue check",
   assert.doesNotMatch(validateJob, /^    if:/m);
   assert.match(workflow, /^permissions:\s*\r?\n\s+contents:\s*read\s*$/m);
   assert.doesNotMatch(workflow, /\$\{\{\s*secrets\.|id-token:\s*write|pages:\s*write/);
+});
+
+test("scheduled discovery is bounded, read-only, and always initializes diagnostics before network work", async () => {
+  const workflow = await readWorkflow("discover-content.yml");
+  const permissions = yamlSection(workflow, "permissions");
+  const discoverJob = yamlSection(workflow, "discover", 2);
+  const policy = JSON.parse(await readFile(
+    path.join(ROOT_DIRECTORY, ".github", "gallery-pipeline", "policy.json"),
+    "utf8",
+  ));
+  const initializeIndex = discoverJob.indexOf("      - name: Initialize diagnostic report envelopes");
+  const installIndex = discoverJob.indexOf("      - name: Install dependencies");
+  const discoveryIndex = discoverJob.indexOf("      - name: Discover and gate content in report-only mode");
+  const uploadIndex = discoverJob.indexOf("      - name: Upload discovery and candidate gate reports");
+
+  assert.match(permissions, /^  contents:\s*read\s*$/m);
+  assert.doesNotMatch(workflow, /contents:\s*write|pull-requests:\s*write|id-token:\s*write|\$\{\{\s*secrets\./);
+  assert.match(discoverJob, /^    timeout-minutes:\s*30\s*$/m);
+  assert.equal(policy.discovery.operationDeadlineSeconds, 20 * 60);
+  assert.ok(
+    30 * 60 - policy.discovery.operationDeadlineSeconds >= 5 * 60,
+    "the operation deadline must reserve at least five minutes for finalization and upload",
+  );
+  for (const [name, index] of [
+    ["diagnostic initialization", initializeIndex],
+    ["dependency installation", installIndex],
+    ["discovery", discoveryIndex],
+    ["artifact upload", uploadIndex],
+  ]) {
+    assert.notEqual(index, -1, `Missing ${name}`);
+  }
+  assert.ok(initializeIndex < installIndex);
+  assert.ok(installIndex < discoveryIndex);
+  assert.ok(discoveryIndex < uploadIndex);
+  const initializerScript = workflowStepScript(
+    workflow,
+    "Initialize diagnostic report envelopes",
+  );
+  assert.doesNotMatch(initializerScript, /discover-content\.mjs|from\s+["']\.\.?\//);
+  assert.match(initializerScript, /GALLERY_DISCOVERY_DEADLINE_MILLISECONDS/);
+  assert.match(discoverJob, /gallery:discover -- --dry-run --report-directory gallery-reports/);
+  const uploadStep = discoverJob.slice(uploadIndex);
+  assert.match(uploadStep, /^        if:\s*always\(\)\s*$/m);
+  assert.match(uploadStep, /gallery-reports\/discovery\.json/);
+  assert.match(uploadStep, /gallery-reports\/candidate-gates\.json/);
+  assert.match(uploadStep, /^          if-no-files-found:\s*error\s*$/m);
+  assert.doesNotMatch(discoverJob, /AZURE_OPENAI|gallery:analyze|--write|--apply|--mutate/);
+});
+
+test("pre-install discovery diagnostics initialize without node_modules", async () => {
+  const workflow = await readWorkflow("discover-content.yml");
+  const initializerScript = workflowStepScript(
+    workflow,
+    "Initialize diagnostic report envelopes",
+  );
+  const rootDirectory = await mkdtemp(path.join(os.tmpdir(), "gallery-diagnostics-clean-"));
+  const policyDirectory = path.join(rootDirectory, ".github", "gallery-pipeline");
+  const githubEnvironmentPath = path.join(rootDirectory, "github-env.txt");
+  const policy = JSON.parse(await readFile(
+    path.join(ROOT_DIRECTORY, ".github", "gallery-pipeline", "policy.json"),
+    "utf8",
+  ));
+  const before = Date.now();
+
+  try {
+    await mkdir(policyDirectory, { recursive: true });
+    await writeFile(
+      path.join(policyDirectory, "policy.json"),
+      `${JSON.stringify(policy)}\n`,
+      "utf8",
+    );
+    await assert.rejects(access(path.join(rootDirectory, "node_modules")));
+    const bash = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
+    await execFileAsync(bash, ["-c", initializerScript], {
+      cwd: rootDirectory,
+      env: { ...process.env, GITHUB_ENV: githubEnvironmentPath },
+    });
+    const after = Date.now();
+
+    await assert.rejects(access(path.join(rootDirectory, "node_modules")));
+    for (const fileName of ["discovery.json", "candidate-gates.json"]) {
+      const report = JSON.parse(await readFile(
+        path.join(rootDirectory, "gallery-reports", fileName),
+        "utf8",
+      ));
+      assert.equal(report.schemaVersion, "1.0.0");
+      assert.equal(report.status, "partial");
+      assert.equal(report.mutationPerformed, false);
+    }
+    const environmentLine = (await readFile(githubEnvironmentPath, "utf8")).trim();
+    const deadlineMilliseconds = Number(environmentLine.split("=")[1]);
+    const budgetMilliseconds = policy.discovery.operationDeadlineSeconds * 1000;
+    assert.match(environmentLine, /^GALLERY_DISCOVERY_DEADLINE_MILLISECONDS=\d+$/);
+    assert.ok(deadlineMilliseconds >= before + budgetMilliseconds);
+    assert.ok(deadlineMilliseconds <= after + budgetMilliseconds);
+  } finally {
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
 });

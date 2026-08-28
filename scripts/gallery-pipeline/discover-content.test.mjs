@@ -84,6 +84,8 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   };
   let discoveryOptions;
   let gateOptions;
+  const deadlineMilliseconds = Date.parse("2026-08-28T12:20:00.000Z");
+  const now = () => Date.parse("2026-08-28T12:00:00.000Z");
 
   const result = await runReportOnlyPipeline(inputs, {
     async runDiscoveryImpl(options) {
@@ -94,6 +96,8 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
       gateOptions = options;
       return candidateGates;
     },
+    deadlineMilliseconds,
+    now,
   });
 
   assert.strictEqual(result.discovery, discovery);
@@ -111,9 +115,108 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   assert.equal(gateOptions.checkedAt, discovery.completedAt);
   assert.strictEqual(discoveryOptions.fetchOptions.fetchImpl, fetchImpl);
   assert.strictEqual(discoveryOptions.fetchOptions.lookup, lookup);
+  assert.equal(discoveryOptions.deadlineMilliseconds, deadlineMilliseconds);
+  assert.equal(discoveryOptions.fetchOptions.deadlineMilliseconds, deadlineMilliseconds);
+  assert.strictEqual(discoveryOptions.now, now);
+  assert.strictEqual(discoveryOptions.fetchOptions.now, now);
+  assert.equal(gateOptions.deadlineMilliseconds, deadlineMilliseconds);
+  assert.strictEqual(gateOptions.now, now);
   assert.strictEqual(discoveryOptions.environment, inputs.environment);
   assert.equal(Object.hasOwn(gateOptions, "aiClient"), false);
   assert.equal(Object.hasOwn(gateOptions, "writer"), false);
+});
+
+test("starts the CLI deadline before discovery and does not reset it for candidate gates", async () => {
+  const output = outputBuffer();
+  const operationStartedMilliseconds = 100;
+  const expectedDeadlineMilliseconds = operationStartedMilliseconds + 20 * 60 * 1000;
+  const timestamp = "2026-08-28T12:00:00.000Z";
+  let currentMilliseconds = operationStartedMilliseconds;
+  const discovery = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "partial",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    candidates: [],
+    sources: [],
+  };
+
+  const result = await main(["--fixtures", FIXTURE_DIRECTORY], {
+    stdout: output.stream,
+    env: {},
+    now: () => currentMilliseconds,
+    async runDiscoveryImpl(options) {
+      assert.equal(options.deadlineMilliseconds, expectedDeadlineMilliseconds);
+      assert.equal(options.fetchOptions.deadlineMilliseconds, expectedDeadlineMilliseconds);
+      currentMilliseconds = expectedDeadlineMilliseconds;
+      return discovery;
+    },
+    async runCandidateGatesImpl(options) {
+      assert.equal(options.deadlineMilliseconds, expectedDeadlineMilliseconds);
+      assert.equal(options.now(), expectedDeadlineMilliseconds);
+      return {
+        schemaVersion: "1.0.0",
+        mode: "dry-run",
+        mutationPerformed: false,
+        status: "indeterminate",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        eligible: [],
+        rejected: [],
+      };
+    },
+  });
+
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.result.status, "indeterminate");
+  assert.deepEqual(JSON.parse(output.value()), result.result);
+});
+
+test("preserves an earlier workflow deadline instead of restarting the budget", async () => {
+  const output = outputBuffer();
+  const workflowDeadlineMilliseconds = 900;
+  const timestamp = "2026-08-28T12:00:00.000Z";
+  const discovery = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "complete",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    candidates: [],
+    sources: [],
+  };
+  const candidateGates = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "complete",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    eligible: [],
+    rejected: [],
+  };
+
+  const result = await main(["--fixtures", FIXTURE_DIRECTORY], {
+    stdout: output.stream,
+    env: {
+      GALLERY_DISCOVERY_DEADLINE_MILLISECONDS: String(workflowDeadlineMilliseconds),
+    },
+    now: () => 500,
+    async runDiscoveryImpl(options) {
+      assert.equal(options.deadlineMilliseconds, workflowDeadlineMilliseconds);
+      return discovery;
+    },
+    async runCandidateGatesImpl(options) {
+      assert.equal(options.deadlineMilliseconds, workflowDeadlineMilliseconds);
+      return candidateGates;
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.result.status, "complete");
 });
 
 test("live CLI forwards only the environment YouTube key and never serializes it", async () => {
@@ -199,6 +302,14 @@ test("writes both valid reports before returning nonzero for a partial run", asy
       },
       async runCandidateGatesImpl({ discovery }) {
         assert.strictEqual(discovery, partialDiscovery);
+        assert.deepEqual(
+          JSON.parse(await readFile(path.join(reportDirectory, "discovery.json"), "utf8")),
+          partialDiscovery,
+        );
+        assert.equal(
+          JSON.parse(await readFile(path.join(reportDirectory, "candidate-gates.json"), "utf8")).status,
+          "partial",
+        );
         return completeGates;
       },
     });
@@ -218,6 +329,56 @@ test("writes both valid reports before returning nonzero for a partial run", asy
       JSON.parse(await readFile(path.join(reportDirectory, "candidate-gates.json"), "utf8")),
       completeGates,
     );
+  } finally {
+    await rm(reportDirectory, { recursive: true, force: true });
+  }
+});
+
+test("leaves valid partial diagnostics when discovery stops before producing a report", async () => {
+  const reportDirectory = await mkdtemp(path.join(tmpdir(), "gallery-partial-diagnostics-"));
+  const timestamp = "2026-08-28T12:00:00.000Z";
+  let discoveryStarted = false;
+
+  try {
+    await assert.rejects(main([
+      "--fixtures",
+      FIXTURE_DIRECTORY,
+      "--report-directory",
+      reportDirectory,
+    ], {
+      stdout: outputBuffer().stream,
+      env: {},
+      now: () => Date.parse(timestamp),
+      async runDiscoveryImpl() {
+        discoveryStarted = true;
+        const files = (await readdir(reportDirectory)).sort();
+        assert.deepEqual(files, ["candidate-gates.json", "discovery.json"]);
+        const discovery = JSON.parse(await readFile(
+          path.join(reportDirectory, "discovery.json"),
+          "utf8",
+        ));
+        const candidateGates = JSON.parse(await readFile(
+          path.join(reportDirectory, "candidate-gates.json"),
+          "utf8",
+        ));
+        assert.equal(discovery.status, "partial");
+        assert.equal(candidateGates.status, "partial");
+        assert.equal(discovery.startedAt, timestamp);
+        assert.equal(candidateGates.startedAt, timestamp);
+        throw new Error("simulated discovery cancellation");
+      },
+    }), /simulated discovery cancellation/);
+
+    assert.equal(discoveryStarted, true);
+    assert.deepEqual(
+      (await readdir(reportDirectory)).sort(),
+      ["candidate-gates.json", "discovery.json"],
+    );
+    for (const fileName of ["candidate-gates.json", "discovery.json"]) {
+      const report = JSON.parse(await readFile(path.join(reportDirectory, fileName), "utf8"));
+      assert.equal(report.status, "partial");
+      assert.equal(report.mutationPerformed, false);
+    }
   } finally {
     await rm(reportDirectory, { recursive: true, force: true });
   }

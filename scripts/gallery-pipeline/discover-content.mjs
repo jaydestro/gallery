@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,9 @@ import { createFixtureTransport, runDiscovery } from "./discovery.mjs";
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "../..");
 const DEFAULT_FIXTURE_DIRECTORY = path.join(SCRIPT_DIRECTORY, "fixtures/live-discovery");
+const DEFAULT_OPERATION_DEADLINE_SECONDS = 20 * 60;
+const WORKFLOW_DEADLINE_ENVIRONMENT_VARIABLE = "GALLERY_DISCOVERY_DEADLINE_MILLISECONDS";
+let temporaryReportSequence = 0;
 
 function usage() {
   return [
@@ -143,9 +146,120 @@ function combinedStatus(discoveryStatus, candidateGateStatus) {
   return "partial";
 }
 
+function diagnosticTimestamp(value) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.valueOf())) throw new TypeError("now must return a valid timestamp");
+  return timestamp.toISOString();
+}
+
+function operationDeadlineSeconds(policy) {
+  const value = policy?.discovery?.operationDeadlineSeconds ??
+    DEFAULT_OPERATION_DEADLINE_SECONDS;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError("policy.discovery.operationDeadlineSeconds must be positive");
+  }
+  return value;
+}
+
+function workflowDeadlineMilliseconds(env) {
+  const value = env?.[WORKFLOW_DEADLINE_ENVIRONMENT_VARIABLE];
+  if (value === undefined || value === "") return Number.POSITIVE_INFINITY;
+  if (!/^\d+$/.test(value)) {
+    throw new TypeError(`${WORKFLOW_DEADLINE_ENVIRONMENT_VARIABLE} must be an epoch millisecond integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new TypeError(`${WORKFLOW_DEADLINE_ENVIRONMENT_VARIABLE} must be an epoch millisecond integer`);
+  }
+  return parsed;
+}
+
+function resolveOperationDeadline({ env, operationStartedMilliseconds, policy }) {
+  return Math.min(
+    operationStartedMilliseconds + operationDeadlineSeconds(policy) * 1000,
+    workflowDeadlineMilliseconds(env),
+  );
+}
+
+async function writeJsonAtomic(filePath, value) {
+  temporaryReportSequence += 1;
+  const temporaryPath = `${filePath}.${process.pid}.${temporaryReportSequence}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+async function writeDiscoveryReport(directory, discovery) {
+  await writeJsonAtomic(path.join(directory, "discovery.json"), discovery);
+}
+
+async function writeCandidateGateReport(directory, candidateGates) {
+  await writeJsonAtomic(path.join(directory, "candidate-gates.json"), candidateGates);
+}
+
+export async function initializeDiagnosticReports(directory, { now = Date.now } = {}) {
+  if (typeof now !== "function") throw new TypeError("now must be a function");
+  const timestamp = diagnosticTimestamp(now());
+  const discovery = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "partial",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    summary: {
+      sources: 0,
+      succeededSources: 0,
+      skippedSources: 0,
+      indeterminateSources: 0,
+      candidates: 0,
+      rejected: 0,
+    },
+    candidates: [],
+    rejected: [],
+    sources: [],
+    evidence: [],
+  };
+  const candidateGates = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "partial",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    summary: {
+      candidates: 0,
+      availabilityChecks: 0,
+      indeterminateAvailabilityChecks: 0,
+      deadlineExceededAvailabilityChecks: 0,
+      eligible: 0,
+      rejected: 0,
+    },
+    eligible: [],
+    rejected: [],
+  };
+  await mkdir(directory, { recursive: true });
+  await Promise.all([
+    writeDiscoveryReport(directory, discovery),
+    writeCandidateGateReport(directory, candidateGates),
+  ]);
+  return { discovery, candidateGates };
+}
+
 export async function runReportOnlyPipeline(inputs, {
   runDiscoveryImpl = runDiscovery,
   runCandidateGatesImpl = runCandidateGates,
+  onDiscoveryComplete = async () => {},
+  onCandidateGatesComplete = async () => {},
+  deadlineMilliseconds,
+  now = Date.now,
 } = {}) {
   const {
     trustedSources,
@@ -167,8 +281,11 @@ export async function runReportOnlyPipeline(inputs, {
     environment,
     discoveredAt,
     limits,
-    fetchOptions: { fetchImpl, lookup },
+    deadlineMilliseconds,
+    now,
+    fetchOptions: { fetchImpl, lookup, deadlineMilliseconds, now },
   });
+  await onDiscoveryComplete(discovery);
   const candidateGates = await runCandidateGatesImpl({
     discovery,
     trustedSources,
@@ -179,7 +296,10 @@ export async function runReportOnlyPipeline(inputs, {
     token: githubToken,
     fetchImpl,
     lookup,
+    deadlineMilliseconds,
+    now,
   });
+  await onCandidateGatesComplete(candidateGates);
   return {
     schemaVersion: "1.0.0",
     mode: "dry-run",
@@ -195,11 +315,8 @@ export async function runReportOnlyPipeline(inputs, {
 async function writeReports(directory, result) {
   await mkdir(directory, { recursive: true });
   await Promise.all([
-    writeFile(path.join(directory, "discovery.json"), `${JSON.stringify(result.discovery, null, 2)}\n`),
-    writeFile(
-      path.join(directory, "candidate-gates.json"),
-      `${JSON.stringify(result.candidateGates, null, 2)}\n`,
-    ),
+    writeDiscoveryReport(directory, result.discovery),
+    writeCandidateGateReport(directory, result.candidateGates),
   ]);
 }
 
@@ -210,20 +327,42 @@ export async function main(
     env = process.env,
     runDiscoveryImpl = runDiscovery,
     runCandidateGatesImpl = runCandidateGates,
+    now = Date.now,
   } = {},
 ) {
+  if (typeof now !== "function") throw new TypeError("now must be a function");
+  const operationStartedMilliseconds = now();
   const options = parseArguments(arguments_);
   if (options.help) {
     stdout.write(`${usage()}\n`);
     return { exitCode: 0, result: null };
   }
 
+  if (options.reportDirectory) {
+    await initializeDiagnosticReports(options.reportDirectory, {
+      now: () => operationStartedMilliseconds,
+    });
+  }
+
   const inputs = options.fixtureDirectory
     ? await loadFixtureInputs(options.fixtureDirectory)
     : await loadLiveInputs(env);
+  const deadlineMilliseconds = resolveOperationDeadline({
+    env,
+    operationStartedMilliseconds,
+    policy: inputs.policy,
+  });
   const result = await runReportOnlyPipeline(inputs, {
     runDiscoveryImpl,
     runCandidateGatesImpl,
+    onDiscoveryComplete: options.reportDirectory
+      ? (discovery) => writeDiscoveryReport(options.reportDirectory, discovery)
+      : undefined,
+    onCandidateGatesComplete: options.reportDirectory
+      ? (candidateGates) => writeCandidateGateReport(options.reportDirectory, candidateGates)
+      : undefined,
+    deadlineMilliseconds,
+    now,
   });
   if (options.reportDirectory) {
     await writeReports(options.reportDirectory, result);

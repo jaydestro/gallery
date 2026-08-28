@@ -355,6 +355,58 @@ test("one source failure is indeterminate without discarding successful source c
   assert.ok(result.rejected.some((item) => item.reason === "source-indeterminate"));
 });
 
+test("stops starting discovery requests after the operation deadline", async () => {
+  const firstEndpoint = "https://devblogs.microsoft.com/cosmosdb/first-feed/";
+  const secondEndpoint = "https://devblogs.microsoft.com/cosmosdb/second-feed/";
+  const requests = [];
+  let currentMilliseconds = 0;
+  const result = await runDiscovery({
+    trustedSources: {
+      sources: [
+        feedSource("first-feed", firstEndpoint),
+        feedSource("second-feed", secondEndpoint),
+      ],
+    },
+    discoveredAt: DISCOVERED_AT,
+    deadlineMilliseconds: 100,
+    now: () => currentMilliseconds,
+    fetchOptions: {
+      lookup: async () => [{ address: "20.12.34.56", family: 4 }],
+      fetchImpl: async (input) => {
+        requests.push(String(input));
+        currentMilliseconds = 100;
+        return new Response(rss([rssItem("late-guid", "late-post")]));
+      },
+    },
+  });
+
+  assert.deepEqual(requests, [firstEndpoint]);
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.candidates, []);
+  assert.deepEqual(
+    result.sources.map(({ sourceRegistryId, status, queried, reason }) => ({
+      sourceRegistryId,
+      status,
+      queried,
+      reason,
+    })),
+    [
+      {
+        sourceRegistryId: "first-feed",
+        status: "indeterminate",
+        queried: true,
+        reason: "DISCOVERY_DEADLINE_EXCEEDED",
+      },
+      {
+        sourceRegistryId: "second-feed",
+        status: "indeterminate",
+        queried: false,
+        reason: "DISCOVERY_DEADLINE_EXCEEDED",
+      },
+    ],
+  );
+});
+
 test("unavailable official Learn sitemap is indeterminate", async () => {
   const source = {
     id: "learn-cosmos-db",

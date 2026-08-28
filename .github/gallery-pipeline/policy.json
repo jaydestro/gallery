@@ -22,6 +22,17 @@
     "timeoutSeconds": 30,
     "maxRedirects": 5
   },
+  "discovery": {
+    "operationDeadlineSeconds": 1200
+  },
+  "candidateAvailability": {
+    "retryDelaySeconds": [
+      0,
+      2
+    ],
+    "timeoutSeconds": 3,
+    "maxTotalSecondsPerUrl": 5
+  },
   "thresholds": {
     "materialRelevance": 0.95,
     "summaryGrounding": 0.95,

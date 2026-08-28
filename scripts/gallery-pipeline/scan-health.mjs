@@ -201,6 +201,8 @@ async function boundedRequest(url, method, {
   maxBytes = 64 * 1024,
   delay = wait,
   now = Date.now,
+  signal,
+  deadlineMilliseconds,
 }) {
   if (typeof delay !== "function") throw new TypeError("delay must be a function");
   if (typeof now !== "function") throw new TypeError("now must be a function");
@@ -221,6 +223,9 @@ async function boundedRequest(url, method, {
         maxBytes,
         timeoutMs: (policy?.http?.timeoutSeconds ?? 30) * 1000,
         maxRedirects: policy?.http?.maxRedirects ?? 5,
+        signal,
+        deadlineMilliseconds,
+        now,
       });
       const reason = TRANSIENT_HTTP_STATUSES.has(response.status)
         ? `SOURCE_HTTP_${response.status}`

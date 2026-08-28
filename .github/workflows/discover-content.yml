@@ -29,6 +29,88 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Initialize diagnostic report envelopes
+        run: |
+          node --input-type=module <<'NODE'
+          import {
+            appendFileSync,
+            mkdirSync,
+            readFileSync,
+            renameSync,
+            rmSync,
+            writeFileSync,
+          } from "node:fs";
+
+          const reportDirectory = "gallery-reports";
+          const timestamp = new Date().toISOString();
+          const discovery = {
+            schemaVersion: "1.0.0",
+            mode: "dry-run",
+            mutationPerformed: false,
+            status: "partial",
+            startedAt: timestamp,
+            completedAt: timestamp,
+            summary: {
+              sources: 0,
+              succeededSources: 0,
+              skippedSources: 0,
+              indeterminateSources: 0,
+              candidates: 0,
+              rejected: 0,
+            },
+            candidates: [],
+            rejected: [],
+            sources: [],
+            evidence: [],
+          };
+          const candidateGates = {
+            schemaVersion: "1.0.0",
+            mode: "dry-run",
+            mutationPerformed: false,
+            status: "partial",
+            startedAt: timestamp,
+            completedAt: timestamp,
+            summary: {
+              candidates: 0,
+              availabilityChecks: 0,
+              indeterminateAvailabilityChecks: 0,
+              deadlineExceededAvailabilityChecks: 0,
+              eligible: 0,
+              rejected: 0,
+            },
+            eligible: [],
+            rejected: [],
+          };
+
+          function writeJsonAtomic(fileName, value) {
+            const filePath = `${reportDirectory}/${fileName}`;
+            const temporaryPath = `${filePath}.${process.pid}.tmp`;
+            try {
+              writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+              renameSync(temporaryPath, filePath);
+            } finally {
+              rmSync(temporaryPath, { force: true });
+            }
+          }
+
+          mkdirSync(reportDirectory, { recursive: true });
+          writeJsonAtomic("discovery.json", discovery);
+          writeJsonAtomic("candidate-gates.json", candidateGates);
+
+          const policy = JSON.parse(readFileSync(".github/gallery-pipeline/policy.json", "utf8"));
+          const deadlineSeconds = policy?.discovery?.operationDeadlineSeconds;
+          if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds <= 0) {
+            throw new TypeError("policy.discovery.operationDeadlineSeconds must be positive");
+          }
+          if (!process.env.GITHUB_ENV) throw new TypeError("GITHUB_ENV is required");
+          const deadlineMilliseconds = Date.parse(timestamp) + deadlineSeconds * 1000;
+          appendFileSync(
+            process.env.GITHUB_ENV,
+            `GALLERY_DISCOVERY_DEADLINE_MILLISECONDS=${deadlineMilliseconds}\n`,
+            "utf8",
+          );
+          NODE
+
       - name: Install dependencies
         run: npm ci
 

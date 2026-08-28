@@ -61,6 +61,17 @@ function raceWithAbort(promise, signal) {
   });
 }
 
+function deadlineError() {
+  const error = new Error("Safe fetch deadline exceeded");
+  error.name = "AbortError";
+  error.code = "DEADLINE_EXCEEDED";
+  return error;
+}
+
+function timeoutError(timeoutMs) {
+  return new Error(`Safe fetch timed out after ${timeoutMs}ms`);
+}
+
 export function isPrivateOrLinkLocalAddress(address) {
   const normalized = String(address).trim().toLowerCase().split("%")[0];
   const family = isIP(normalized);
@@ -118,10 +129,10 @@ async function validateDestination(url, trustedHosts, lookup, signal) {
   }
 }
 
-async function readBoundedBody(response, maxBytes, signal) {
+async function readBoundedBody(response, maxBytes, signal, throwIfExpired) {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel();
+    void response.body?.cancel().catch(() => {});
     throw new RangeError(`Response exceeded the ${maxBytes} byte limit`);
   }
   if (!response.body) {
@@ -134,18 +145,22 @@ async function readBoundedBody(response, maxBytes, signal) {
   try {
     while (true) {
       const { done, value } = await raceWithAbort(reader.read(), signal);
+      throwIfExpired();
       if (done) {
         break;
       }
       byteLength += value.byteLength;
       if (byteLength > maxBytes) {
-        await reader.cancel();
+        void reader.cancel().catch(() => {});
         throw new RangeError(`Response exceeded the ${maxBytes} byte limit`);
       }
       chunks.push(Buffer.from(value));
     }
+  } catch (error) {
+    void reader.cancel(error).catch(() => {});
+    throw error;
   } finally {
-    reader.releaseLock();
+    if (!signal.aborted) reader.releaseLock();
   }
   return Buffer.concat(chunks, byteLength);
 }
@@ -161,6 +176,8 @@ export async function safeFetch(
     timeoutMs = 30_000,
     maxRedirects = 5,
     signal,
+    deadlineMilliseconds,
+    now = Date.now,
   } = {},
 ) {
   if (typeof fetchImpl !== "function") {
@@ -175,26 +192,52 @@ export async function safeFetch(
   if (!Number.isSafeInteger(maxRedirects) || maxRedirects < 0) {
     throw new TypeError("maxRedirects must be a non-negative integer");
   }
+  if (
+    deadlineMilliseconds !== undefined &&
+    (!Number.isFinite(deadlineMilliseconds) || deadlineMilliseconds < 0)
+  ) {
+    throw new TypeError("deadlineMilliseconds must be a non-negative finite number");
+  }
+  if (typeof now !== "function") throw new TypeError("now must be a function");
 
   const allowedHosts = normalizeTrustedHosts(trustedHosts);
+  const requestStartedAt = now();
+  const timeoutDeadlineMilliseconds = requestStartedAt + timeoutMs;
+  const effectiveDeadlineMilliseconds = Math.min(
+    timeoutDeadlineMilliseconds,
+    deadlineMilliseconds ?? Number.POSITIVE_INFINITY,
+  );
+  const expirationError = deadlineMilliseconds !== undefined &&
+      deadlineMilliseconds <= timeoutDeadlineMilliseconds
+    ? deadlineError()
+    : timeoutError(timeoutMs);
+  const throwIfExpired = () => {
+    if (now() >= effectiveDeadlineMilliseconds) throw expirationError;
+  };
+  throwIfExpired();
+
   const controller = new AbortController();
   const abortFromCaller = () => controller.abort(signal.reason);
-  if (signal?.aborted) {
-    abortFromCaller();
-  } else {
-    signal?.addEventListener("abort", abortFromCaller, { once: true });
-  }
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`Safe fetch timed out after ${timeoutMs}ms`)),
-    timeoutMs,
-  );
+  let timeout;
 
   try {
+    if (signal?.aborted) {
+      abortFromCaller();
+    } else {
+      signal?.addEventListener("abort", abortFromCaller, { once: true });
+    }
+    timeout = setTimeout(
+      () => controller.abort(expirationError),
+      effectiveDeadlineMilliseconds - requestStartedAt,
+    );
+
     let currentUrl = new URL(input);
     let redirectCount = 0;
 
     while (true) {
+      throwIfExpired();
       await validateDestination(currentUrl, allowedHosts, lookup, controller.signal);
+      throwIfExpired();
       const response = await raceWithAbort(
         fetchImpl(currentUrl, {
           headers,
@@ -203,10 +246,18 @@ export async function safeFetch(
         }),
         controller.signal,
       );
+      if (now() >= effectiveDeadlineMilliseconds) {
+        controller.abort(expirationError);
+        try {
+          const cancellation = response.body?.cancel(expirationError);
+          void cancellation?.catch(() => {});
+        } catch {}
+        throw expirationError;
+      }
 
       if (REDIRECT_STATUSES.has(response.status)) {
         const location = response.headers.get("location");
-        await response.body?.cancel();
+        void response.body?.cancel().catch(() => {});
         if (!location) {
           throw new TypeError(`Redirect response ${response.status} did not include a Location header`);
         }
@@ -218,7 +269,13 @@ export async function safeFetch(
         continue;
       }
 
-      const body = await readBoundedBody(response, maxBytes, controller.signal);
+      const body = await readBoundedBody(
+        response,
+        maxBytes,
+        controller.signal,
+        throwIfExpired,
+      );
+      throwIfExpired();
       return {
         url: currentUrl.toString(),
         status: response.status,
@@ -235,7 +292,7 @@ export async function safeFetch(
       };
     }
   } finally {
-    clearTimeout(timeout);
+    if (timeout !== undefined) clearTimeout(timeout);
     signal?.removeEventListener("abort", abortFromCaller);
   }
 }

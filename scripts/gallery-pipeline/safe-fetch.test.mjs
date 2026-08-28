@@ -110,3 +110,69 @@ test("safe fetch enforces response byte, redirect, and time limits", async () =>
     /timed out after 10ms/,
   );
 });
+
+test("safe fetch rejects headers and bodies that complete at the operation deadline", async (context) => {
+  await context.test("late headers abort the request and cancel the unread body", async () => {
+    let currentMilliseconds = 0;
+    let requestSignal;
+    let bodyCancelCalls = 0;
+    let bodyCancelReason;
+    const body = new ReadableStream({
+      cancel(reason) {
+        bodyCancelCalls += 1;
+        bodyCancelReason = reason;
+      },
+    });
+    await assert.rejects(safeFetch("https://api.github.com/slow-headers", {
+      trustedHosts: ["api.github.com"],
+      lookup: publicLookup,
+      deadlineMilliseconds: 100,
+      now: () => currentMilliseconds,
+      fetchImpl: async (_url, { signal }) => {
+        requestSignal = signal;
+        currentMilliseconds = 100;
+        return new Response(body);
+      },
+    }), /deadline exceeded/);
+    assert.equal(requestSignal.aborted, true);
+    assert.equal(requestSignal.reason.code, "DEADLINE_EXCEEDED");
+    assert.equal(bodyCancelCalls, 1);
+    assert.equal(bodyCancelReason.code, "DEADLINE_EXCEEDED");
+  });
+
+  await context.test("body", async () => {
+    let currentMilliseconds = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        currentMilliseconds = 100;
+        controller.enqueue(new TextEncoder().encode("late"));
+        controller.close();
+      },
+    });
+    await assert.rejects(safeFetch("https://api.github.com/slow-body", {
+      trustedHosts: ["api.github.com"],
+      lookup: publicLookup,
+      deadlineMilliseconds: 100,
+      now: () => currentMilliseconds,
+      fetchImpl: async () => new Response(body),
+    }), /deadline exceeded/);
+  });
+
+  await context.test("pending body cancellation", async () => {
+    const controller = new AbortController();
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+    });
+    await assert.rejects(safeFetch("https://api.github.com/pending-body", {
+      trustedHosts: ["api.github.com"],
+      lookup: publicLookup,
+      signal: controller.signal,
+      fetchImpl: async () => {
+        queueMicrotask(() => controller.abort(new Error("operation deadline reached")));
+        return new Response(body);
+      },
+    }), /operation deadline reached/);
+  });
+});

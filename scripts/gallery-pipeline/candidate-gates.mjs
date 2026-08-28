@@ -6,6 +6,14 @@ import { CANDIDATE_SCHEMA_VERSION, normalizeCandidate } from "./normalize.mjs";
 import { checkSource, mapAvailabilityChecks } from "./scan-health.mjs";
 
 const MAX_CONCURRENCY = 6;
+const MAX_REQUEST_METHODS_PER_URL = 2;
+const CANDIDATE_GATE_DEADLINE_REASON = "CANDIDATE_GATE_DEADLINE_EXCEEDED";
+const DEFAULT_OPERATION_DEADLINE_SECONDS = 20 * 60;
+const DEFAULT_CANDIDATE_AVAILABILITY = Object.freeze({
+  retryDelaySeconds: Object.freeze([0, 2]),
+  timeoutSeconds: 3,
+  maxTotalSecondsPerUrl: 5,
+});
 const GITHUB_SOURCE_TYPES = new Set(["github-path", "github-repository"]);
 const CANDIDATE_TYPES_BY_ADAPTER = new Map([
   ["documentation-root", new Set(["learn-document"])],
@@ -15,6 +23,7 @@ const CANDIDATE_TYPES_BY_ADAPTER = new Map([
   ["youtube-playlist", new Set(["video"])],
 ]);
 const SAFE_SOURCE_REASON_CODES = new Set([
+  CANDIDATE_GATE_DEADLINE_REASON,
   "GITHUB_REPOSITORY_ARCHIVED",
   "GITHUB_REPOSITORY_DISABLED",
   "GITHUB_RESPONSE_INVALID",
@@ -61,6 +70,144 @@ function positiveInteger(value, name) {
     throw new TypeError(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function positiveNumber(value, name) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive number`);
+  }
+  return value;
+}
+
+function optionalDeadline(value, name) {
+  if (value === undefined) return Number.POSITIVE_INFINITY;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+function normalizeCandidateAvailability(value = DEFAULT_CANDIDATE_AVAILABILITY) {
+  const retryDelaySeconds = value?.retryDelaySeconds;
+  if (
+    !Array.isArray(retryDelaySeconds) ||
+    retryDelaySeconds.length === 0 ||
+    retryDelaySeconds[0] !== 0 ||
+    retryDelaySeconds.some((delaySeconds) => (
+      !Number.isSafeInteger(delaySeconds) || delaySeconds < 0
+    ))
+  ) {
+    throw new TypeError(
+      "policy.candidateAvailability.retryDelaySeconds must start at zero and contain non-negative integers",
+    );
+  }
+  return {
+    retryDelaySeconds: [...retryDelaySeconds],
+    timeoutSeconds: positiveNumber(
+      value?.timeoutSeconds,
+      "policy.candidateAvailability.timeoutSeconds",
+    ),
+    maxTotalSecondsPerUrl: positiveNumber(
+      value?.maxTotalSecondsPerUrl,
+      "policy.candidateAvailability.maxTotalSecondsPerUrl",
+    ),
+  };
+}
+
+export function candidateAvailabilityRuntimeBudgetSeconds(value = DEFAULT_CANDIDATE_AVAILABILITY) {
+  const candidateAvailability = normalizeCandidateAvailability(value);
+  const perMethodSeconds = (
+    candidateAvailability.retryDelaySeconds.reduce((total, delaySeconds) => (
+      total + delaySeconds
+    ), 0) +
+    candidateAvailability.retryDelaySeconds.length * candidateAvailability.timeoutSeconds
+  );
+  return Math.min(
+    candidateAvailability.maxTotalSecondsPerUrl,
+    perMethodSeconds * MAX_REQUEST_METHODS_PER_URL,
+  );
+}
+
+function candidateSourcePolicy(policy, candidateAvailability) {
+  return {
+    http: {
+      retryDelaySeconds: candidateAvailability.retryDelaySeconds,
+      timeoutSeconds: candidateAvailability.timeoutSeconds,
+      maxRedirects: policy?.http?.maxRedirects ?? 5,
+    },
+  };
+}
+
+function deadlineError() {
+  const error = new Error("Candidate availability deadline exceeded");
+  error.name = "AbortError";
+  return error;
+}
+
+async function checkCandidateSource(url, {
+  candidateAvailability,
+  delay,
+  fetchImpl,
+  gateDeadlineMilliseconds,
+  lookup,
+  now,
+  policy,
+  token,
+}) {
+  const urlDeadlineMilliseconds = Math.min(
+    gateDeadlineMilliseconds,
+    now() + candidateAvailability.maxTotalSecondsPerUrl * 1000,
+  );
+  const boundedDelay = async (milliseconds) => {
+    const remainingMilliseconds = urlDeadlineMilliseconds - now();
+    if (remainingMilliseconds <= 0) throw deadlineError();
+    if (milliseconds >= remainingMilliseconds) {
+      await delay(remainingMilliseconds);
+      throw deadlineError();
+    }
+    await delay(milliseconds);
+  };
+  const boundedFetch = async (input, init = {}) => {
+    const remainingMilliseconds = urlDeadlineMilliseconds - now();
+    if (remainingMilliseconds <= 0) throw deadlineError();
+
+    const controller = new AbortController();
+    const abortFromRequest = () => controller.abort(init.signal?.reason);
+    if (init.signal?.aborted) abortFromRequest();
+    else init.signal?.addEventListener("abort", abortFromRequest, { once: true });
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(deadlineError());
+      }, remainingMilliseconds);
+    });
+    try {
+      return await Promise.race([
+        fetchImpl(input, { ...init, signal: controller.signal }),
+        timeout,
+      ]);
+    } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", abortFromRequest);
+    }
+  };
+
+  const result = await checkSource(url, {
+    token,
+    fetchImpl: boundedFetch,
+    lookup,
+    policy: candidateSourcePolicy(policy, candidateAvailability),
+    delay: boundedDelay,
+    now,
+    deadlineMilliseconds: urlDeadlineMilliseconds,
+  });
+  return now() >= urlDeadlineMilliseconds
+    ? {
+        classification: "indeterminate",
+        reason: CANDIDATE_GATE_DEADLINE_REASON,
+      }
+    : result;
 }
 
 function candidateId(candidate, index) {
@@ -274,7 +421,12 @@ function rejectedEntry(envelope, reasonCodes, availability = null) {
     candidateId: envelope.candidateId,
     reasonCodes: [...new Set(reasonCodes)].sort(),
   };
-  if (availability?.retryAttempts > 0) rejection.availability = availability;
+  if (
+    availability?.retryAttempts > 0 ||
+    availability?.reasonCode === CANDIDATE_GATE_DEADLINE_REASON
+  ) {
+    rejection.availability = availability;
+  }
   return rejection;
 }
 
@@ -300,6 +452,8 @@ export async function runCandidateGates(options = {}) {
     fetchImpl = globalThis.fetch,
     lookup,
     delay,
+    now = Date.now,
+    deadlineMilliseconds,
   } = options;
   const envelope = requireDiscoveryEnvelope(discovery);
   const discoveryCandidates = requireArray(envelope.candidates, "discovery.candidates");
@@ -313,6 +467,20 @@ export async function runCandidateGates(options = {}) {
   );
   const requestedConcurrency = positiveInteger(concurrency, "concurrency");
   const effectiveConcurrency = Math.min(requestedConcurrency, MAX_CONCURRENCY);
+  if (typeof delay !== "undefined" && typeof delay !== "function") {
+    throw new TypeError("delay must be a function");
+  }
+  if (typeof now !== "function") throw new TypeError("now must be a function");
+  const candidateAvailability = normalizeCandidateAvailability(policy?.candidateAvailability);
+  const operationDeadlineSeconds = positiveNumber(
+    policy?.discovery?.operationDeadlineSeconds ?? DEFAULT_OPERATION_DEADLINE_SECONDS,
+    "policy.discovery.operationDeadlineSeconds",
+  );
+  const gateDeadlineMilliseconds = Math.min(
+    now() + operationDeadlineSeconds * 1000,
+    optionalDeadline(deadlineMilliseconds, "deadlineMilliseconds"),
+  );
+  const wait = delay ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const maxCandidates = positiveInteger(
     policy?.batching?.maxCandidatesPerRun,
     "policy.batching.maxCandidatesPerRun",
@@ -391,15 +559,38 @@ export async function runCandidateGates(options = {}) {
 
   const urls = [...new Set(ready.map((item) => item.candidate.canonicalUrl))]
     .sort((left, right) => left.localeCompare(right));
-  const checkedSources = await mapAvailabilityChecks(urls, effectiveConcurrency, async (url) => [
-    url,
-    await checkSource(url, { token, fetchImpl, lookup, policy, delay }),
-  ], { delay });
+  const checkedSources = await mapAvailabilityChecks(urls, effectiveConcurrency, async (url) => {
+    if (now() >= gateDeadlineMilliseconds) {
+      return [url, {
+        classification: "indeterminate",
+        reason: CANDIDATE_GATE_DEADLINE_REASON,
+      }];
+    }
+    return [url, await checkCandidateSource(url, {
+      candidateAvailability,
+      delay: wait,
+      fetchImpl,
+      gateDeadlineMilliseconds,
+      lookup,
+      now,
+      policy,
+      token,
+    })];
+  }, {
+    delay: async (milliseconds) => {
+      const remainingMilliseconds = gateDeadlineMilliseconds - now();
+      if (remainingMilliseconds <= 0) return;
+      await wait(Math.min(milliseconds, remainingMilliseconds));
+    },
+  });
   const availabilityByUrl = new Map(
     checkedSources.map(([url, result]) => [url, availabilityFor(result, reportTime)]),
   );
   const indeterminateAvailabilityChecks = [...availabilityByUrl.values()]
     .filter((availability) => availability.classification === "indeterminate")
+    .length;
+  const deadlineExceededAvailabilityChecks = [...availabilityByUrl.values()]
+    .filter((availability) => availability.reasonCode === CANDIDATE_GATE_DEADLINE_REASON)
     .length;
   const status = indeterminateAvailabilityChecks === 0
     ? "complete"
@@ -433,6 +624,7 @@ export async function runCandidateGates(options = {}) {
       candidates: envelopes.length,
       availabilityChecks: urls.length,
       indeterminateAvailabilityChecks,
+      deadlineExceededAvailabilityChecks,
       eligible: eligible.length,
       rejected: rejected.length,
     },

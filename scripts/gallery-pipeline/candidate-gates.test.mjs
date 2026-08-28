@@ -4,12 +4,19 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runCandidateGates } from "./candidate-gates.mjs";
+import {
+  candidateAvailabilityRuntimeBudgetSeconds,
+  runCandidateGates,
+} from "./candidate-gates.mjs";
 import { normalizeCandidate } from "./normalize.mjs";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(await readFile(
   path.join(TEST_DIRECTORY, "fixtures", "candidate-gates", "input.json"),
+  "utf8",
+));
+const productionPolicy = JSON.parse(await readFile(
+  path.resolve(TEST_DIRECTORY, "../../.github/gallery-pipeline/policy.json"),
   "utf8",
 ));
 const publicLookup = async () => [{ address: "20.12.34.56", family: 4 }];
@@ -90,9 +97,23 @@ function gateOptions(overrides = {}) {
     token: null,
     lookup: publicLookup,
     fetchImpl: responseFetch(200),
+    delay: async () => {},
     ...remainingOverrides,
   };
 }
+
+test("candidate availability has a five-second runtime cap without changing lifecycle retries", () => {
+  assert.deepEqual(productionPolicy.http.retryDelaySeconds, [0, 5, 30, 120]);
+  assert.deepEqual(productionPolicy.candidateAvailability.retryDelaySeconds, [0, 2]);
+  assert.equal(productionPolicy.candidateAvailability.maxTotalSecondsPerUrl, 5);
+  assert.equal(
+    candidateAvailabilityRuntimeBudgetSeconds(productionPolicy.candidateAvailability),
+    5,
+  );
+  assert.ok(
+    candidateAvailabilityRuntimeBudgetSeconds(productionPolicy.candidateAvailability) <= 5,
+  );
+});
 
 test("returns an ordered dry-run report with one timestamp and never invokes AI", async () => {
   let aiInvocations = 0;
@@ -349,12 +370,12 @@ test("accepts only complete 2xx availability and sanitizes all other source outc
     { name: "204", status: 204, eligible: true },
     { name: "404", status: 404, reasonCode: "SOURCE_HTTP_404" },
     { name: "410", status: 410, reasonCode: "SOURCE_HTTP_410" },
-    { name: "429", status: 429, reasonCode: "SOURCE_HTTP_429" },
-    { name: "500", status: 500, reasonCode: "SOURCE_HTTP_500" },
+    { name: "429", status: 429, reasonCode: "SOURCE_HTTP_429", retried: true },
+    { name: "500", status: 500, reasonCode: "SOURCE_HTTP_500", retried: true },
     { name: "partial", status: 206, reasonCode: "SOURCE_PARTIAL_RESPONSE" },
     { name: "malformed", reasonCode: "SOURCE_RESPONSE_MALFORMED", malformed: true },
-    { name: "dns", reasonCode: "SOURCE_DNS_ERROR", dns: true },
-    { name: "timeout", reasonCode: "SOURCE_TIMEOUT", timeout: true },
+    { name: "dns", reasonCode: "SOURCE_DNS_ERROR", dns: true, retried: true },
+    { name: "timeout", reasonCode: "SOURCE_TIMEOUT", timeout: true, retried: true },
   ];
 
   for (const definition of cases) {
@@ -388,13 +409,24 @@ test("accepts only complete 2xx availability and sanitizes all other source outc
 
       assert.equal(report.eligible.length, definition.eligible ? 1 : 0);
       if (!definition.eligible) {
-        assert.deepEqual(report.rejected, [{
+        const rejection = {
           candidateId: candidate.identityKey,
           reasonCodes: [definition.reasonCode],
-        }]);
+        };
+        if (definition.retried) {
+          rejection.availability = {
+            checkedAt: fixture.checkedAt,
+            classification: "indeterminate",
+            statusCode: Number.isInteger(definition.status) ? definition.status : null,
+            reasonCode: definition.reasonCode,
+            retryAttempts: 1,
+            retryReasons: [definition.reasonCode],
+          };
+        }
+        assert.deepEqual(report.rejected, [rejection]);
         assert.doesNotMatch(JSON.stringify(report.rejected), /fixture|details/i);
       }
-      assert.equal(fetchCalls, definition.dns ? 0 : 1);
+      assert.equal(fetchCalls, definition.dns ? 0 : (definition.retried ? 2 : 1));
     });
   }
 });
@@ -448,7 +480,7 @@ test("recovers transient availability and reports sanitized retry metadata", asy
     retryAttempts: 1,
     retryReasons: ["SOURCE_HTTP_503"],
   });
-  assert.deepEqual(delays, [5_000]);
+  assert.deepEqual(delays, [2_000]);
   assert.equal(calls, 2);
 });
 
@@ -482,13 +514,83 @@ test("fails candidate availability closed after retry exhaustion", async () => {
       classification: "indeterminate",
       statusCode: 503,
       reasonCode: "SOURCE_HTTP_503",
-      retryAttempts: 3,
+      retryAttempts: 1,
       retryReasons: ["SOURCE_HTTP_503"],
     },
   }]);
   assert.doesNotMatch(JSON.stringify(report.rejected), /sensitive|upstream/i);
-  assert.deepEqual(delays, [5_000, 30_000, 120_000]);
-  assert.equal(calls, 4);
+  assert.deepEqual(delays, [2_000]);
+  assert.equal(calls, 2);
+});
+
+test("uses the operation deadline without restarting it and never accepts a late response", async () => {
+  const candidates = ["charlie", "alpha", "bravo"].map((id) => blogCandidate(id));
+  const calls = [];
+  let currentMilliseconds = 500;
+  const report = await runCandidateGates(gateOptions({
+    candidates,
+    concurrency: 1,
+    now: () => currentMilliseconds,
+    deadlineMilliseconds: 1_000,
+    fetchImpl: async (input) => {
+      calls.push(new URL(input).toString());
+      currentMilliseconds = 1_000;
+      return new Response(null, { status: 200 });
+    },
+  }));
+
+  assert.equal(report.status, "indeterminate");
+  assert.deepEqual(calls, ["https://example.com/alpha"]);
+  assert.deepEqual(report.eligible, []);
+  assert.equal(report.summary.indeterminateAvailabilityChecks, 3);
+  assert.equal(report.summary.deadlineExceededAvailabilityChecks, 3);
+  assert.deepEqual(report.rejected, ["blog-post:alpha", "blog-post:bravo", "blog-post:charlie"].map((candidateId) => ({
+    candidateId,
+    reasonCodes: ["CANDIDATE_GATE_DEADLINE_EXCEEDED"],
+    availability: {
+      checkedAt: fixture.checkedAt,
+      classification: "indeterminate",
+      statusCode: null,
+      reasonCode: "CANDIDATE_GATE_DEADLINE_EXCEEDED",
+    },
+  })));
+});
+
+test("bounds the candidate GET body by the operation deadline", async () => {
+  const candidate = blogCandidate("slow-body");
+  const calls = [];
+  let currentMilliseconds = 0;
+  const report = await runCandidateGates(gateOptions({
+    candidates: [candidate],
+    deadlineMilliseconds: 100,
+    now: () => currentMilliseconds,
+    fetchImpl: async (_input, init = {}) => {
+      const method = init.method ?? "GET";
+      calls.push(method);
+      if (method === "HEAD") return new Response(null, { status: 405 });
+      return new Response(new ReadableStream({
+        pull(controller) {
+          currentMilliseconds = 100;
+          controller.enqueue(new TextEncoder().encode("late"));
+          controller.close();
+        },
+      }), { status: 200 });
+    },
+  }));
+
+  assert.deepEqual(calls, ["HEAD", "GET"]);
+  assert.equal(report.status, "indeterminate");
+  assert.deepEqual(report.eligible, []);
+  assert.deepEqual(report.rejected, [{
+    candidateId: candidate.identityKey,
+    reasonCodes: ["CANDIDATE_GATE_DEADLINE_EXCEEDED"],
+    availability: {
+      checkedAt: fixture.checkedAt,
+      classification: "indeterminate",
+      statusCode: null,
+      reasonCode: "CANDIDATE_GATE_DEADLINE_EXCEEDED",
+    },
+  }]);
 });
 
 test("candidate gates serialize Learn checks with injected pacing and deterministic output", async () => {
@@ -571,5 +673,13 @@ test("marks mixed resolved and indeterminate availability as partial", async () 
   assert.deepEqual(report.rejected, [{
     candidateId: indeterminate.identityKey,
     reasonCodes: ["SOURCE_TIMEOUT"],
+    availability: {
+      checkedAt: fixture.checkedAt,
+      classification: "indeterminate",
+      statusCode: null,
+      reasonCode: "SOURCE_TIMEOUT",
+      retryAttempts: 1,
+      retryReasons: ["SOURCE_TIMEOUT"],
+    },
   }]);
 });

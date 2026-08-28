@@ -42,6 +42,13 @@ test("rejects an invalid policy through its strict schema", () => {
   assert(issueCodes(validatePolicyData(context, { policy }, { now })).has("SCHEMA_VALIDATION"));
 });
 
+test("locks the discovery operation deadline through the strict policy schema", () => {
+  const policy = clone(context.configs.policy);
+  policy.discovery.operationDeadlineSeconds += 1;
+
+  assert(issueCodes(validatePolicyData(context, { policy }, { now })).has("SCHEMA_VALIDATION"));
+});
+
 test("keeps publication disabled by default while permitting explicit reviewed activation", () => {
   const defaults = context.configs.policy.automation;
   assert.equal(defaults.emergencyDisable, true);

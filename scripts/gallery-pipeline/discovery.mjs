@@ -23,6 +23,7 @@ const MAX_XML_DEPTH = 64;
 const MAX_XML_NODES = 10_000;
 const LEARN_ROOT_PATH = "/azure/cosmos-db";
 const POLICY_MAX_REDIRECTS = 5;
+const DISCOVERY_DEADLINE_REASON = "DISCOVERY_DEADLINE_EXCEEDED";
 
 const DEFAULT_LIMITS = Object.freeze({
   githubPageSize: 50,
@@ -1199,14 +1200,52 @@ export async function runDiscovery({
   discoveredAt = new Date().toISOString(),
   fetchOptions = {},
   limits: limitOverrides = {},
+  deadlineMilliseconds = fetchOptions.deadlineMilliseconds,
+  now = fetchOptions.now ?? Date.now,
 } = {}) {
   const timestamp = new Date(discoveredAt);
   if (Number.isNaN(timestamp.valueOf())) throw new TypeError("discoveredAt must be a valid date-time");
   const normalizedTimestamp = timestamp.toISOString();
+  if (
+    deadlineMilliseconds !== undefined &&
+    (!Number.isFinite(deadlineMilliseconds) || deadlineMilliseconds < 0)
+  ) {
+    throw new TypeError("deadlineMilliseconds must be a non-negative finite number");
+  }
+  if (typeof now !== "function") throw new TypeError("now must be a function");
   const limits = normalizeLimits(limitOverrides);
   const candidates = [];
   const rejected = [];
   const statuses = [];
+  const operationFetchOptions = {
+    ...fetchOptions,
+    deadlineMilliseconds,
+    now,
+  };
+  const deadlineExceeded = (error) => (
+    deadlineMilliseconds !== undefined &&
+    (now() >= deadlineMilliseconds || error?.code === "DEADLINE_EXCEEDED")
+  );
+  const recordDeadline = (source, { queried, endpoints = [] }) => {
+    statuses.push({
+      sourceRegistryId: source.id,
+      sourceType: source.type,
+      status: "indeterminate",
+      queried,
+      candidateCount: 0,
+      rejectedCount: 1,
+      endpoints,
+      reason: DISCOVERY_DEADLINE_REASON,
+    });
+    rejected.push({
+      sourceRegistryId: source.id,
+      sourceType: source.type,
+      sourceId: source.id,
+      canonicalUrl: youtubePublicSourceUrl(source) ?? source.endpoint ?? null,
+      reason: "source-indeterminate",
+      evidence: [{ type: "source-error", value: DISCOVERY_DEADLINE_REASON }],
+    });
+  };
 
   for (const source of sourceList(trustedSources)) {
     if (source?.enabled !== true) {
@@ -1219,18 +1258,33 @@ export async function runDiscovery({
         continue;
       }
     }
+    if (deadlineMilliseconds !== undefined && now() >= deadlineMilliseconds) {
+      recordDeadline(source, { queried: false });
+      continue;
+    }
     try {
       const result = await querySource(source, {
         githubToken,
         youtubeApiKey: environment?.YOUTUBE_API_KEY,
         discoveredAt: normalizedTimestamp,
-        fetchOptions,
+        fetchOptions: operationFetchOptions,
         limits,
       });
+      if (deadlineMilliseconds !== undefined && now() >= deadlineMilliseconds) {
+        recordDeadline(source, { queried: true, endpoints: result.status.endpoints });
+        continue;
+      }
       candidates.push(...result.candidates);
       rejected.push(...result.rejected);
       statuses.push(result.status);
     } catch (error) {
+      if (deadlineExceeded(error)) {
+        recordDeadline(source, {
+          queried: (error?.discoveryEndpoints?.length ?? 0) > 0,
+          endpoints: error?.discoveryEndpoints ?? [],
+        });
+        continue;
+      }
       statuses.push({
         sourceRegistryId: source.id,
         sourceType: source.type,

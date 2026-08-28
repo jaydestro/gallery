@@ -8,6 +8,8 @@
     "version",
     "contractVersions",
     "http",
+    "discovery",
+    "candidateAvailability",
     "thresholds",
     "evaluationThresholds",
     "healthThresholds",
@@ -102,6 +104,49 @@
           "const": 30
         },
         "maxRedirects": {
+          "const": 5
+        }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationDeadlineSeconds"
+      ],
+      "properties": {
+        "operationDeadlineSeconds": {
+          "const": 1200
+        }
+      }
+    },
+    "candidateAvailability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retryDelaySeconds",
+        "timeoutSeconds",
+        "maxTotalSecondsPerUrl"
+      ],
+      "properties": {
+        "retryDelaySeconds": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": 0
+            },
+            {
+              "const": 2
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "timeoutSeconds": {
+          "const": 3
+        },
+        "maxTotalSecondsPerUrl": {
           "const": 5
         }
       }
