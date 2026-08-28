@@ -16,6 +16,7 @@ import {
   makeRecord,
 } from "./build-catalog-change.fixtures.mjs";
 import {
+  catalogProposalExitCode,
   CatalogProposalError,
   createModelAnalysisVerification,
   createModelAnalysisReceipt,
@@ -71,12 +72,41 @@ function modelVerification(input) {
   });
 }
 
+function rejectedLedger(candidateGates) {
+  const entries = clone(candidateGates.rejected);
+  return {
+    count: entries.length,
+    entries,
+    hash: `sha256:${hashCanonicalValue(entries)}`,
+  };
+}
+
 function bindModelAnalysis(input) {
+  const selectedCandidates = input.candidateGates.summary.selectedCandidates ??
+    input.candidateGates.summary.candidates;
+  Object.assign(input.candidateGates, {
+    schemaVersion: "2.0.0",
+    coverageStatus: (
+      selectedCandidates === input.candidateGates.summary.candidates &&
+      input.candidateGates.summary.indeterminateAvailabilityChecks === 0
+    ) ? "complete" : "partial",
+  });
+  Object.assign(input.candidateGates.summary, {
+    selectedCandidates,
+    executedCandidateChecks: input.candidateGates.summary.executedCandidateChecks ??
+      selectedCandidates,
+    executedAvailabilityChecks: input.candidateGates.summary.executedAvailabilityChecks ??
+      input.candidateGates.summary.availabilityChecks,
+    deadlineExceededAvailabilityChecks: input.candidateGates.summary
+      .deadlineExceededAvailabilityChecks ?? 0,
+  });
   input.analysisSchema = clone(repositoryAnalysisSchema);
   if (!input.modelAnalysis) {
     input.modelAnalysisVerification = null;
     return input;
   }
+  input.modelAnalysis.schemaVersion = "2.0.0";
+  input.modelAnalysis.rejectedLedger = rejectedLedger(input.candidateGates);
   Object.assign(
     input.modelAnalysis.configuration,
     expectedModelAnalysisConfigurationHashes(input),
@@ -120,6 +150,39 @@ function retargetFirstCandidateForUpdate(input, target) {
   analysis.recommendation = "update";
   analysis.reasonCodes = ["AI_UPDATE_APPROVED"];
   input.modelAnalysisReceipt = createModelAnalysisReceipt(input.modelAnalysis);
+}
+
+function rejectCandidateAsIndeterminate(input, index) {
+  const [entry] = input.candidateGates.eligible.splice(index, 1);
+  const candidateId = entry.candidate.identityKey;
+  input.candidateGates.rejected.push({
+    candidateId,
+    reasonCodes: ["SOURCE_TIMEOUT"],
+    availability: {
+      checkedAt: input.candidateGates.completedAt,
+      classification: "indeterminate",
+      statusCode: null,
+      reasonCode: "SOURCE_TIMEOUT",
+      retryAttempts: 1,
+      retryReasons: ["SOURCE_TIMEOUT"],
+    },
+  });
+  input.candidateGates.coverageStatus = "partial";
+  input.candidateGates.summary.indeterminateAvailabilityChecks += 1;
+  input.candidateGates.summary.eligible -= 1;
+  input.candidateGates.summary.rejected += 1;
+  input.modelAnalysis.analyses = input.modelAnalysis.analyses
+    .filter((analysis) => analysis.candidateId !== candidateId);
+  const eligibleIds = input.candidateGates.eligible
+    .map((eligible) => eligible.candidate.identityKey)
+    .sort((left, right) => left.localeCompare(right));
+  input.modelAnalysis.eligibleSet = {
+    count: eligibleIds.length,
+    candidateIds: eligibleIds,
+    hash: `sha256:${hashCanonicalValue(eligibleIds)}`,
+  };
+  bindModelAnalysis(input);
+  return candidateId;
 }
 
 function proposeFixture(input, { preserveModelBindings = false } = {}) {
@@ -256,6 +319,11 @@ test("rejects tampered model reports and receipts as one failed producer", () =>
       mutate(input) { input.modelAnalysis.eligibleSet.hash = `sha256:${"e".repeat(64)}`; },
     },
     {
+      name: "rejected ledger hash",
+      reseal: true,
+      mutate(input) { input.modelAnalysis.rejectedLedger.hash = `sha256:${"d".repeat(64)}`; },
+    },
+    {
       name: "duplicate analysis",
       reseal: true,
       mutate(input) { input.modelAnalysis.analyses[1] = clone(input.modelAnalysis.analyses[0]); },
@@ -281,6 +349,15 @@ test("rejects tampered model reports and receipts as one failed producer", () =>
     {
       name: "unexpected receipt data",
       mutate(input) { input.modelAnalysisReceipt.token = "must-not-be-accepted"; },
+    },
+    {
+      name: "receipt rejected ledger",
+      mutate(input) {
+        input.modelAnalysisReceipt.rejectedLedger.entries.push({
+          candidateId: "learn-document:invented",
+          reasonCodes: ["SOURCE_TIMEOUT"],
+        });
+      },
     },
   ];
 
@@ -535,6 +612,114 @@ test("publishes a healthy available candidate without synthesizing health or fre
   );
 });
 
+test("partial candidate coverage creates publish-only plans and blocks every existing-record path", () => {
+  const input = makeProposalFixture({ candidateCount: 4 });
+  const updateTarget = makeRecord(
+    "partial-update",
+    "https://learn.microsoft.com/azure/cosmos-db/partial-update",
+  );
+  const updateHealth = makeHealthEntry(updateTarget.id, updateTarget.canonicalSource);
+  const updateFreshness = makeFreshnessEntry(updateHealth);
+  input.activeCatalog.push(updateTarget);
+  input.health.entries.push(updateHealth);
+  input.freshness.entries.push(updateFreshness);
+  input.freshness.healthSnapshot.entries.push(clone(updateHealth));
+  for (const candidate of [input.discovery.candidates[0], input.candidateGates.eligible[0].candidate]) {
+    candidate.metadata.galleryId = updateTarget.id;
+  }
+  input.modelAnalysis.analyses[0].recommendation = "update";
+  input.modelAnalysis.analyses[0].reasonCodes = ["AI_UPDATE_APPROVED"];
+
+  const restoreTarget = makeRecord(
+    "partial-restore",
+    "https://learn.microsoft.com/azure/cosmos-db/partial-restore",
+    "retired",
+  );
+  const restoreHealth = makeHealthEntry(restoreTarget.id, restoreTarget.canonicalSource);
+  const restoreFreshness = makeFreshnessEntry(restoreHealth);
+  input.retired.entries.push({
+    record: restoreTarget,
+    retiredAt: "2026-08-01T00:00:00.000Z",
+    retentionUntil: "2027-08-01",
+    reasonCodes: ["PREVIOUS_RETIREMENT"],
+    evidence: [{
+      observedAt: "2026-08-01T00:00:00.000Z",
+      source: restoreTarget.canonicalSource,
+      reason: "health",
+    }],
+    supersededBy: null,
+    decisionRunUrl: "https://github.com/example/gallery/actions/runs/100",
+    decisionPullRequestUrl: "https://github.com/example/gallery/pull/10",
+  });
+  input.health.entries.push(restoreHealth);
+  input.freshness.entries.push(restoreFreshness);
+  input.freshness.healthSnapshot.entries.push(clone(restoreHealth));
+  for (const candidate of [input.discovery.candidates[1], input.candidateGates.eligible[1].candidate]) {
+    candidate.metadata.galleryId = restoreTarget.id;
+  }
+  input.modelAnalysis.analyses[1].recommendation = "update";
+  input.modelAnalysis.analyses[1].reasonCodes = ["AI_UPDATE_APPROVED"];
+
+  for (const [id, status, recommendation] of [
+    ["partial-quarantine", "quarantined", "quarantine"],
+    ["partial-retire", "retired", "retire"],
+  ]) {
+    const record = makeRecord(id, `https://learn.microsoft.com/azure/cosmos-db/${id}`);
+    const health = makeHealthEntry(record.id, record.canonicalSource, status);
+    const freshness = makeFreshnessEntry(health, recommendation);
+    input.activeCatalog.push(record);
+    input.health.entries.push(health);
+    input.freshness.entries.push(freshness);
+    input.freshness.healthSnapshot.entries.push(clone(health));
+  }
+  input.retirementProvenance = retirementProvenance();
+  const rejectedId = rejectCandidateAsIndeterminate(input, 3);
+  const originalActive = clone(input.activeCatalog);
+  const originalRetired = clone(input.retired);
+
+  const result = proposeFixture(input);
+  const operations = flattenedOperations(result);
+
+  assert.equal(result.report.status, "complete");
+  assert.deepEqual(result.report.stage.reasonCodes, ["CANDIDATE_COVERAGE_PARTIAL_PUBLISH_ONLY"]);
+  assert.deepEqual(operations.map((operation) => operation.type), ["publish"]);
+  assert.equal(operations[0].targetId, input.discovery.candidates[2].metadata.galleryId);
+  for (const candidate of input.discovery.candidates.slice(0, 2)) {
+    assert.deepEqual(
+      ledgerEntry(result, "candidate", candidate.identityKey).reasonCodes,
+      ["CANDIDATE_COVERAGE_PARTIAL_PUBLISH_ONLY"],
+    );
+  }
+  assert.deepEqual(ledgerEntry(result, "candidate", rejectedId).reasonCodes, ["SOURCE_TIMEOUT"]);
+  for (const record of originalActive) {
+    assert.deepEqual(
+      result.proposedState.activeCatalog.find((candidate) => candidate.id === record.id),
+      record,
+    );
+  }
+  assert.deepEqual(result.proposedState.retired, originalRetired);
+  assert.equal(operations.some((operation) => (
+    ["update", "restore", "quarantine", "retire"].includes(operation.type)
+  )), false);
+});
+
+test("existing changes require independently complete health and freshness evidence", () => {
+  const input = makeProposalFixture({ candidateCount: 2 });
+  retargetFirstCandidateForUpdate(input, input.activeCatalog[0]);
+  input.health.status = "partial";
+
+  const result = proposeFixture(input);
+  const operations = flattenedOperations(result);
+
+  assert.equal(result.report.status, "complete");
+  assert.deepEqual(result.report.stage.reasonCodes, ["HEALTH_FRESHNESS_INCOMPLETE_PUBLISH_ONLY"]);
+  assert.deepEqual(operations.map((operation) => operation.type), ["publish"]);
+  assert.deepEqual(
+    ledgerEntry(result, "candidate", input.discovery.candidates[0].identityKey).reasonCodes,
+    ["HEALTH_FRESHNESS_INCOMPLETE_PUBLISH_ONLY"],
+  );
+});
+
 test("fails candidate availability closed when evidence is missing, indeterminate, mismatched, or scored", () => {
   const cases = [
     {
@@ -744,7 +929,7 @@ test("uses the repository default policy to emit a blocked schema-valid zero-pla
   validateCatalogProposalReport(result.report);
 });
 
-test("partial or indeterminate upstream reports yield evidence reports and zero promotable plans", () => {
+test("partial source discovery or incomplete gate execution yields zero promotable plans", () => {
   const partial = makePartialProposalFixture({ candidateCount: 3 });
   const partialResult = proposeFixture(partial);
   assert.equal(partialResult.report.status, "partial");
@@ -752,13 +937,21 @@ test("partial or indeterminate upstream reports yield evidence reports and zero 
   assert.equal(partialResult.report.summary.operations, 0);
   assert(partialResult.report.reasonLedger.every((entry) => entry.disposition === "rejected"));
 
-  const indeterminate = makeProposalFixture({ candidateCount: 3 });
-  indeterminate.candidateGates.status = "indeterminate";
-  const indeterminateResult = proposeFixture(indeterminate);
-  assert.equal(indeterminateResult.report.status, "indeterminate");
-  assert.deepEqual(indeterminateResult.plans, []);
-  assert.equal(indeterminateResult.report.summary.operations, 0);
-  assert.deepEqual(indeterminateResult.proposedState.audit, indeterminate.audit);
+  const incomplete = makeProposalFixture({ candidateCount: 3 });
+  incomplete.candidateGates.status = "incomplete";
+  incomplete.candidateGates.coverageStatus = "partial";
+  incomplete.candidateGates.summary.executedCandidateChecks -= 1;
+  incomplete.candidateGates.summary.executedAvailabilityChecks -= 1;
+  incomplete.candidateGates.summary.indeterminateAvailabilityChecks = 1;
+  incomplete.candidateGates.summary.deadlineExceededAvailabilityChecks = 1;
+  bindModelAnalysis(incomplete);
+  const incompleteResult = proposeFixture(incomplete);
+  assert.equal(incompleteResult.report.status, "incomplete");
+  assert.equal(catalogProposalExitCode(incompleteResult.report), 2);
+  assert.deepEqual(incompleteResult.plans, []);
+  assert.equal(incompleteResult.report.summary.operations, 0);
+  assert.deepEqual(incompleteResult.report.stage.reasonCodes, ["UPSTREAM_EXECUTION_INCOMPLETE"]);
+  assert.deepEqual(incompleteResult.proposedState.audit, incomplete.audit);
 });
 
 test("fails the model artifact closed for missing analysis and rejects missing publication facts", () => {

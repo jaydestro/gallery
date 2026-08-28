@@ -496,6 +496,13 @@ test("live candidate analysis is trusted, protected, least-privilege, and token-
   assert.match(workflow, /expected_entries=\("candidate-gates\.json" "discovery\.json"\)/);
   assert.match(workflow, /\[ ! -f "\$report_path" \] \|\| \[ -L "\$report_path" \]/);
   assert.match(workflow, /\.status == "complete"/);
+  assert.match(workflow, /\.schemaVersion == "2\.0\.0"/);
+  assert.match(workflow, /\.summary\.selectedCandidates == \.summary\.candidates/);
+  assert.match(workflow, /\.summary\.executedCandidateChecks == \.summary\.selectedCandidates/);
+  assert.match(workflow, /\.summary\.executedAvailabilityChecks == \.summary\.availabilityChecks/);
+  assert.match(workflow, /\.summary\.deadlineExceededAvailabilityChecks == 0/);
+  assert.match(workflow, /\(\$candidateIds \| unique \| length\) == \.summary\.candidates/);
+  assert.match(workflow, /\(\$candidateIds \| sort\) == \(\[\$source\.candidates\[\]\.identityKey\] \| sort\)/);
   assert.match(workflow, /all\(\.automation\.ai\[\]; \. == true\)/);
   assert.match(workflow, /--resource "https:\/\/cognitiveservices\.azure\.com\/"/);
   assert.match(workflow, /echo "::add-mask::\$token"/);
@@ -695,15 +702,21 @@ test("pre-install discovery diagnostics initialize without node_modules", async 
     const after = Date.now();
 
     await assert.rejects(access(path.join(rootDirectory, "node_modules")));
-    for (const fileName of ["discovery.json", "candidate-gates.json"]) {
-      const report = JSON.parse(await readFile(
-        path.join(rootDirectory, "gallery-reports", fileName),
-        "utf8",
-      ));
-      assert.equal(report.schemaVersion, "1.0.0");
-      assert.equal(report.status, "partial");
-      assert.equal(report.mutationPerformed, false);
-    }
+    const discovery = JSON.parse(await readFile(
+      path.join(rootDirectory, "gallery-reports", "discovery.json"),
+      "utf8",
+    ));
+    const candidateGates = JSON.parse(await readFile(
+      path.join(rootDirectory, "gallery-reports", "candidate-gates.json"),
+      "utf8",
+    ));
+    assert.equal(discovery.schemaVersion, "1.0.0");
+    assert.equal(discovery.status, "partial");
+    assert.equal(candidateGates.schemaVersion, "2.0.0");
+    assert.equal(candidateGates.status, "incomplete");
+    assert.equal(candidateGates.coverageStatus, "partial");
+    assert.equal(discovery.mutationPerformed, false);
+    assert.equal(candidateGates.mutationPerformed, false);
     const environmentLine = (await readFile(githubEnvironmentPath, "utf8")).trim();
     const deadlineMilliseconds = Number(environmentLine.split("=")[1]);
     const budgetMilliseconds = policy.discovery.operationDeadlineSeconds * 1000;

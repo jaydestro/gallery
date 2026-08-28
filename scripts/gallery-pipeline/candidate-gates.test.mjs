@@ -137,8 +137,12 @@ test("returns an ordered dry-run report with one timestamp and never invokes AI"
   assert.equal(report.mode, "dry-run");
   assert.equal(report.mutationPerformed, false);
   assert.equal(report.status, "complete");
+  assert.equal(report.coverageStatus, "complete");
   assert.equal(report.startedAt, fixture.checkedAt);
   assert.equal(report.completedAt, fixture.checkedAt);
+  assert.equal(report.summary.selectedCandidates, 2);
+  assert.equal(report.summary.executedCandidateChecks, 2);
+  assert.equal(report.summary.executedAvailabilityChecks, 2);
   assert.equal(report.summary.indeterminateAvailabilityChecks, 0);
   assert.deepEqual(
     report.eligible.map((item) => item.candidate.identityKey),
@@ -484,7 +488,7 @@ test("recovers transient availability and reports sanitized retry metadata", asy
   assert.equal(calls, 2);
 });
 
-test("fails candidate availability closed after retry exhaustion", async () => {
+test("retains retry exhaustion as partial coverage after complete execution", async () => {
   const candidate = blogCandidate("retry-exhaustion");
   const delays = [];
   let calls = 0;
@@ -504,7 +508,10 @@ test("fails candidate availability closed after retry exhaustion", async () => {
     },
   }));
 
-  assert.equal(report.status, "indeterminate");
+  assert.equal(report.status, "complete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.equal(report.summary.executedCandidateChecks, 1);
+  assert.equal(report.summary.executedAvailabilityChecks, 1);
   assert.equal(report.eligible.length, 0);
   assert.deepEqual(report.rejected, [{
     candidateId: candidate.identityKey,
@@ -539,7 +546,11 @@ test("uses the operation deadline without restarting it and never accepts a late
     },
   }));
 
-  assert.equal(report.status, "indeterminate");
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.equal(report.summary.selectedCandidates, 3);
+  assert.equal(report.summary.executedCandidateChecks, 0);
+  assert.equal(report.summary.executedAvailabilityChecks, 0);
   assert.deepEqual(calls, ["https://example.com/alpha"]);
   assert.deepEqual(report.eligible, []);
   assert.equal(report.summary.indeterminateAvailabilityChecks, 3);
@@ -579,7 +590,11 @@ test("bounds the candidate GET body by the operation deadline", async () => {
   }));
 
   assert.deepEqual(calls, ["HEAD", "GET"]);
-  assert.equal(report.status, "indeterminate");
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.equal(report.summary.selectedCandidates, 1);
+  assert.equal(report.summary.executedCandidateChecks, 0);
+  assert.equal(report.summary.executedAvailabilityChecks, 0);
   assert.deepEqual(report.eligible, []);
   assert.deepEqual(report.rejected, [{
     candidateId: candidate.identityKey,
@@ -649,10 +664,14 @@ test("enforces maxCandidatesPerRun after stable identity sorting", async () => {
     candidateId: "blog-post:charlie",
     reasonCodes: ["BATCH_CANDIDATE_LIMIT_EXCEEDED"],
   }]);
+  assert.equal(report.status, "complete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.equal(report.summary.selectedCandidates, 2);
+  assert.equal(report.summary.executedCandidateChecks, 2);
   assert.equal(calls.length, 2);
 });
 
-test("marks mixed resolved and indeterminate availability as partial", async () => {
+test("marks mixed outcomes as complete execution with partial coverage", async () => {
   const healthy = blogCandidate("mixed-healthy");
   const indeterminate = blogCandidate("mixed-indeterminate");
   const report = await runCandidateGates(gateOptions({
@@ -667,7 +686,11 @@ test("marks mixed resolved and indeterminate availability as partial", async () 
     },
   }));
 
-  assert.equal(report.status, "partial");
+  assert.equal(report.status, "complete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.equal(report.summary.selectedCandidates, 2);
+  assert.equal(report.summary.executedCandidateChecks, 2);
+  assert.equal(report.summary.executedAvailabilityChecks, 2);
   assert.equal(report.summary.indeterminateAvailabilityChecks, 1);
   assert.deepEqual(report.eligible.map((item) => item.candidate.identityKey), [healthy.identityKey]);
   assert.deepEqual(report.rejected, [{
@@ -682,4 +705,55 @@ test("marks mixed resolved and indeterminate availability as partial", async () 
       retryReasons: ["SOURCE_TIMEOUT"],
     },
   }]);
+});
+
+test("completes all 155 checks, retains 13 indeterminate candidates, and retries them later", async () => {
+  const candidates = Array.from({ length: 155 }, (_, index) => (
+    blogCandidate(`live-shape-${String(index).padStart(3, "0")}`)
+  ));
+  const indeterminateUrls = new Set(
+    candidates.slice(0, 13).map((candidate) => candidate.canonicalUrl),
+  );
+  const policy = {
+    ...structuredClone(fixture.policy),
+    batching: { maxCandidatesPerRun: 200 },
+  };
+  const report = await runCandidateGates(gateOptions({
+    candidates,
+    policy,
+    fetchImpl: async (input) => {
+      if (indeterminateUrls.has(new URL(input).toString())) {
+        const error = new Error("fixture timeout details");
+        error.name = "AbortError";
+        throw error;
+      }
+      return new Response(null, { status: 200 });
+    },
+  }));
+
+  assert.equal(report.status, "complete");
+  assert.equal(report.coverageStatus, "partial");
+  assert.deepEqual(report.summary, {
+    candidates: 155,
+    selectedCandidates: 155,
+    executedCandidateChecks: 155,
+    availabilityChecks: 155,
+    executedAvailabilityChecks: 155,
+    indeterminateAvailabilityChecks: 13,
+    deadlineExceededAvailabilityChecks: 0,
+    eligible: 142,
+    rejected: 13,
+  });
+  assert.equal(report.rejected.every((entry) => entry.reasonCodes[0] === "SOURCE_TIMEOUT"), true);
+
+  const retry = await runCandidateGates(gateOptions({
+    candidates,
+    policy,
+    fetchImpl: responseFetch(200),
+  }));
+  assert.equal(retry.status, "complete");
+  assert.equal(retry.coverageStatus, "complete");
+  assert.equal(retry.summary.executedCandidateChecks, 155);
+  assert.equal(retry.summary.eligible, 155);
+  assert.equal(retry.summary.rejected, 0);
 });

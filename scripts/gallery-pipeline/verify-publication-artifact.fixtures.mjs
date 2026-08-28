@@ -35,8 +35,12 @@ export async function createPublicationVerificationFixture(rootDirectory, {
     input.discovery.candidates = [];
     input.candidateGates.summary = {
       candidates: 0,
+      selectedCandidates: 0,
+      executedCandidateChecks: 0,
       availabilityChecks: 0,
+      executedAvailabilityChecks: 0,
       indeterminateAvailabilityChecks: 0,
+      deadlineExceededAvailabilityChecks: 0,
       eligible: 0,
       rejected: 0,
     };

@@ -17,7 +17,8 @@ import { GROUNDING_SYSTEM_INSTRUCTIONS } from "./verify-summary.mjs";
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "../..");
-const REPORT_VERSION = "1.0.0";
+const REPORT_VERSION = "2.0.0";
+const CANDIDATE_GATE_SCHEMA_VERSION = "2.0.0";
 const WORKFLOW_PATH = ".github/workflows/analyze-gallery-candidates.yml";
 const DISCOVERY_WORKFLOW_PATH = ".github/workflows/discover-content.yml";
 const RESPONSES_API_VERSION = "v1";
@@ -77,6 +78,13 @@ function requireInteger(value, name) {
   return value;
 }
 
+function requireNonNegativeInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw inputError(`${name} must be a non-negative integer.`);
+  }
+  return value;
+}
+
 function exactKeys(value, name, keys) {
   requireObject(value, name);
   const actual = Object.keys(value).sort();
@@ -91,6 +99,58 @@ function requireCompleteReport(value, name) {
   if (value.status !== "complete") throw inputError(`${name}.status must be complete.`);
   if (value.mode !== "dry-run" || value.mutationPerformed !== false) {
     throw inputError(`${name} must be a non-mutating dry-run report.`);
+  }
+  return value;
+}
+
+function requireCompleteCandidateGates(value) {
+  requireCompleteReport(value, "candidate gates");
+  if (value.schemaVersion !== CANDIDATE_GATE_SCHEMA_VERSION) {
+    throw inputError(`candidate gates.schemaVersion must be ${CANDIDATE_GATE_SCHEMA_VERSION}.`);
+  }
+  if (!["complete", "partial"].includes(value.coverageStatus)) {
+    throw inputError("candidate gates.coverageStatus must be complete or partial.");
+  }
+  const summary = requireObject(value.summary, "candidate gates.summary");
+  const candidates = requireNonNegativeInteger(summary.candidates, "candidate gates.summary.candidates");
+  const selectedCandidates = requireNonNegativeInteger(
+    summary.selectedCandidates,
+    "candidate gates.summary.selectedCandidates",
+  );
+  const executedCandidateChecks = requireNonNegativeInteger(
+    summary.executedCandidateChecks,
+    "candidate gates.summary.executedCandidateChecks",
+  );
+  const availabilityChecks = requireNonNegativeInteger(
+    summary.availabilityChecks,
+    "candidate gates.summary.availabilityChecks",
+  );
+  const executedAvailabilityChecks = requireNonNegativeInteger(
+    summary.executedAvailabilityChecks,
+    "candidate gates.summary.executedAvailabilityChecks",
+  );
+  const indeterminateAvailabilityChecks = requireNonNegativeInteger(
+    summary.indeterminateAvailabilityChecks,
+    "candidate gates.summary.indeterminateAvailabilityChecks",
+  );
+  const deadlineExceededAvailabilityChecks = requireNonNegativeInteger(
+    summary.deadlineExceededAvailabilityChecks,
+    "candidate gates.summary.deadlineExceededAvailabilityChecks",
+  );
+  if (
+    selectedCandidates > candidates ||
+    executedCandidateChecks !== selectedCandidates ||
+    executedAvailabilityChecks !== availabilityChecks ||
+    indeterminateAvailabilityChecks > availabilityChecks ||
+    deadlineExceededAvailabilityChecks !== 0
+  ) {
+    throw inputError("candidate gates execution summary is incomplete or inconsistent.");
+  }
+  const expectedCoverageStatus = (
+    selectedCandidates === candidates && indeterminateAvailabilityChecks === 0
+  ) ? "complete" : "partial";
+  if (value.coverageStatus !== expectedCoverageStatus) {
+    throw inputError("candidate gates coverageStatus is inconsistent with its summary.");
   }
   return value;
 }
@@ -150,6 +210,16 @@ function eligibleCandidates(discovery, candidateGates) {
     if (!isDeepStrictEqual(entry.candidate, discoveryById.get(candidateId))) {
       throw inputError(`Eligible candidate ${candidateId} is not byte-for-byte bound to discovery.`);
     }
+    if (
+      entry.availability?.classification !== "healthy" ||
+      !Number.isInteger(entry.availability?.statusCode) ||
+      entry.availability.statusCode < 200 ||
+      entry.availability.statusCode >= 300 ||
+      entry.availability.statusCode === 206 ||
+      entry.availability.reasonCode !== null
+    ) {
+      throw inputError(`Eligible candidate ${candidateId} must have complete healthy availability.`);
+    }
     return { candidateId, ...entry };
   }).sort((left, right) => left.candidateId.localeCompare(right.candidateId));
 
@@ -177,6 +247,15 @@ function eligibleCandidates(discovery, candidateGates) {
     throw inputError("candidate gates must partition the discovery candidates exactly once.");
   }
   return entries;
+}
+
+function rejectedLedger(candidateGates) {
+  const entries = structuredClone(candidateGates.rejected);
+  return {
+    count: entries.length,
+    entries,
+    hash: canonicalHash(entries),
+  };
 }
 
 function validateDiscoveryArtifact(value, provenance) {
@@ -298,7 +377,7 @@ export async function analyzeCandidates({
   fileHashes = {},
 }) {
   requireCompleteReport(discovery, "discovery");
-  requireCompleteReport(candidateGates, "candidate gates");
+  requireCompleteCandidateGates(candidateGates);
   requireEnabledPolicy(policy);
   requireObject(analysisSchema, "analysis schema");
   const provenance = validateProvenance(provenanceInput);
@@ -319,6 +398,7 @@ export async function analyzeCandidates({
     candidateIds: eligibleIds,
     hash: canonicalHash(eligibleIds),
   };
+  const rejectedCandidateLedger = rejectedLedger(candidateGates);
   const analyses = [];
   const errors = [];
   const bearerToken = environment.AZURE_OPENAI_BEARER_TOKEN;
@@ -375,6 +455,7 @@ export async function analyzeCandidates({
     configuration,
     fileHashes: structuredClone(fileHashes),
     eligibleSet,
+    rejectedLedger: rejectedCandidateLedger,
     analyses,
   };
   return deepFreeze(report);
@@ -399,6 +480,7 @@ export function createCandidateAnalysisReceipt(report, reportBytes) {
     reportFingerprint: canonicalHash(report),
     analysisCount: report.analyses.length,
     eligibleSet: structuredClone(report.eligibleSet),
+    rejectedLedger: structuredClone(report.rejectedLedger),
     provenance: structuredClone(report.provenance),
     configuration: structuredClone(report.configuration),
     fileHashes: structuredClone(report.fileHashes),

@@ -140,10 +140,16 @@ async function loadFixtureInputs(directory) {
 
 function combinedStatus(discoveryStatus, candidateGateStatus) {
   if (discoveryStatus === "complete" && candidateGateStatus === "complete") return "complete";
-  if (discoveryStatus === "indeterminate" || candidateGateStatus === "indeterminate") {
-    return "indeterminate";
+  if (discoveryStatus === "indeterminate") return "indeterminate";
+  if (discoveryStatus === "partial") return "partial";
+  return "incomplete";
+}
+
+function candidateCoverageStatus(candidateGates) {
+  if (!["complete", "partial"].includes(candidateGates?.coverageStatus)) {
+    throw new TypeError("candidateGates.coverageStatus must be complete or partial");
   }
-  return "partial";
+  return candidateGates.coverageStatus;
 }
 
 function diagnosticTimestamp(value) {
@@ -228,15 +234,19 @@ export async function initializeDiagnosticReports(directory, { now = Date.now } 
     evidence: [],
   };
   const candidateGates = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
-    status: "partial",
+    status: "incomplete",
+    coverageStatus: "partial",
     startedAt: timestamp,
     completedAt: timestamp,
     summary: {
       candidates: 0,
+      selectedCandidates: 0,
+      executedCandidateChecks: 0,
       availabilityChecks: 0,
+      executedAvailabilityChecks: 0,
       indeterminateAvailabilityChecks: 0,
       deadlineExceededAvailabilityChecks: 0,
       eligible: 0,
@@ -301,10 +311,11 @@ export async function runReportOnlyPipeline(inputs, {
   });
   await onCandidateGatesComplete(candidateGates);
   return {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
     status: combinedStatus(discovery.status, candidateGates.status),
+    coverageStatus: candidateCoverageStatus(candidateGates),
     startedAt: discovery.startedAt,
     completedAt: candidateGates.completedAt,
     discovery,

@@ -13,7 +13,7 @@ import {
   main,
 } from "./analyze-candidates.mjs";
 import {
-  makeCandidateAnalysisFixture,
+  makeCandidateAnalysisFixture as makeUnboundCandidateAnalysisFixture,
   makeSuccessfulClient,
 } from "./analyze-candidates.fixtures.mjs";
 
@@ -21,6 +21,41 @@ const ANALYSIS_WORKFLOW_PATH = fileURLToPath(new URL(
   "../../.github/workflows/analyze-gallery-candidates.yml",
   import.meta.url,
 ));
+
+function makeCandidateAnalysisFixture(candidateCount = 2) {
+  const input = makeUnboundCandidateAnalysisFixture(candidateCount);
+  Object.assign(input.candidateGates, {
+    schemaVersion: "2.0.0",
+    coverageStatus: "complete",
+  });
+  Object.assign(input.candidateGates.summary, {
+    selectedCandidates: candidateCount,
+    executedCandidateChecks: candidateCount,
+    executedAvailabilityChecks: candidateCount,
+    deadlineExceededAvailabilityChecks: 0,
+  });
+  return input;
+}
+
+function rejectCandidateAsIndeterminate(input, index) {
+  const [entry] = input.candidateGates.eligible.splice(index, 1);
+  input.candidateGates.rejected.push({
+    candidateId: entry.candidate.identityKey,
+    reasonCodes: ["SOURCE_TIMEOUT"],
+    availability: {
+      checkedAt: input.candidateGates.completedAt,
+      classification: "indeterminate",
+      statusCode: null,
+      reasonCode: "SOURCE_TIMEOUT",
+      retryAttempts: 1,
+      retryReasons: ["SOURCE_TIMEOUT"],
+    },
+  });
+  input.candidateGates.coverageStatus = "partial";
+  input.candidateGates.summary.indeterminateAvailabilityChecks += 1;
+  input.candidateGates.summary.eligible -= 1;
+  input.candidateGates.summary.rejected += 1;
+}
 
 test("workflow verifies trust before exact checkout, install, and Azure OIDC", async () => {
   const workflow = (await readFile(ANALYSIS_WORKFLOW_PATH, "utf8")).replaceAll("\r\n", "\n");
@@ -54,6 +89,13 @@ test("workflow verifies trust before exact checkout, install, and Azure OIDC", a
     workflow.slice(checkout, setup),
     /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/,
   );
+  assert.match(workflow, /\.schemaVersion == "2\.0\.0"/);
+  assert.match(workflow, /\.summary\.selectedCandidates == \.summary\.candidates/);
+  assert.match(workflow, /\.summary\.executedCandidateChecks == \.summary\.selectedCandidates/);
+  assert.match(workflow, /\.summary\.executedAvailabilityChecks == \.summary\.availabilityChecks/);
+  assert.match(workflow, /\.summary\.deadlineExceededAvailabilityChecks == 0/);
+  assert.match(workflow, /\(\$candidateIds \| unique \| length\) == \.summary\.candidates/);
+  assert.match(workflow, /\(\$candidateIds \| sort\) == \(\[\$source\.candidates\[\]\.identityKey\] \| sort\)/);
 });
 
 test("analyzes every eligible candidate in sorted order and emits token-free bound hashes", async () => {
@@ -99,7 +141,37 @@ test("analyzes every eligible candidate in sorted order and emits token-free bou
   assert.equal(receipt.analysisCount, 2);
   assert.equal(receipt.reportFile, "model-analysis.json");
   assert.deepEqual(receipt.eligibleSet, report.eligibleSet);
+  assert.deepEqual(receipt.rejectedLedger, report.rejectedLedger);
   assert.doesNotMatch(JSON.stringify({ report, receipt }), /fixture-token-must-not-escape/);
+});
+
+test("analyzes only the healthy eligible subset and binds the exact rejected ledger", async () => {
+  const input = makeCandidateAnalysisFixture(3);
+  rejectCandidateAsIndeterminate(input, 1);
+  const invoked = [];
+  const report = await analyzeCandidates({
+    ...input,
+    clientFactory: (entry) => {
+      invoked.push(entry.candidateId);
+      return makeSuccessfulClient(entry.candidate);
+    },
+  });
+
+  const eligibleIds = input.candidateGates.eligible
+    .map((entry) => entry.candidate.identityKey)
+    .sort((left, right) => left.localeCompare(right));
+  assert.deepEqual(invoked, eligibleIds);
+  assert.deepEqual(report.eligibleSet.candidateIds, eligibleIds);
+  assert.equal(report.rejectedLedger.count, 1);
+  assert.deepEqual(report.rejectedLedger.entries, input.candidateGates.rejected);
+  assert.match(report.rejectedLedger.hash, /^sha256:[a-f0-9]{64}$/);
+  assert.deepEqual(
+    createCandidateAnalysisReceipt(
+      report,
+      Buffer.from(`${JSON.stringify(report, null, 2)}\n`),
+    ).rejectedLedger,
+    report.rejectedLedger,
+  );
 });
 
 test("fails closed for partial inputs, duplicate IDs, discovery drift, and analysis failure", async () => {
@@ -109,7 +181,11 @@ test("fails closed for partial inputs, duplicate IDs, discovery drift, and analy
       code: "CANDIDATE_ANALYSIS_INPUT_INVALID",
     },
     {
-      mutate(input) { input.candidateGates.status = "indeterminate"; },
+      mutate(input) { input.candidateGates.status = "incomplete"; },
+      code: "CANDIDATE_ANALYSIS_INPUT_INVALID",
+    },
+    {
+      mutate(input) { input.candidateGates.summary.executedCandidateChecks -= 1; },
       code: "CANDIDATE_ANALYSIS_INPUT_INVALID",
     },
     {

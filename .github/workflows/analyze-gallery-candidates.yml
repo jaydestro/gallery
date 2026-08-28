@@ -175,18 +175,48 @@ jobs:
             fi
           done
           if ! jq -e '
-            .status == "complete" and .mode == "dry-run" and
-            .mutationPerformed == false and (.candidates | type) == "array"
+            .schemaVersion == "1.0.0" and .status == "complete" and
+            .mode == "dry-run" and .mutationPerformed == false and
+            (.candidates | type) == "array" and (.rejected | type) == "array" and
+            (.sources | type) == "array" and
+            .summary.sources == (.sources | length) and
+            .summary.succeededSources == .summary.sources and
+            .summary.skippedSources == 0 and .summary.indeterminateSources == 0 and
+            .summary.candidates == (.candidates | length) and
+            .summary.rejected == (.rejected | length) and
+            all(.sources[]; .queried == true and .status == "succeeded")
           ' "$inputs_directory/discovery/discovery.json" > /dev/null; then
             echo "Discovery report must be complete and non-mutating." >&2
             exit 1
           fi
-          if ! jq -e '
-            .status == "complete" and .mode == "dry-run" and
-            .mutationPerformed == false and (.eligible | type) == "array" and
-            .summary.eligible == (.eligible | length)
+          if ! jq -e --slurpfile discovery "$inputs_directory/discovery/discovery.json" '
+            . as $report |
+            ($discovery[0]) as $source |
+            ([.eligible[].candidate.identityKey] + [.rejected[].candidateId]) as $candidateIds |
+            .schemaVersion == "2.0.0" and .status == "complete" and
+            (.coverageStatus == "complete" or .coverageStatus == "partial") and
+            .mode == "dry-run" and .mutationPerformed == false and
+            (.eligible | type) == "array" and (.rejected | type) == "array" and
+            .summary.candidates == ($source.candidates | length) and
+            .summary.selectedCandidates == .summary.candidates and
+            .summary.executedCandidateChecks == .summary.selectedCandidates and
+            .summary.executedAvailabilityChecks == .summary.availabilityChecks and
+            .summary.deadlineExceededAvailabilityChecks == 0 and
+            .summary.eligible == (.eligible | length) and
+            .summary.rejected == (.rejected | length) and
+            .summary.eligible + .summary.rejected == .summary.candidates and
+            ($candidateIds | length) == .summary.candidates and
+            ($candidateIds | unique | length) == .summary.candidates and
+            ($candidateIds | sort) == ([$source.candidates[].identityKey] | sort) and
+            all(.eligible[];
+              .availability.classification == "healthy" and
+              (.availability.statusCode >= 200 and .availability.statusCode < 300) and
+              .availability.statusCode != 206 and .availability.reasonCode == null
+            ) and
+            ((.summary.indeterminateAvailabilityChecks == 0 and .coverageStatus == "complete") or
+             (.summary.indeterminateAvailabilityChecks > 0 and .coverageStatus == "partial"))
           ' "$inputs_directory/discovery/candidate-gates.json" > /dev/null; then
-            echo "Candidate gates must be complete and internally consistent." >&2
+            echo "Candidate gates must have complete execution and an exact candidate partition." >&2
             exit 1
           fi
 

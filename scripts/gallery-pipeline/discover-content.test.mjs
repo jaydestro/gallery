@@ -29,9 +29,15 @@ test("--fixtures runs a deterministic, fully offline combined dry run", async ()
   assert.equal(first.result.mode, "dry-run");
   assert.equal(first.result.mutationPerformed, false);
   assert.equal(first.result.status, "complete");
+  assert.equal(first.result.coverageStatus, "complete");
   assert.equal(first.result.discovery.candidates.length, 3);
   assert.ok(first.result.discovery.rejected.some((item) => item.reason === "exact-duplicate"));
   assert.equal(first.result.candidateGates.status, "complete");
+  assert.equal(first.result.candidateGates.coverageStatus, "complete");
+  assert.equal(
+    first.result.candidateGates.summary.executedCandidateChecks,
+    first.result.candidateGates.summary.selectedCandidates,
+  );
   assert.equal(first.result.candidateGates.summary.eligible, 3);
   const youtubeCandidate = first.result.discovery.candidates.find(
     (candidate) => candidate.metadata.youtubeSourceType === "youtube-playlist",
@@ -79,6 +85,7 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   };
   const candidateGates = {
     status: "complete",
+    coverageStatus: "complete",
     startedAt: inputs.discoveredAt,
     completedAt: inputs.discoveredAt,
   };
@@ -126,6 +133,56 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   assert.equal(Object.hasOwn(gateOptions, "writer"), false);
 });
 
+test("returns success for complete execution with a healthy eligible subset", async () => {
+  const output = outputBuffer();
+  const timestamp = "2026-08-28T12:00:00.000Z";
+  const discovery = {
+    schemaVersion: "1.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "complete",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    candidates: [{ identityKey: "candidate:healthy" }, { identityKey: "candidate:retry" }],
+    rejected: [],
+    sources: [],
+  };
+  const candidateGates = {
+    schemaVersion: "2.0.0",
+    mode: "dry-run",
+    mutationPerformed: false,
+    status: "complete",
+    coverageStatus: "partial",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    summary: {
+      candidates: 2,
+      selectedCandidates: 2,
+      executedCandidateChecks: 2,
+      availabilityChecks: 2,
+      executedAvailabilityChecks: 2,
+      indeterminateAvailabilityChecks: 1,
+      deadlineExceededAvailabilityChecks: 0,
+      eligible: 1,
+      rejected: 1,
+    },
+    eligible: [{ candidate: discovery.candidates[0] }],
+    rejected: [{ candidateId: "candidate:retry", reasonCodes: ["SOURCE_TIMEOUT"] }],
+  };
+
+  const result = await main(["--fixtures", FIXTURE_DIRECTORY], {
+    stdout: output.stream,
+    env: {},
+    async runDiscoveryImpl() { return discovery; },
+    async runCandidateGatesImpl() { return candidateGates; },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.result.status, "complete");
+  assert.equal(result.result.coverageStatus, "partial");
+  assert.deepEqual(JSON.parse(output.value()), result.result);
+});
+
 test("starts the CLI deadline before discovery and does not reset it for candidate gates", async () => {
   const output = outputBuffer();
   const operationStartedMilliseconds = 100;
@@ -157,10 +214,11 @@ test("starts the CLI deadline before discovery and does not reset it for candida
       assert.equal(options.deadlineMilliseconds, expectedDeadlineMilliseconds);
       assert.equal(options.now(), expectedDeadlineMilliseconds);
       return {
-        schemaVersion: "1.0.0",
+        schemaVersion: "2.0.0",
         mode: "dry-run",
         mutationPerformed: false,
-        status: "indeterminate",
+        status: "incomplete",
+        coverageStatus: "partial",
         startedAt: timestamp,
         completedAt: timestamp,
         eligible: [],
@@ -170,7 +228,7 @@ test("starts the CLI deadline before discovery and does not reset it for candida
   });
 
   assert.equal(result.exitCode, 2);
-  assert.equal(result.result.status, "indeterminate");
+  assert.equal(result.result.status, "partial");
   assert.deepEqual(JSON.parse(output.value()), result.result);
 });
 
@@ -189,10 +247,11 @@ test("preserves an earlier workflow deadline instead of restarting the budget", 
     sources: [],
   };
   const candidateGates = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
     status: "complete",
+    coverageStatus: "complete",
     startedAt: timestamp,
     completedAt: timestamp,
     eligible: [],
@@ -246,10 +305,11 @@ test("live CLI forwards only the environment YouTube key and never serializes it
     },
     async runCandidateGatesImpl() {
       return {
-        schemaVersion: "1.0.0",
+        schemaVersion: "2.0.0",
         mode: "dry-run",
         mutationPerformed: false,
         status: "complete",
+        coverageStatus: "complete",
         startedAt: timestamp,
         completedAt: timestamp,
         eligible: [],
@@ -277,10 +337,11 @@ test("writes both valid reports before returning nonzero for a partial run", asy
     sources: [],
   };
   const completeGates = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
     status: "complete",
+    coverageStatus: "complete",
     startedAt: partialDiscovery.completedAt,
     completedAt: partialDiscovery.completedAt,
     eligible: [],
@@ -308,7 +369,7 @@ test("writes both valid reports before returning nonzero for a partial run", asy
         );
         assert.equal(
           JSON.parse(await readFile(path.join(reportDirectory, "candidate-gates.json"), "utf8")).status,
-          "partial",
+          "incomplete",
         );
         return completeGates;
       },
@@ -362,7 +423,8 @@ test("leaves valid partial diagnostics when discovery stops before producing a r
           "utf8",
         ));
         assert.equal(discovery.status, "partial");
-        assert.equal(candidateGates.status, "partial");
+        assert.equal(candidateGates.status, "incomplete");
+        assert.equal(candidateGates.coverageStatus, "partial");
         assert.equal(discovery.startedAt, timestamp);
         assert.equal(candidateGates.startedAt, timestamp);
         throw new Error("simulated discovery cancellation");
@@ -374,17 +436,22 @@ test("leaves valid partial diagnostics when discovery stops before producing a r
       (await readdir(reportDirectory)).sort(),
       ["candidate-gates.json", "discovery.json"],
     );
-    for (const fileName of ["candidate-gates.json", "discovery.json"]) {
-      const report = JSON.parse(await readFile(path.join(reportDirectory, fileName), "utf8"));
-      assert.equal(report.status, "partial");
-      assert.equal(report.mutationPerformed, false);
-    }
+    const discovery = JSON.parse(await readFile(path.join(reportDirectory, "discovery.json"), "utf8"));
+    const candidateGates = JSON.parse(await readFile(
+      path.join(reportDirectory, "candidate-gates.json"),
+      "utf8",
+    ));
+    assert.equal(discovery.status, "partial");
+    assert.equal(candidateGates.status, "incomplete");
+    assert.equal(candidateGates.coverageStatus, "partial");
+    assert.equal(discovery.mutationPerformed, false);
+    assert.equal(candidateGates.mutationPerformed, false);
   } finally {
     await rm(reportDirectory, { recursive: true, force: true });
   }
 });
 
-test("writes valid combined JSON before returning nonzero for an indeterminate gate report", async () => {
+test("writes valid combined JSON before returning nonzero for incomplete gate execution", async () => {
   const output = outputBuffer();
   const discovery = {
     schemaVersion: "1.0.0",
@@ -397,10 +464,11 @@ test("writes valid combined JSON before returning nonzero for an indeterminate g
     sources: [],
   };
   const candidateGates = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
-    status: "indeterminate",
+    status: "incomplete",
+    coverageStatus: "partial",
     startedAt: discovery.completedAt,
     completedAt: discovery.completedAt,
     eligible: [],
@@ -418,7 +486,7 @@ test("writes valid combined JSON before returning nonzero for an indeterminate g
   });
 
   assert.equal(result.exitCode, 2);
-  assert.equal(result.result.status, "indeterminate");
+  assert.equal(result.result.status, "incomplete");
   assert.deepEqual(JSON.parse(output.value()), result.result);
 });
 

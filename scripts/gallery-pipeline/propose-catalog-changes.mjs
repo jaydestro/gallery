@@ -26,6 +26,8 @@ import { appendAuditPlan, emptyAuditLog } from "./write-audit.mjs";
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "../..");
 const REPORT_VERSION = "1.0.0";
+const MODEL_ANALYSIS_VERSION = "2.0.0";
+const CANDIDATE_GATE_VERSION = "2.0.0";
 const MAX_OPERATIONS_PER_PLAN = 25;
 const MAX_GENERATED_AT_AGE_MS = 15 * 60 * 1000;
 const MAX_WORKFLOW_RUN_DURATION_MS = 60 * 60 * 1000;
@@ -192,7 +194,7 @@ export const CATALOG_PROPOSAL_REPORT_SCHEMA = Object.freeze({
     schemaVersion: { const: REPORT_VERSION },
     mode: { const: "report-only" },
     mutationPerformed: { const: false },
-    status: { enum: ["complete", "blocked", "partial", "indeterminate"] },
+    status: { enum: ["complete", "blocked", "incomplete", "partial", "indeterminate"] },
     runId: { type: "string", minLength: 1 },
     generatedAt: { type: "string", format: "date-time" },
     inputFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
@@ -215,7 +217,7 @@ export const CATALOG_PROPOSAL_REPORT_SCHEMA = Object.freeze({
       required: ["discovery", "candidateGates", "modelAnalysis", "health", "freshness"],
       properties: Object.fromEntries(
         ["discovery", "candidateGates", "modelAnalysis", "health", "freshness"]
-          .map((name) => [name, { enum: ["complete", "missing", "partial", "indeterminate", "not-required"] }]),
+          .map((name) => [name, { enum: ["complete", "incomplete", "missing", "partial", "indeterminate", "not-required"] }]),
       ),
     },
     summary: {
@@ -374,6 +376,13 @@ function requireString(value, name) {
     fail("INPUT_INVALID", `${name} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function requireNonNegativeInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    fail("INPUT_INVALID", `${name} must be a non-negative integer.`);
+  }
+  return value;
 }
 
 function normalizeTimestamp(value, name) {
@@ -624,6 +633,79 @@ function policyBlockReasons(policy) {
   return uniqueReasonCodes(reasons);
 }
 
+function candidateCoverageStatus(candidateGates) {
+  if (candidateGates.schemaVersion !== CANDIDATE_GATE_VERSION) {
+    fail("INPUT_INVALID", `candidateGates.schemaVersion must be ${CANDIDATE_GATE_VERSION}.`);
+  }
+  if (!["complete", "partial"].includes(candidateGates.coverageStatus)) {
+    fail("INPUT_INVALID", "candidateGates.coverageStatus must be complete or partial.");
+  }
+  if (!["complete", "incomplete"].includes(candidateGates.status)) {
+    fail("INPUT_INVALID", "candidateGates.status must be complete or incomplete.");
+  }
+  const summary = requireObject(candidateGates.summary, "candidateGates.summary");
+  const candidates = requireNonNegativeInteger(summary.candidates, "candidateGates.summary.candidates");
+  const selectedCandidates = requireNonNegativeInteger(
+    summary.selectedCandidates,
+    "candidateGates.summary.selectedCandidates",
+  );
+  const executedCandidateChecks = requireNonNegativeInteger(
+    summary.executedCandidateChecks,
+    "candidateGates.summary.executedCandidateChecks",
+  );
+  const availabilityChecks = requireNonNegativeInteger(
+    summary.availabilityChecks,
+    "candidateGates.summary.availabilityChecks",
+  );
+  const executedAvailabilityChecks = requireNonNegativeInteger(
+    summary.executedAvailabilityChecks,
+    "candidateGates.summary.executedAvailabilityChecks",
+  );
+  const indeterminateAvailabilityChecks = requireNonNegativeInteger(
+    summary.indeterminateAvailabilityChecks,
+    "candidateGates.summary.indeterminateAvailabilityChecks",
+  );
+  const deadlineExceededAvailabilityChecks = requireNonNegativeInteger(
+    summary.deadlineExceededAvailabilityChecks,
+    "candidateGates.summary.deadlineExceededAvailabilityChecks",
+  );
+  const eligible = requireNonNegativeInteger(summary.eligible, "candidateGates.summary.eligible");
+  const rejected = requireNonNegativeInteger(summary.rejected, "candidateGates.summary.rejected");
+  if (
+    selectedCandidates > candidates ||
+    executedCandidateChecks > selectedCandidates ||
+    executedAvailabilityChecks > availabilityChecks ||
+    indeterminateAvailabilityChecks > availabilityChecks ||
+    deadlineExceededAvailabilityChecks > availabilityChecks ||
+    eligible !== candidateGates.eligible.length ||
+    rejected !== candidateGates.rejected.length ||
+    eligible + rejected !== candidates
+  ) {
+    fail("INPUT_INVALID", "candidateGates summary counters are inconsistent.");
+  }
+  if (candidateGates.status === "complete" && (
+    executedCandidateChecks !== selectedCandidates ||
+    executedAvailabilityChecks !== availabilityChecks ||
+    deadlineExceededAvailabilityChecks !== 0
+  )) {
+    fail("INPUT_INVALID", "complete candidateGates must have complete execution coverage.");
+  }
+  if (candidateGates.status === "incomplete" && (
+    executedCandidateChecks === selectedCandidates &&
+    executedAvailabilityChecks === availabilityChecks &&
+    deadlineExceededAvailabilityChecks === 0
+  )) {
+    fail("INPUT_INVALID", "incomplete candidateGates must identify unfinished execution.");
+  }
+  const expected = (
+    selectedCandidates === candidates && indeterminateAvailabilityChecks === 0
+  ) ? "complete" : "partial";
+  if (candidateGates.coverageStatus !== expected) {
+    fail("INPUT_INVALID", "candidateGates.coverageStatus is inconsistent with its summary.");
+  }
+  return candidateGates.coverageStatus;
+}
+
 function aiPolicyEnabled(policy) {
   const flags = policy?.automation?.ai;
   return Boolean(
@@ -634,12 +716,14 @@ function aiPolicyEnabled(policy) {
 }
 
 function reportStatus(value) {
-  return ["complete", "partial", "indeterminate"].includes(value) ? value : "missing";
+  return ["complete", "incomplete", "partial", "indeterminate"].includes(value)
+    ? value
+    : "missing";
 }
 
 function healthStatus(health) {
   if (!health) return "missing";
-  if (["partial", "indeterminate"].includes(health.status)) return health.status;
+  if (["incomplete", "partial", "indeterminate"].includes(health.status)) return health.status;
   return (health.entries ?? []).some((entry) => (
     entry?.status === "indeterminate" || entry?.sourceState?.availability === "indeterminate"
   )) ? "indeterminate" : "complete";
@@ -647,7 +731,7 @@ function healthStatus(health) {
 
 function freshnessStatus(freshness) {
   if (!freshness) return "missing";
-  if (["partial", "indeterminate"].includes(freshness.status)) return freshness.status;
+  if (["incomplete", "partial", "indeterminate"].includes(freshness.status)) return freshness.status;
   return (freshness.entries ?? []).some((entry) => (
     entry?.health?.status === "indeterminate" ||
     entry?.health?.sourceState?.availability === "indeterminate"
@@ -671,13 +755,17 @@ function upstreamState(input, modelRequired) {
 }
 
 function upstreamBlock(upstream) {
-  if (Object.values(upstream).includes("indeterminate")) {
+  const required = [upstream.discovery, upstream.candidateGates, upstream.modelAnalysis];
+  if (required.includes("incomplete")) {
+    return { status: "incomplete", reasons: ["UPSTREAM_EXECUTION_INCOMPLETE"] };
+  }
+  if (required.includes("indeterminate")) {
     return { status: "indeterminate", reasons: ["UPSTREAM_INDETERMINATE"] };
   }
-  if (Object.values(upstream).includes("partial")) {
+  if (required.includes("partial")) {
     return { status: "partial", reasons: ["UPSTREAM_PARTIAL"] };
   }
-  if (Object.values(upstream).includes("missing")) {
+  if (required.includes("missing") || [upstream.health, upstream.freshness].includes("missing")) {
     const reasons = upstream.modelAnalysis === "missing"
       ? ["MODEL_ANALYSIS_MISSING"]
       : ["UPSTREAM_REPORT_MISSING"];
@@ -706,6 +794,15 @@ function analysisIndex(modelAnalysis) {
 
 function prefixedCanonicalHash(value) {
   return `sha256:${hashCanonicalValue(value)}`;
+}
+
+function expectedRejectedLedger(candidateGates) {
+  const entries = clone(candidateGates.rejected);
+  return {
+    count: entries.length,
+    entries,
+    hash: prefixedCanonicalHash(entries),
+  };
 }
 
 function prettyJsonHash(value) {
@@ -773,12 +870,14 @@ function validateModelAnalysisReceipt(modelAnalysis, receipt, input) {
       candidateIds: eligibleIds,
       hash: prefixedCanonicalHash(eligibleIds),
     };
+    const rejectedLedger = expectedRejectedLedger(input.candidateGates);
     const expectedReceiptKeys = [
       "analysisCount",
       "configuration",
       "eligibleSet",
       "fileHashes",
       "provenance",
+      "rejectedLedger",
       "reportFile",
       "reportFileHash",
       "reportFingerprint",
@@ -823,15 +922,16 @@ function validateModelAnalysisReceipt(modelAnalysis, receipt, input) {
       typeof hash === "string" && new RegExp(SHA256_DIGEST_PATTERN).test(hash)
     ));
     if (
-      modelAnalysis.schemaVersion !== REPORT_VERSION ||
+      modelAnalysis.schemaVersion !== MODEL_ANALYSIS_VERSION ||
       modelAnalysis.mode !== "live-candidate-analysis" ||
       modelAnalysis.mutationPerformed !== false ||
       modelAnalysis.status !== "complete" ||
       !isDeepStrictEqual(analysisIds, eligibleIds) ||
       new Set(analysisIds).size !== analysisIds.length ||
       !isDeepStrictEqual(modelAnalysis.eligibleSet, expectedEligibleSet) ||
+      !isDeepStrictEqual(modelAnalysis.rejectedLedger, rejectedLedger) ||
       !isDeepStrictEqual(actualReceiptKeys, expectedReceiptKeys) ||
-      receipt.schemaVersion !== REPORT_VERSION ||
+      receipt.schemaVersion !== MODEL_ANALYSIS_VERSION ||
       receipt.reportFile !== "model-analysis.json" ||
       typeof verification.reportFileHash !== "string" ||
       !new RegExp(SHA256_DIGEST_PATTERN).test(verification.reportFileHash) ||
@@ -839,6 +939,7 @@ function validateModelAnalysisReceipt(modelAnalysis, receipt, input) {
       receipt.reportFingerprint !== prefixedCanonicalHash(modelAnalysis) ||
       receipt.analysisCount !== analyses.length ||
       !isDeepStrictEqual(receipt.eligibleSet, expectedEligibleSet) ||
+      !isDeepStrictEqual(receipt.rejectedLedger, rejectedLedger) ||
       !modelArtifact ||
       !isDeepStrictEqual(provenance.sourceDiscoveryArtifact, discoveryArtifact) ||
       producerFields.some(([reportField, artifactField]) => (
@@ -992,6 +1093,8 @@ function candidatePrecheckReasons({
   existingTarget,
   healthById,
   freshnessById,
+  existingChangesAllowed,
+  existingChangeBlockReasons,
 }) {
   const reasons = [];
   const id = candidateId(candidate);
@@ -1005,6 +1108,10 @@ function candidatePrecheckReasons({
   else if (!analyses.has(id)) reasons.push("MODEL_ANALYSIS_MISSING");
   reasons.push(...candidateGateEvidenceReasons(gateEntry, candidate, candidateGates, gateCatalog));
   if (targetId && existingTarget) {
+    if (!existingChangesAllowed) {
+      reasons.push(...existingChangeBlockReasons);
+      return uniqueReasonCodes(reasons);
+    }
     const health = healthById.get(targetId);
     const freshness = freshnessById.get(targetId);
     if (!health) reasons.push("HEALTH_DECISION_MISSING");
@@ -1056,24 +1163,26 @@ function expectedStateIds(state) {
   ]);
 }
 
-function scopedDecisionReports(health, freshness, state) {
-  const ids = expectedStateIds(state);
-  return {
-    health: {
-      ...clone(health),
-      entries: health.entries.filter((entry) => ids.has(entry.galleryId)).map(clone),
-    },
-    freshness: {
-      ...clone(freshness),
-      entries: freshness.entries.filter((entry) => ids.has(entry.galleryId)).map(clone),
-      healthSnapshot: {
-        ...clone(freshness.healthSnapshot),
-        entries: freshness.healthSnapshot.entries
-          .filter((entry) => ids.has(entry.galleryId))
-          .map(clone),
-      },
+function scopedDecisionReports(health, freshness, state, { includeExistingDecisions }) {
+  const ids = includeExistingDecisions ? expectedStateIds(state) : new Set();
+  const scopedHealth = {
+    ...clone(health),
+    entries: health.entries.filter((entry) => ids.has(entry.galleryId)).map(clone),
+  };
+  const scopedFreshness = {
+    ...clone(freshness),
+    entries: freshness.entries.filter((entry) => ids.has(entry.galleryId)).map(clone),
+    healthSnapshot: {
+      ...clone(freshness.healthSnapshot),
+      entries: freshness.healthSnapshot.entries
+        .filter((entry) => ids.has(entry.galleryId))
+        .map(clone),
     },
   };
+  delete scopedHealth.status;
+  delete scopedFreshness.status;
+  delete scopedFreshness.healthSnapshot.status;
+  return { health: scopedHealth, freshness: scopedFreshness };
 }
 
 function operationFingerprintPayload(operation) {
@@ -1287,12 +1396,13 @@ export function validateCatalogProposalReceipt(receipt) {
 
 export function createModelAnalysisReceipt(modelAnalysis) {
   return {
-    schemaVersion: REPORT_VERSION,
+    schemaVersion: MODEL_ANALYSIS_VERSION,
     reportFile: "model-analysis.json",
     reportFileHash: prettyJsonHash(modelAnalysis),
     reportFingerprint: prefixedCanonicalHash(modelAnalysis),
     analysisCount: analysisValues(modelAnalysis).length,
     eligibleSet: clone(modelAnalysis.eligibleSet),
+    rejectedLedger: clone(modelAnalysis.rejectedLedger),
     provenance: clone(modelAnalysis.provenance),
     configuration: clone(modelAnalysis.configuration),
     fileHashes: clone(modelAnalysis.fileHashes),
@@ -1318,6 +1428,7 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
   retiredRecordEntries(input.retired);
   requireObject(input.exemptions, "exemptions");
   requireObject(input.policy, "policy");
+  const coverageStatus = candidateCoverageStatus(input.candidateGates);
 
   const policyReasons = policyBlockReasons(input.policy);
   const modelRequired = aiPolicyEnabled(input.policy);
@@ -1356,6 +1467,16 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
   requireArray(input.freshness.entries, "freshness.entries");
   requireObject(input.freshness.healthSnapshot, "freshness.healthSnapshot");
   requireArray(input.freshness.healthSnapshot.entries, "freshness.healthSnapshot.entries");
+
+  const existingChangeBlockReasons = uniqueReasonCodes([
+    ...(coverageStatus === "partial"
+      ? ["CANDIDATE_COVERAGE_PARTIAL_PUBLISH_ONLY"]
+      : []),
+    ...([upstream.health, upstream.freshness].every((status) => status === "complete")
+      ? []
+      : ["HEALTH_FRESHNESS_INCOMPLETE_PUBLISH_ONLY"]),
+  ]);
+  const existingChangesAllowed = existingChangeBlockReasons.length === 0;
 
   const receiptReasons = validateModelAnalysisReceipt(
     input.modelAnalysis,
@@ -1409,6 +1530,8 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
       existingTarget,
       healthById,
       freshnessById,
+      existingChangesAllowed,
+      existingChangeBlockReasons,
     });
     if (targetId && candidateByTarget.has(targetId)) reasons.push("GALLERY_ID_DUPLICATE");
     if (reasons.length > 0) {
@@ -1421,7 +1544,9 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
   }
 
   const targets = new Set(candidateByTarget.keys());
-  for (const record of [...input.activeCatalog].sort((left, right) => left.id.localeCompare(right.id))) {
+  for (const record of existingChangesAllowed
+    ? [...input.activeCatalog].sort((left, right) => left.id.localeCompare(right.id))
+    : []) {
     const intent = lifecycleIntent(healthById.get(record.id), freshnessById.get(record.id));
     if (intent === "conflict") {
       setLedger(ledger, "catalog", record.id, "rejected", ["CONFLICTING_OPERATIONS"]);
@@ -1451,6 +1576,7 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
       input.health,
       input.freshness,
       initialState,
+      { includeExistingDecisions: existingChangesAllowed },
     );
     const targetInput = {
       runId: `${runId}-target-${String(index + 1).padStart(3, "0")}`,
@@ -1475,6 +1601,15 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
       }
       if (targetPlan.operations.length !== 1) {
         fail("TARGET_SCOPE_INVALID", `Target ${targetId} produced more than one operation.`);
+      }
+      if (
+        !existingChangesAllowed &&
+        (targetPlan.operations[0].type !== "publish" || targetPlan.operations[0].before !== null)
+      ) {
+        fail(
+          "PUBLISH_ONLY_MODE_VIOLATION",
+          `Target ${targetId} attempted an existing-record operation in publish-only mode.`,
+        );
       }
       rawOperations.push(clone(targetPlan.operations[0]));
       setLedger(ledger, subjectType, subjectId, "planned", ["OPERATION_PLANNED"]);
@@ -1569,7 +1704,7 @@ export function proposeCatalogChanges(input = {}, { now = new Date() } = {}) {
     runId,
     generatedAt,
     status: "complete",
-    stageReasons: [],
+    stageReasons: existingChangeBlockReasons,
     upstream,
     ledger,
     plans,
@@ -1856,7 +1991,7 @@ async function bindFixtureModelAnalysis(input) {
 }
 
 export function catalogProposalExitCode(report) {
-  return ["partial", "indeterminate"].includes(report.status) ? 2 : 0;
+  return ["incomplete", "partial", "indeterminate"].includes(report.status) ? 2 : 0;
 }
 
 export async function main(

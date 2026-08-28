@@ -35,7 +35,7 @@ function proposalCandidate(number) {
 
 function modelAnalysisReceipt(modelAnalysis) {
   return {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     reportFile: "model-analysis.json",
     reportFileHash: `sha256:${createHash("sha256")
       .update(`${JSON.stringify(modelAnalysis, null, 2)}\n`)
@@ -43,6 +43,7 @@ function modelAnalysisReceipt(modelAnalysis) {
     reportFingerprint: `sha256:${hashCanonicalValue(modelAnalysis)}`,
     analysisCount: modelAnalysis.analyses.length,
     eligibleSet: clone(modelAnalysis.eligibleSet),
+    rejectedLedger: clone(modelAnalysis.rejectedLedger),
     provenance: clone(modelAnalysis.provenance),
     configuration: clone(modelAnalysis.configuration),
     fileHashes: clone(modelAnalysis.fileHashes),
@@ -143,7 +144,7 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
     .sort((left, right) => left.localeCompare(right));
   const modelArtifact = upstreamArtifacts.find((entry) => entry.name === "modelAnalysis");
   const modelAnalysis = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "live-candidate-analysis",
     mutationPerformed: false,
     status: "complete",
@@ -182,6 +183,11 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
       candidateIds: eligibleIds,
       hash: `sha256:${hashCanonicalValue(eligibleIds)}`,
     },
+    rejectedLedger: {
+      count: 0,
+      entries: [],
+      hash: `sha256:${hashCanonicalValue([])}`,
+    },
     analyses: candidates.map((candidate) => makeAnalysis(candidate, "publish")),
   };
   return {
@@ -204,16 +210,21 @@ export function makeProposalFixture({ candidateCount = 3 } = {}) {
       rejected: [],
     },
     candidateGates: {
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       mode: "dry-run",
       mutationPerformed: false,
       status: "complete",
+      coverageStatus: "complete",
       startedAt: FIXTURE_TIME,
       completedAt: FIXTURE_TIME,
       summary: {
         candidates: candidateCount,
+        selectedCandidates: candidateCount,
+        executedCandidateChecks: candidateCount,
         availabilityChecks: candidateCount,
+        executedAvailabilityChecks: candidateCount,
         indeterminateAvailabilityChecks: 0,
+        deadlineExceededAvailabilityChecks: 0,
         eligible: candidateCount,
         rejected: 0,
       },

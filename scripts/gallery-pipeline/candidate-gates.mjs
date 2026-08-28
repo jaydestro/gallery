@@ -592,11 +592,16 @@ export async function runCandidateGates(options = {}) {
   const deadlineExceededAvailabilityChecks = [...availabilityByUrl.values()]
     .filter((availability) => availability.reasonCode === CANDIDATE_GATE_DEADLINE_REASON)
     .length;
-  const status = indeterminateAvailabilityChecks === 0
-    ? "complete"
-    : indeterminateAvailabilityChecks === availabilityByUrl.size
-      ? "indeterminate"
-      : "partial";
+  const executedAvailabilityChecks = urls.length - deadlineExceededAvailabilityChecks;
+  const incompleteCandidateChecks = ready.filter((item) => (
+    availabilityByUrl.get(item.candidate.canonicalUrl)?.reasonCode ===
+      CANDIDATE_GATE_DEADLINE_REASON
+  )).length;
+  const executedCandidateChecks = selected.length - incompleteCandidateChecks;
+  const status = executedCandidateChecks === selected.length ? "complete" : "incomplete";
+  const coverageStatus = (
+    selected.length === envelopes.length && indeterminateAvailabilityChecks === 0
+  ) ? "complete" : "partial";
 
   const eligible = [];
   for (const item of ready) {
@@ -614,15 +619,19 @@ export async function runCandidateGates(options = {}) {
 
   sortRejected(rejected);
   return {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
     status,
+    coverageStatus,
     startedAt: reportTime,
     completedAt: reportTime,
     summary: {
       candidates: envelopes.length,
+      selectedCandidates: selected.length,
+      executedCandidateChecks,
       availabilityChecks: urls.length,
+      executedAvailabilityChecks,
       indeterminateAvailabilityChecks,
       deadlineExceededAvailabilityChecks,
       eligible: eligible.length,
