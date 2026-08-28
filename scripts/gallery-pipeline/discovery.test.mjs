@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -6,6 +7,7 @@ import {
   isAllowedGitHubEndpoint,
   parseFeedXml,
   parseSafeXml,
+  parseYouTubeFeedXml,
   runDiscovery,
 } from "./discovery.mjs";
 import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
@@ -13,10 +15,15 @@ import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
 const DISCOVERED_AT = "2026-08-27T12:00:00Z";
 const YOUTUBE_API_ENDPOINT = "https://youtube.googleapis.com/youtube/v3";
 const YOUTUBE_CHANNEL_ID = "UC1234567890123456789012";
+const YOUTUBE_FEED_ENDPOINT = `https://www.youtube.com/feeds/videos.xml?channel_id=${YOUTUBE_CHANNEL_ID}`;
 const YOUTUBE_PLAYLIST_ID = "PL12345678901234567890123456789012";
 const YOUTUBE_UPLOADS_PLAYLIST_ID = `UU${YOUTUBE_CHANNEL_ID.slice(2)}`;
 const YOUTUBE_PLAYLIST_FIELDS = "nextPageToken,items(contentDetails/videoId)";
 const YOUTUBE_VIDEO_FIELDS = "items(id,snippet(title,description,publishedAt,channelId,channelTitle,thumbnails),contentDetails/caption)";
+const YOUTUBE_FEED_FIXTURE = await readFile(
+  new URL("./fixtures/discovery/youtube-feed.xml", import.meta.url),
+  "utf8",
+);
 
 function githubSource(overrides = {}) {
   return {
@@ -55,6 +62,17 @@ function youtubeSource(type, overrides = {}) {
     ownerLabel: "YouTube fixture",
     ...overrides,
   };
+}
+
+function youtubeFeedSource(overrides = {}) {
+  return youtubeSource("youtube-channel", {
+    id: "youtube-official-feed",
+    endpoint: YOUTUBE_FEED_ENDPOINT,
+    transport: "official-feed",
+    trustTier: "curated",
+    ownerLabel: "SQLBits",
+    ...overrides,
+  });
 }
 
 function youtubeApiUrl(resource, parameters) {
@@ -135,6 +153,7 @@ async function runWithFixtures({
   retiredCatalog = [],
   limits = {},
   environment = { YOUTUBE_API_KEY: "fixture-youtube-api-key" },
+  cadence = "all",
 }) {
   const transport = createFixtureTransport(responses);
   const youtubeAuthentication = [];
@@ -157,6 +176,7 @@ async function runWithFixtures({
     githubToken: "fixture-token",
     environment,
     discoveredAt: DISCOVERED_AT,
+    cadence,
     limits,
     fetchOptions: { fetchImpl, lookup: transport.lookup },
   });
@@ -353,6 +373,59 @@ test("one source failure is indeterminate without discarding successful source c
     "indeterminate",
   );
   assert.ok(result.rejected.some((item) => item.reason === "source-indeterminate"));
+});
+
+test("cadence filtering preserves mixed source statuses without duplicate queries", async () => {
+  const weeklyEndpoint = "https://devblogs.microsoft.com/cosmosdb/feed/";
+  const sources = [
+    { ...feedSource("weekly-feed", weeklyEndpoint), cadence: "weekly" },
+    youtubeFeedSource({ cadence: "daily" }),
+  ];
+  const responses = {
+    [weeklyEndpoint]: { body: rss([rssItem("weekly-guid", "weekly-post")]) },
+    [YOUTUBE_FEED_ENDPOINT]: { body: YOUTUBE_FEED_FIXTURE },
+  };
+
+  const daily = await runWithFixtures({ sources, responses, environment: {}, cadence: "daily" });
+  const weekly = await runWithFixtures({ sources, responses, environment: {}, cadence: "weekly" });
+
+  assert.equal(daily.result.cadence, "daily");
+  assert.equal(weekly.result.cadence, "weekly");
+  assert.deepEqual(daily.requests, [YOUTUBE_FEED_ENDPOINT]);
+  assert.deepEqual(weekly.requests, [weeklyEndpoint]);
+  assert.equal(
+    [...daily.requests, ...weekly.requests].filter((url) => url === YOUTUBE_FEED_ENDPOINT).length,
+    1,
+  );
+  assert.equal(
+    [...daily.requests, ...weekly.requests].filter((url) => url === weeklyEndpoint).length,
+    1,
+  );
+  assert.deepEqual(
+    daily.result.sources.map(({ sourceRegistryId, status, queried, reason }) => ({
+      sourceRegistryId,
+      status,
+      queried,
+      reason,
+    })),
+    [
+      {
+        sourceRegistryId: "weekly-feed",
+        status: "skipped",
+        queried: false,
+        reason: "cadence-not-selected",
+      },
+      {
+        sourceRegistryId: "youtube-official-feed",
+        status: "succeeded",
+        queried: true,
+        reason: undefined,
+      },
+    ],
+  );
+  assert.equal(weekly.result.sources[1].status, "skipped");
+  assert.equal(weekly.result.sources[1].queried, false);
+  assert.equal(weekly.result.sources[1].reason, "cadence-not-selected");
 });
 
 test("stops starting discovery requests after the operation deadline", async () => {
@@ -658,6 +731,106 @@ test("YouTube channel discovery resolves only the channel's exact uploads playli
   assert.equal(result.sources[0].status, "succeeded");
   assert.equal(result.candidates[0].metadata.youtubeSourceType, "youtube-channel");
   assert.equal(result.candidates[0].metadata.youtubeSourceId, YOUTUBE_CHANNEL_ID);
+});
+
+test("YouTube official feed discovery uses one keyless request and preserves Atom metadata", async () => {
+  const source = youtubeFeedSource();
+  const parsed = parseYouTubeFeedXml(YOUTUBE_FEED_FIXTURE, source);
+  assert.equal(parsed.issues.length, 0);
+  assert.deepEqual(
+    {
+      id: parsed.videos[0].id,
+      title: parsed.videos[0].snippet.title,
+      description: parsed.videos[0].snippet.description,
+      publishedAt: parsed.videos[0].snippet.publishedAt,
+      updatedAt: parsed.videos[0].updatedAt,
+      thumbnail: parsed.videos[0].snippet.thumbnails.high.url,
+      author: parsed.videos[0].snippet.channelTitle,
+      channelUrl: parsed.videos[0].channelUrl,
+    },
+    {
+      id: "6IIUtEFKJec",
+      title: "Build with Azure Cosmos DB",
+      description: "Create a data application with Azure Cosmos DB for NoSQL.",
+      publishedAt: "2026-08-26T10:00:00+00:00",
+      updatedAt: "2026-08-27T11:00:00+00:00",
+      thumbnail: "https://i4.ytimg.com/vi/6IIUtEFKJec/hqdefault.jpg",
+      author: "SQLBits",
+      channelUrl: `https://www.youtube.com/channel/${YOUTUBE_CHANNEL_ID}`,
+    },
+  );
+
+  const { result, requests, youtubeAuthentication } = await runWithFixtures({
+    sources: [source],
+    responses: { [YOUTUBE_FEED_ENDPOINT]: { body: YOUTUBE_FEED_FIXTURE } },
+    environment: {},
+  });
+
+  assert.deepEqual(requests, [YOUTUBE_FEED_ENDPOINT]);
+  assert.deepEqual(youtubeAuthentication, []);
+  assert.equal(result.status, "complete");
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.rejected[0].sourceId, "AbCdEfGhI12");
+  assert.equal(result.rejected[0].reason, "insufficient-cosmos-evidence");
+  assert.equal(result.candidates[0].modifiedAt, "2026-08-27T11:00:00.000Z");
+  assert.equal(result.candidates[0].metadata.preview, "https://i4.ytimg.com/vi/6IIUtEFKJec/hqdefault.jpg");
+  assert.equal(result.candidates[0].metadata.website, `https://www.youtube.com/channel/${YOUTUBE_CHANNEL_ID}`);
+  assert.equal(result.candidates[0].metadata.author, "SQLBits");
+  assert.deepEqual(result.candidates[0].metadata.tags, ["video"]);
+});
+
+test("YouTube official feed preserves valid entries and marks malformed entries indeterminate", async () => {
+  const malformedEntries = `
+    <entry><id>yt:video:not-valid</id><yt:videoId>not-valid</yt:videoId></entry>
+    <entry>
+      <id>yt:video:ZyXwVuTsRq1</id><yt:videoId>ZyXwVuTsRq1</yt:videoId>
+      <yt:channelId>UC9999999999999999999999</yt:channelId>
+    </entry>`;
+  const body = YOUTUBE_FEED_FIXTURE.replace("</feed>", `${malformedEntries}</feed>`);
+  const { result } = await runWithFixtures({
+    sources: [youtubeFeedSource()],
+    responses: { [YOUTUBE_FEED_ENDPOINT]: { body } },
+    environment: {},
+  });
+
+  assert.equal(result.status, "partial");
+  assert.equal(result.sources[0].status, "indeterminate");
+  assert.equal(result.candidates.length, 1);
+  assert.match(result.sources[0].reason, /invalid yt:videoId/);
+  assert.match(result.sources[0].reason, /channel ID does not match/);
+  assert.equal(
+    result.rejected.filter((item) => item.reason === "invalid-youtube-feed-entry").length,
+    2,
+  );
+});
+
+test("YouTube official feed rejects entities and oversized responses", async () => {
+  const cases = [
+    {
+      body: '<!DOCTYPE feed [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><feed>&xxe;</feed>',
+      limits: {},
+      reason: /declarations and custom entities/,
+    },
+    {
+      body: `<feed>${"x".repeat(512)}</feed>`,
+      limits: { responseBytes: 128 },
+      reason: /128 byte limit/,
+    },
+  ];
+  for (const fixture of cases) {
+    const { result, requests } = await runWithFixtures({
+      sources: [youtubeFeedSource()],
+      responses: { [YOUTUBE_FEED_ENDPOINT]: { body: fixture.body } },
+      environment: {},
+      limits: fixture.limits,
+    });
+    assert.deepEqual(requests, [YOUTUBE_FEED_ENDPOINT]);
+    assert.equal(result.status, "partial");
+    assert.equal(result.sources[0].status, "indeterminate");
+    assert.match(result.sources[0].reason, fixture.reason);
+    assert.equal(result.candidates.length, 0);
+  }
 });
 
 test("YouTube candidate limit stops pagination before another quota call", async () => {

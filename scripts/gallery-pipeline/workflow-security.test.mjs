@@ -108,6 +108,39 @@ NODE
   }
 }
 
+async function runDiscoveryCadenceRouting(rootDirectory, script, {
+  name,
+  eventName,
+  eventSchedule = "",
+  dispatchCadence = "",
+}) {
+  const outputPath = path.join(rootDirectory, `${name}.txt`);
+  const bash = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
+  try {
+    const result = await execFileAsync(bash, ["-c", script], {
+      cwd: rootDirectory,
+      env: {
+        ...process.env,
+        EVENT_NAME: eventName,
+        EVENT_SCHEDULE: eventSchedule,
+        DISPATCH_CADENCE: dispatchCadence,
+        GITHUB_OUTPUT: outputPath,
+      },
+    });
+    return {
+      exitCode: 0,
+      output: (await readFile(outputPath, "utf8")).trim(),
+      stderr: result.stderr,
+    };
+  } catch (error) {
+    return {
+      exitCode: typeof error.code === "number" ? error.code : Number(error.code),
+      output: "",
+      stderr: error.stderr ?? "",
+    };
+  }
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -634,14 +667,19 @@ test("gallery validation exposes one stable universal PR and merge-queue check",
   assert.doesNotMatch(workflow, /\$\{\{\s*secrets\.|id-token:\s*write|pages:\s*write/);
 });
 
-test("scheduled discovery is bounded, read-only, and always initializes diagnostics before network work", async () => {
+test("scheduled discovery resolves exact daily and weekly cadences before network work", async (t) => {
   const workflow = await readWorkflow("discover-content.yml");
+  const triggers = yamlSection(workflow, "on");
+  const schedule = yamlSection(triggers, "schedule", 2);
+  const dispatch = yamlSection(triggers, "workflow_dispatch", 2);
+  const cadenceInput = yamlSection(dispatch, "cadence", 6);
   const permissions = yamlSection(workflow, "permissions");
   const discoverJob = yamlSection(workflow, "discover", 2);
   const policy = JSON.parse(await readFile(
     path.join(ROOT_DIRECTORY, ".github", "gallery-pipeline", "policy.json"),
     "utf8",
   ));
+  const cadenceIndex = discoverJob.indexOf("      - name: Resolve discovery cadence");
   const initializeIndex = discoverJob.indexOf("      - name: Initialize diagnostic report envelopes");
   const installIndex = discoverJob.indexOf("      - name: Install dependencies");
   const discoveryIndex = discoverJob.indexOf("      - name: Discover and gate content in report-only mode");
@@ -649,6 +687,17 @@ test("scheduled discovery is bounded, read-only, and always initializes diagnost
 
   assert.match(permissions, /^  contents:\s*read\s*$/m);
   assert.doesNotMatch(workflow, /contents:\s*write|pull-requests:\s*write|id-token:\s*write|\$\{\{\s*secrets\./);
+  assert.deepEqual(
+    [...schedule.matchAll(/^\s+- cron: "([^"]+)"\s*$/gm)].map((match) => match[1]),
+    ["17 3 * * *", "17 3 * * 1"],
+  );
+  assert.match(cadenceInput, /^        required:\s*true\s*$/m);
+  assert.match(cadenceInput, /^        default:\s*all\s*$/m);
+  assert.match(cadenceInput, /^        type:\s*choice\s*$/m);
+  assert.deepEqual(
+    [...cadenceInput.matchAll(/^\s+- (all|daily|weekly)\s*$/gm)].map((match) => match[1]),
+    ["all", "daily", "weekly"],
+  );
   assert.match(discoverJob, /^    timeout-minutes:\s*30\s*$/m);
   assert.equal(policy.discovery.operationDeadlineSeconds, 20 * 60);
   assert.ok(
@@ -656,6 +705,7 @@ test("scheduled discovery is bounded, read-only, and always initializes diagnost
     "the operation deadline must reserve at least five minutes for finalization and upload",
   );
   for (const [name, index] of [
+    ["cadence resolution", cadenceIndex],
     ["diagnostic initialization", initializeIndex],
     ["dependency installation", installIndex],
     ["discovery", discoveryIndex],
@@ -663,6 +713,7 @@ test("scheduled discovery is bounded, read-only, and always initializes diagnost
   ]) {
     assert.notEqual(index, -1, `Missing ${name}`);
   }
+  assert.ok(cadenceIndex < initializeIndex);
   assert.ok(initializeIndex < installIndex);
   assert.ok(installIndex < discoveryIndex);
   assert.ok(discoveryIndex < uploadIndex);
@@ -670,9 +721,60 @@ test("scheduled discovery is bounded, read-only, and always initializes diagnost
     workflow,
     "Initialize diagnostic report envelopes",
   );
+  const cadenceScript = workflowStepScript(workflow, "Resolve discovery cadence");
+  assert.match(workflow, /EVENT_SCHEDULE:\s*\$\{\{ github\.event\.schedule \}\}/);
+  assert.match(workflow, /DISPATCH_CADENCE:\s*\$\{\{ inputs\.cadence \}\}/);
+  assert.match(cadenceScript, /"17 3 \* \* \*"\) cadence="daily"/);
+  assert.match(cadenceScript, /"17 3 \* \* 1"\) cadence="weekly"/);
+  assert.match(cadenceScript, /all\|daily\|weekly/);
+  assert.doesNotMatch(cadenceScript, /\$\{\{/);
   assert.doesNotMatch(initializerScript, /discover-content\.mjs|from\s+["']\.\.?\//);
   assert.match(initializerScript, /GALLERY_DISCOVERY_DEADLINE_MILLISECONDS/);
-  assert.match(discoverJob, /gallery:discover -- --dry-run --report-directory gallery-reports/);
+  assert.match(initializerScript, /cadence,\s*\n\s*status: "partial"/);
+  assert.equal(
+    workflow.match(/^\s+DISCOVERY_CADENCE:\s*\$\{\{ steps\.cadence\.outputs\.cadence \}\}\s*$/gm)?.length,
+    2,
+  );
+  assert.match(
+    discoverJob,
+    /gallery:discover -- --dry-run --cadence "\$DISCOVERY_CADENCE" --report-directory gallery-reports/,
+  );
+
+  const routingDirectory = await mkdtemp(path.join(os.tmpdir(), "gallery-cadence-routing-"));
+  t.after(() => rm(routingDirectory, { recursive: true, force: true }));
+  const routingCases = [
+    {
+      name: "daily-schedule",
+      eventName: "schedule",
+      eventSchedule: "17 3 * * *",
+      expected: "daily",
+    },
+    {
+      name: "weekly-schedule",
+      eventName: "schedule",
+      eventSchedule: "17 3 * * 1",
+      expected: "weekly",
+    },
+    ...["all", "daily", "weekly"].map((cadence) => ({
+      name: `dispatch-${cadence}`,
+      eventName: "workflow_dispatch",
+      dispatchCadence: cadence,
+      expected: cadence,
+    })),
+  ];
+  for (const definition of routingCases) {
+    const routed = await runDiscoveryCadenceRouting(routingDirectory, cadenceScript, definition);
+    assert.equal(routed.exitCode, 0, routed.stderr);
+    assert.equal(routed.output, `cadence=${definition.expected}`);
+  }
+  const unknownSchedule = await runDiscoveryCadenceRouting(routingDirectory, cadenceScript, {
+    name: "unknown-schedule",
+    eventName: "schedule",
+    eventSchedule: "0 0 * * *",
+  });
+  assert.equal(unknownSchedule.exitCode, 1);
+  assert.match(unknownSchedule.stderr, /Unrecognized discovery schedule/);
+
   const uploadStep = discoverJob.slice(uploadIndex);
   assert.match(uploadStep, /^        if:\s*always\(\)\s*$/m);
   assert.match(uploadStep, /gallery-reports\/discovery\.json/);
@@ -707,7 +809,11 @@ test("pre-install discovery diagnostics initialize without node_modules", async 
     const bash = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
     await execFileAsync(bash, ["-c", initializerScript], {
       cwd: rootDirectory,
-      env: { ...process.env, GITHUB_ENV: githubEnvironmentPath },
+      env: {
+        ...process.env,
+        DISCOVERY_CADENCE: "weekly",
+        GITHUB_ENV: githubEnvironmentPath,
+      },
     });
     const after = Date.now();
 
@@ -721,6 +827,7 @@ test("pre-install discovery diagnostics initialize without node_modules", async 
       "utf8",
     ));
     assert.equal(discovery.schemaVersion, "1.0.0");
+    assert.equal(discovery.cadence, "weekly");
     assert.equal(discovery.status, "partial");
     assert.equal(candidateGates.schemaVersion, "2.0.0");
     assert.equal(candidateGates.status, "incomplete");

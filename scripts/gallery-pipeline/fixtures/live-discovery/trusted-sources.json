@@ -8,6 +8,7 @@
       "organization": "AzureCosmosDB",
       "trustTier": "first-party",
       "enabled": true,
+      "cadence": "weekly",
       "ownerLabel": "Azure Cosmos DB"
     },
     {
@@ -16,6 +17,7 @@
       "endpoint": "https://devblogs.microsoft.com/cosmosdb/feed/",
       "trustTier": "first-party",
       "enabled": true,
+      "cadence": "weekly",
       "ownerLabel": "Azure Cosmos DB Blog"
     },
     {
@@ -24,6 +26,7 @@
       "endpoint": "https://learn.microsoft.com/azure/cosmos-db/",
       "trustTier": "first-party",
       "enabled": true,
+      "cadence": "weekly",
       "ownerLabel": "Microsoft Learn"
     },
     {
@@ -33,7 +36,7 @@
       "playlistId": "PL12345678901234567890123456789012",
       "trustTier": "first-party",
       "enabled": true,
-      "cadence": "weekly",
+      "cadence": "daily",
       "ownerLabel": "YouTube fixture",
       "includeRules": ["require-cosmos-db-material-relevance"],
       "excludeRules": ["videos-without-immutable-id"]
@@ -44,6 +47,7 @@
       "endpoint": "https://example.com/feed.xml",
       "trustTier": "first-party",
       "enabled": false,
+      "cadence": "weekly",
       "ownerLabel": "Disabled"
     }
   ]

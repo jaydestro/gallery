@@ -215,6 +215,33 @@
     "youtubeChannel": {
       "type": "object",
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "endpoint": {
+              "const": "https://youtube.googleapis.com/youtube/v3"
+            },
+            "transport": {
+              "const": "api"
+            }
+          }
+        },
+        {
+          "required": [
+            "transport"
+          ],
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://www\\.youtube\\.com/feeds/videos\\.xml\\?channel_id=UC[A-Za-z0-9_-]{22}$"
+            },
+            "transport": {
+              "const": "official-feed"
+            }
+          }
+        }
+      ],
       "required": [
         "id",
         "type",
@@ -236,14 +263,24 @@
           "const": "youtube-channel"
         },
         "endpoint": {
-          "const": "https://youtube.googleapis.com/youtube/v3"
+          "type": "string",
+          "format": "uri"
         },
         "channelId": {
           "type": "string",
           "pattern": "^UC[A-Za-z0-9_-]{22}$"
         },
+        "transport": {
+          "enum": [
+            "api",
+            "official-feed"
+          ]
+        },
         "trustTier": {
-          "const": "first-party"
+          "enum": [
+            "first-party",
+            "curated"
+          ]
         },
         "enabled": {
           "type": "boolean"

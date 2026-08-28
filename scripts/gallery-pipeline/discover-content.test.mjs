@@ -28,6 +28,8 @@ test("--fixtures runs a deterministic, fully offline combined dry run", async ()
   assert.equal(first.exitCode, 0);
   assert.equal(first.result.mode, "dry-run");
   assert.equal(first.result.mutationPerformed, false);
+  assert.equal(first.result.cadence, "all");
+  assert.equal(first.result.discovery.cadence, "all");
   assert.equal(first.result.status, "complete");
   assert.equal(first.result.coverageStatus, "complete");
   assert.equal(first.result.discovery.candidates.length, 3);
@@ -51,6 +53,60 @@ test("--fixtures runs a deterministic, fully offline combined dry run", async ()
   assert.deepEqual(first.result, second.result);
   assert.equal(firstOutput.value().includes("offline-fixture-youtube-key"), false);
   assert.equal(await readFile(activePath, "utf8"), before);
+});
+
+test("--fixtures partitions mixed cadences without failing unrelated source provenance", async () => {
+  const results = {};
+  for (const cadence of ["all", "daily", "weekly"]) {
+    const output = outputBuffer();
+    const run = await main([
+      "--fixtures",
+      FIXTURE_DIRECTORY,
+      "--cadence",
+      cadence,
+    ], { stdout: output.stream, env: {} });
+    assert.equal(run.exitCode, 0);
+    assert.equal(run.result.cadence, cadence);
+    assert.equal(run.result.discovery.cadence, cadence);
+    assert.equal(run.result.candidateGates.status, "complete");
+    assert.equal(
+      run.result.candidateGates.summary.eligible,
+      run.result.discovery.candidates.length,
+    );
+    assert.ok(run.result.candidateGates.rejected.every((entry) => (
+      !entry.reasonCodes.includes("SOURCE_DISCOVERY_NOT_SUCCEEDED")
+    )));
+    assert.deepEqual(JSON.parse(output.value()), run.result);
+    results[cadence] = run.result;
+  }
+
+  const dailyStatuses = new Map(results.daily.discovery.sources.map((source) => (
+    [source.sourceRegistryId, source]
+  )));
+  const weeklyStatuses = new Map(results.weekly.discovery.sources.map((source) => (
+    [source.sourceRegistryId, source]
+  )));
+  assert.equal(dailyStatuses.get("youtube-fixture-playlist").status, "succeeded");
+  assert.equal(dailyStatuses.get("github-org-azurecosmosdb").reason, "cadence-not-selected");
+  assert.equal(dailyStatuses.get("disabled-feed").reason, "cadence-not-selected");
+  assert.equal(weeklyStatuses.get("youtube-fixture-playlist").reason, "cadence-not-selected");
+  assert.equal(weeklyStatuses.get("github-org-azurecosmosdb").status, "succeeded");
+  assert.equal(weeklyStatuses.get("disabled-feed").reason, "source-disabled");
+  assert.ok([...dailyStatuses.values(), ...weeklyStatuses.values()]
+    .filter((source) => source.status === "skipped")
+    .every((source) => source.queried === false));
+
+  const allCandidateIds = results.all.discovery.candidates.map((candidate) => candidate.identityKey);
+  const dailyCandidateIds = results.daily.discovery.candidates.map((candidate) => candidate.identityKey);
+  const weeklyCandidateIds = results.weekly.discovery.candidates.map((candidate) => candidate.identityKey);
+  assert.deepEqual(
+    [...dailyCandidateIds, ...weeklyCandidateIds].sort(),
+    [...allCandidateIds].sort(),
+  );
+  assert.deepEqual(
+    dailyCandidateIds.filter((identityKey) => weeklyCandidateIds.includes(identityKey)),
+    [],
+  );
 });
 
 test("binds candidate gates to the exact discovery envelope and shared inputs", async () => {
@@ -95,6 +151,7 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   const now = () => Date.parse("2026-08-28T12:00:00.000Z");
 
   const result = await runReportOnlyPipeline(inputs, {
+    cadence: "daily",
     async runDiscoveryImpl(options) {
       discoveryOptions = options;
       return discovery;
@@ -109,6 +166,7 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
 
   assert.strictEqual(result.discovery, discovery);
   assert.strictEqual(result.candidateGates, candidateGates);
+  assert.equal(result.cadence, "daily");
   assert.strictEqual(gateOptions.discovery, discovery);
   assert.equal(Object.hasOwn(gateOptions, "candidates"), false);
   assert.equal(Object.hasOwn(gateOptions, "sourceStatuses"), false);
@@ -122,6 +180,7 @@ test("binds candidate gates to the exact discovery envelope and shared inputs", 
   assert.equal(gateOptions.checkedAt, discovery.completedAt);
   assert.strictEqual(discoveryOptions.fetchOptions.fetchImpl, fetchImpl);
   assert.strictEqual(discoveryOptions.fetchOptions.lookup, lookup);
+  assert.equal(discoveryOptions.cadence, "daily");
   assert.equal(discoveryOptions.deadlineMilliseconds, deadlineMilliseconds);
   assert.equal(discoveryOptions.fetchOptions.deadlineMilliseconds, deadlineMilliseconds);
   assert.strictEqual(discoveryOptions.now, now);
@@ -278,12 +337,12 @@ test("preserves an earlier workflow deadline instead of restarting the budget", 
   assert.equal(result.result.status, "complete");
 });
 
-test("live CLI forwards only the environment YouTube key and never serializes it", async () => {
+test("live CLI forwards cadence and only the environment YouTube key without serializing it", async () => {
   const output = outputBuffer();
   const apiKey = "live-test-youtube-key";
   const timestamp = "2026-08-28T12:00:00.000Z";
   let discoveryOptions;
-  const result = await main([], {
+  const result = await main(["--cadence=weekly"], {
     stdout: output.stream,
     env: {
       GITHUB_TOKEN: "github-test-token",
@@ -319,6 +378,8 @@ test("live CLI forwards only the environment YouTube key and never serializes it
   });
 
   assert.equal(result.exitCode, 0);
+  assert.equal(result.result.cadence, "weekly");
+  assert.equal(discoveryOptions.cadence, "weekly");
   assert.deepEqual(discoveryOptions.environment, { YOUTUBE_API_KEY: apiKey });
   assert.equal(Object.hasOwn(discoveryOptions.environment, "UNRELATED_SECRET"), false);
   assert.equal(output.value().includes(apiKey), false);
@@ -404,6 +465,8 @@ test("leaves valid partial diagnostics when discovery stops before producing a r
     await assert.rejects(main([
       "--fixtures",
       FIXTURE_DIRECTORY,
+      "--cadence",
+      "daily",
       "--report-directory",
       reportDirectory,
     ], {
@@ -423,6 +486,7 @@ test("leaves valid partial diagnostics when discovery stops before producing a r
           "utf8",
         ));
         assert.equal(discovery.status, "partial");
+        assert.equal(discovery.cadence, "daily");
         assert.equal(candidateGates.status, "incomplete");
         assert.equal(candidateGates.coverageStatus, "partial");
         assert.equal(discovery.startedAt, timestamp);
@@ -442,6 +506,7 @@ test("leaves valid partial diagnostics when discovery stops before producing a r
       "utf8",
     ));
     assert.equal(discovery.status, "partial");
+    assert.equal(discovery.cadence, "daily");
     assert.equal(candidateGates.status, "incomplete");
     assert.equal(candidateGates.coverageStatus, "partial");
     assert.equal(discovery.mutationPerformed, false);
@@ -499,6 +564,10 @@ test("CLI rejects mutation flags and malformed arguments before running", async 
     ["positional-value"],
     ["--fixtures="],
     ["--fixtures", FIXTURE_DIRECTORY, "--fixtures", FIXTURE_DIRECTORY],
+    ["--cadence"],
+    ["--cadence="],
+    ["--cadence", "monthly"],
+    ["--cadence", "daily", "--cadence=weekly"],
     ["--report-directory"],
     ["--report-directory="],
     ["--report-directory", "first", "--report-directory", "second"],

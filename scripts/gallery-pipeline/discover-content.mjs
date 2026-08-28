@@ -12,21 +12,32 @@ const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "../..");
 const DEFAULT_FIXTURE_DIRECTORY = path.join(SCRIPT_DIRECTORY, "fixtures/live-discovery");
 const DEFAULT_OPERATION_DEADLINE_SECONDS = 20 * 60;
 const WORKFLOW_DEADLINE_ENVIRONMENT_VARIABLE = "GALLERY_DISCOVERY_DEADLINE_MILLISECONDS";
+const DISCOVERY_CADENCES = new Set(["all", "daily", "weekly"]);
 let temporaryReportSequence = 0;
 
 function usage() {
   return [
-    "Usage: node scripts/gallery-pipeline/discover-content.mjs [--dry-run] [--fixtures [directory]] [--report-directory directory]",
+    "Usage: node scripts/gallery-pipeline/discover-content.mjs [--dry-run] [--cadence all|daily|weekly] [--fixtures [directory]] [--report-directory directory]",
     "",
     "Runs trusted-source discovery and candidate gates without mutation.",
     "By default, writes one combined JSON report to stdout.",
     "--report-directory writes discovery.json and candidate-gates.json instead.",
+    "--cadence selects all sources or only sources assigned to the daily or weekly cadence.",
     "--fixtures uses deterministic offline transport fixtures.",
   ].join("\n");
 }
 
+function validateCadence(value, name = "cadence") {
+  if (!DISCOVERY_CADENCES.has(value)) {
+    throw new TypeError(`${name} must be one of: all, daily, weekly`);
+  }
+  return value;
+}
+
 function parseArguments(arguments_) {
   let help = false;
+  let cadence = "all";
+  let cadenceSpecified = false;
   let fixtureDirectory = null;
   let fixtureSpecified = false;
   let reportDirectory = null;
@@ -39,6 +50,25 @@ function parseArguments(arguments_) {
     }
     if (argument === "--write" || argument === "--apply" || argument === "--mutate") {
       throw new TypeError(`${argument} is not supported; discovery is always a dry run`);
+    }
+    if (argument === "--cadence") {
+      if (cadenceSpecified) throw new TypeError("--cadence may only be specified once");
+      const value = arguments_[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new TypeError("--cadence requires all, daily, or weekly");
+      }
+      cadenceSpecified = true;
+      cadence = validateCadence(value, "--cadence");
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--cadence=")) {
+      if (cadenceSpecified) throw new TypeError("--cadence may only be specified once");
+      const value = argument.slice("--cadence=".length);
+      if (!value) throw new TypeError("--cadence requires all, daily, or weekly");
+      cadenceSpecified = true;
+      cadence = validateCadence(value, "--cadence");
+      continue;
     }
     if (argument === "--fixtures") {
       if (fixtureSpecified) throw new TypeError("--fixtures may only be specified once");
@@ -83,7 +113,7 @@ function parseArguments(arguments_) {
     }
     throw new TypeError(`Unknown argument: ${argument}`);
   }
-  return { help, fixtureDirectory, reportDirectory };
+  return { help, cadence, fixtureDirectory, reportDirectory };
 }
 
 async function readJson(filePath) {
@@ -210,13 +240,18 @@ async function writeCandidateGateReport(directory, candidateGates) {
   await writeJsonAtomic(path.join(directory, "candidate-gates.json"), candidateGates);
 }
 
-export async function initializeDiagnosticReports(directory, { now = Date.now } = {}) {
+export async function initializeDiagnosticReports(directory, {
+  cadence = "all",
+  now = Date.now,
+} = {}) {
   if (typeof now !== "function") throw new TypeError("now must be a function");
+  validateCadence(cadence);
   const timestamp = diagnosticTimestamp(now());
   const discovery = {
     schemaVersion: "1.0.0",
     mode: "dry-run",
     mutationPerformed: false,
+    cadence,
     status: "partial",
     startedAt: timestamp,
     completedAt: timestamp,
@@ -264,6 +299,7 @@ export async function initializeDiagnosticReports(directory, { now = Date.now } 
 }
 
 export async function runReportOnlyPipeline(inputs, {
+  cadence = "all",
   runDiscoveryImpl = runDiscovery,
   runCandidateGatesImpl = runCandidateGates,
   onDiscoveryComplete = async () => {},
@@ -271,6 +307,7 @@ export async function runReportOnlyPipeline(inputs, {
   deadlineMilliseconds,
   now = Date.now,
 } = {}) {
+  validateCadence(cadence);
   const {
     trustedSources,
     activeCatalog,
@@ -290,6 +327,7 @@ export async function runReportOnlyPipeline(inputs, {
     githubToken,
     environment,
     discoveredAt,
+    cadence,
     limits,
     deadlineMilliseconds,
     now,
@@ -314,6 +352,7 @@ export async function runReportOnlyPipeline(inputs, {
     schemaVersion: "2.0.0",
     mode: "dry-run",
     mutationPerformed: false,
+    cadence,
     status: combinedStatus(discovery.status, candidateGates.status),
     coverageStatus: candidateCoverageStatus(candidateGates),
     startedAt: discovery.startedAt,
@@ -351,6 +390,7 @@ export async function main(
 
   if (options.reportDirectory) {
     await initializeDiagnosticReports(options.reportDirectory, {
+      cadence: options.cadence,
       now: () => operationStartedMilliseconds,
     });
   }
@@ -364,6 +404,7 @@ export async function main(
     policy: inputs.policy,
   });
   const result = await runReportOnlyPipeline(inputs, {
+    cadence: options.cadence,
     runDiscoveryImpl,
     runCandidateGatesImpl,
     onDiscoveryComplete: options.reportDirectory
