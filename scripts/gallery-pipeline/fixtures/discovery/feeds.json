@@ -13,6 +13,9 @@
       "link": "https://devblogs.microsoft.com/cosmosdb/vector-search-update/?utm_medium=rss&utm_source=fixture",
       "title": "Vector search updates for Azure Cosmos DB",
       "description": "New indexing options for Azure Cosmos DB workloads.",
+      "author": "Azure Cosmos DB Team",
+      "feedSiteUrl": "https://devblogs.microsoft.com/cosmosdb/",
+      "imageUrl": "https://devblogs.microsoft.com/cosmosdb/wp-content/uploads/sites/52/2026/08/vector-search.png",
       "publishedAt": "2026-08-25T09:00:00Z",
       "content": "This release adds vector indexing controls for Azure Cosmos DB."
     },

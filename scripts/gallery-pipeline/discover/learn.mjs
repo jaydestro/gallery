@@ -1,4 +1,5 @@
 import { normalizeCandidates } from "../normalize.mjs";
+import { enrichCandidateMetadata } from "../enrich-candidate.mjs";
 import { canonicalizeLearnUrl } from "../shared/canonicalize.mjs";
 
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
@@ -6,11 +7,28 @@ const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
 function withinRoot(candidateUrl, rootUrl) {
   const candidate = new URL(candidateUrl);
   const root = new URL(rootUrl);
-  const rootPath = root.pathname.replace(/\/$/, "");
+  const candidatePath = candidate.pathname.toLowerCase();
+  const rootPath = root.pathname.replace(/\/$/, "").toLowerCase();
   return (
     candidate.hostname === root.hostname &&
-    (candidate.pathname === rootPath || candidate.pathname.startsWith(`${rootPath}/`))
+    (candidatePath === rootPath || candidatePath.startsWith(`${rootPath}/`))
   );
+}
+
+function configuredHostUrl(value, rootUrl) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    const root = new URL(rootUrl);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      url.hostname === root.hostname
+    ) ? value.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 export function discoverLearn({ source, documents, fixture, offline = false, discoveredAt } = {}) {
@@ -33,7 +51,13 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
     if (!document?.url || !document?.title) {
       continue;
     }
-    const canonicalUrl = canonicalizeLearnUrl(document.canonicalUrl ?? document.url);
+    const launchUrl = document.canonicalUrl ?? document.url;
+    let canonicalUrl;
+    try {
+      canonicalUrl = canonicalizeLearnUrl(launchUrl);
+    } catch {
+      continue;
+    }
     if (!withinRoot(canonicalUrl, rootUrl)) {
       continue;
     }
@@ -43,6 +67,16 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
     if (!COSMOS_TERM.test(relevanceText)) {
       continue;
     }
+    const publishedAt = document.publishedAt ?? null;
+    const catalogMetadata = enrichCandidateMetadata({
+      launchUrl,
+      websiteUrls: [rootUrl],
+      author: sourceConfig.ownerLabel,
+      sourceOwner: sourceConfig.ownerLabel,
+      publishedAt,
+      previewUrls: [document.imageUrl, document.thumbnailUrl, document.image?.url]
+        .map((value) => configuredHostUrl(value, rootUrl)),
+    });
 
     candidates.push({
       sourceType: "learn-document",
@@ -51,7 +85,7 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
       title: document.title,
       description: document.description ?? "",
       publisher: document.publisher ?? sourceConfig.ownerLabel,
-      publishedAt: document.publishedAt ?? null,
+      publishedAt,
       modifiedAt: document.lastModified ?? document.modifiedAt ?? null,
       discoveredAt: discoveryTime,
       evidence: [
@@ -61,6 +95,7 @@ export function discoverLearn({ source, documents, fixture, offline = false, dis
         },
       ],
       metadata: {
+        ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
         documentId: document.id ?? document.uid ?? null,

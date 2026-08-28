@@ -260,17 +260,38 @@ export function parseFeedXml(xml) {
   const root = parseSafeXml(xml);
   const rootName = localName(root.name);
   let entries;
+  let feedNode;
   let atom = false;
   if (rootName === "rss") {
     const channel = firstChild(root, "channel");
     if (!channel) throw new TypeError("RSS document is missing its channel element");
+    feedNode = channel;
     entries = children(channel, "item");
   } else if (rootName === "feed") {
     atom = true;
+    feedNode = root;
     entries = children(root, "entry");
   } else {
     throw new TypeError("Feed root must be rss or feed");
   }
+
+  const feedLinkNodes = children(feedNode, "link");
+  const feedAlternateLink = feedLinkNodes.find(
+    (node) => !node.attributes.rel || node.attributes.rel === "alternate",
+  );
+  const feedSiteUrl = atom
+    ? feedAlternateLink?.attributes.href ?? nodeText(feedAlternateLink)
+    : nodeText(firstChild(feedNode, "link"));
+  const feedAuthorNode = firstChild(feedNode, "author");
+  const feedAuthor = plainText(
+    nodeText(firstChild(feedAuthorNode ?? feedNode, feedAuthorNode ? "name" : "creator")) ||
+      nodeText(feedAuthorNode),
+  ) || null;
+  const feedImageNode = firstChild(feedNode, "image");
+  const feedImageUrl = feedImageNode
+    ? nodeText(firstChild(feedImageNode, "url")) ||
+      feedImageNode.attributes.href || feedImageNode.attributes.src || null
+    : null;
 
   return entries.map((entry) => {
     const linkNodes = children(entry, "link");
@@ -280,6 +301,15 @@ export function parseFeedXml(xml) {
     const author = firstChild(entry, "author");
     const description = nodeText(firstChild(entry, atom ? "summary" : "description"));
     const content = nodeText(firstChild(entry, "encoded")) || nodeText(firstChild(entry, "content"));
+    const thumbnail = firstChild(entry, "thumbnail");
+    const enclosure = children(entry, atom ? "link" : "enclosure").find((node) =>
+      node.attributes.rel === "enclosure" || String(node.attributes.type ?? "").startsWith("image/"),
+    );
+    const mediaContent = children(entry, "content").find((node) =>
+      node.attributes.url && String(node.attributes.type ?? "").startsWith("image/"),
+    );
+    const entryImage = firstChild(entry, "image");
+    const entryImageUrl = entryImage ? nodeText(firstChild(entryImage, "url")) : null;
     return {
       id: nodeText(firstChild(entry, atom ? "id" : "guid")),
       link: atom
@@ -290,7 +320,12 @@ export function parseFeedXml(xml) {
       content: plainText(content) || plainText(description),
       publishedAt: nodeText(firstChild(entry, atom ? "published" : "pubdate")) || null,
       modifiedAt: nodeText(firstChild(entry, "updated")) || null,
-      author: plainText(nodeText(firstChild(author ?? entry, author ? "name" : "creator"))) || null,
+      author: plainText(
+        nodeText(firstChild(author ?? entry, author ? "name" : "creator")) || nodeText(author),
+      ) || feedAuthor,
+      feedSiteUrl: feedSiteUrl || null,
+      imageUrl: thumbnail?.attributes.url ?? enclosure?.attributes.href ?? enclosure?.attributes.url ??
+        mediaContent?.attributes.url ?? entryImageUrl ?? feedImageUrl,
     };
   });
 }
@@ -614,12 +649,15 @@ function localeNeutralLearnPath(pathname) {
 }
 
 function learnDocument(entry, source, indexUrl, indexType) {
-  const url = new URL(entry.url);
+  const exactUrl = String(entry.url).trim();
+  const url = new URL(exactUrl);
   const root = new URL(source.endpoint);
-  const rootPath = root.pathname.replace(/\/$/, "");
-  const candidatePath = localeNeutralLearnPath(url.pathname);
+  const rootPath = root.pathname.replace(/\/$/, "").toLowerCase();
+  const candidatePath = localeNeutralLearnPath(url.pathname).toLowerCase();
   if (
     url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
     url.hostname !== root.hostname ||
     (candidatePath !== rootPath && !candidatePath.startsWith(`${rootPath}/`))
   ) {
@@ -633,7 +671,7 @@ function learnDocument(entry, source, indexUrl, indexType) {
     .join(" ");
   return {
     id: url.toString(),
-    url: url.toString(),
+    url: exactUrl,
     title: `Azure Cosmos DB: ${title}`,
     description: "Official Azure Cosmos DB documentation.",
     sectionText: indexType === "root"
@@ -685,7 +723,8 @@ function learnRootEntries(html, source, limit) {
   const seen = new Set();
   for (const match of sanitized.matchAll(anchorPattern)) {
     try {
-      const url = new URL(decodeHtmlAttribute(match[1] ?? match[2] ?? match[3] ?? ""), root);
+      const href = decodeHtmlAttribute(match[1] ?? match[2] ?? match[3] ?? "").trim();
+      const url = new URL(href, root);
       const candidatePath = localeNeutralLearnPath(url.pathname).replace(/\/$/, "");
       if (
         url.origin !== root.origin ||
@@ -693,12 +732,17 @@ function learnRootEntries(html, source, limit) {
       ) {
         continue;
       }
-      url.hash = "";
-      url.search = "";
-      const normalized = url.toString();
-      if (!seen.has(normalized)) {
-        seen.add(normalized);
-        entries.push({ url: normalized, lastModified: null });
+      const exactUrl = /^https:\/\//i.test(href)
+        ? href
+        : href.startsWith("//")
+          ? `${root.protocol}${href}`
+          : url.toString();
+      const deduplicationUrl = new URL(url);
+      deduplicationUrl.hash = "";
+      const deduplicationKey = deduplicationUrl.toString();
+      if (!seen.has(deduplicationKey)) {
+        seen.add(deduplicationKey);
+        entries.push({ url: exactUrl, lastModified: null });
       }
       if (entries.length >= limit) break;
     } catch {}

@@ -1,14 +1,29 @@
 import { normalizeCandidates } from "../normalize.mjs";
+import { enrichCandidateMetadata } from "../enrich-candidate.mjs";
 import { canonicalizeUrl } from "../shared/canonicalize.mjs";
 
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
 
-function trustedArticleHost(articleUrl, source) {
-  const allowedHosts = new Set([
+function configuredFeedHosts(source) {
+  return new Set([
     new URL(source.endpoint).hostname.toLowerCase(),
     ...(source.allowedHosts ?? []).map((host) => String(host).toLowerCase()),
   ]);
-  return allowedHosts.has(new URL(articleUrl).hostname.toLowerCase());
+}
+
+function trustedFeedUrl(value, allowedHosts) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      allowedHosts.has(url.hostname.toLowerCase())
+    ) ? value.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 export function discoverFeeds({ source, entries, fixture, offline = false, discoveredAt } = {}) {
@@ -25,6 +40,7 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
   }
 
   const discoveryTime = discoveredAt ?? payload.discoveredAt;
+  const allowedHosts = configuredFeedHosts(sourceConfig);
   const candidates = [];
   for (const entry of payload.entries ?? []) {
     const sourceId = entry?.id ?? entry?.guid;
@@ -32,16 +48,31 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
     if (!sourceId || !link || !entry?.title) {
       continue;
     }
-    const canonicalUrl = canonicalizeUrl(link);
-    if (!trustedArticleHost(canonicalUrl, sourceConfig)) {
+    const launchUrl = trustedFeedUrl(link, allowedHosts);
+    if (!launchUrl) {
       continue;
     }
+    const canonicalUrl = canonicalizeUrl(launchUrl);
     const relevanceText = [entry.title, entry.description, entry.summary, entry.content]
       .filter(Boolean)
       .join("\n");
     if (!COSMOS_TERM.test(relevanceText)) {
       continue;
     }
+    const author = entry.author ?? entry.publisher ?? sourceConfig.ownerLabel;
+    const sourceOwner = entry.publisher ?? sourceConfig.ownerLabel ?? null;
+    const publishedAt = entry.publishedAt ?? entry.pubDate ?? null;
+    const articleOrigin = new URL(launchUrl).origin;
+    const catalogMetadata = enrichCandidateMetadata({
+      launchUrl,
+      websiteUrls: [entry.feedSiteUrl, entry.siteUrl, sourceConfig.website, articleOrigin]
+        .map((value) => trustedFeedUrl(value, allowedHosts)),
+      author,
+      sourceOwner,
+      publishedAt,
+      previewUrls: [entry.imageUrl, entry.thumbnailUrl, entry.image?.url]
+        .map((value) => trustedFeedUrl(value, allowedHosts)),
+    });
 
     candidates.push({
       sourceType: "blog-post",
@@ -49,8 +80,8 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
       canonicalUrl,
       title: entry.title,
       description: entry.description ?? entry.summary ?? "",
-      publisher: entry.publisher ?? entry.author ?? sourceConfig.ownerLabel,
-      publishedAt: entry.publishedAt ?? entry.pubDate ?? null,
+      publisher: author,
+      publishedAt,
       modifiedAt: entry.modifiedAt ?? entry.updatedAt ?? null,
       discoveredAt: discoveryTime,
       evidence: [
@@ -60,6 +91,7 @@ export function discoverFeeds({ source, entries, fixture, offline = false, disco
         },
       ],
       metadata: {
+        ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
         feedEntryId: String(sourceId),

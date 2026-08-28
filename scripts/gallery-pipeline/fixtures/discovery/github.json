@@ -12,13 +12,19 @@
       "name": "cosmos-javascript-sample",
       "full_name": "Azure-Samples/cosmos-javascript-sample",
       "html_url": "https://github.com/Azure-Samples/cosmos-javascript-sample",
-      "owner": { "login": "Azure-Samples" },
+      "owner": {
+        "login": "Azure-Samples",
+        "html_url": "https://github.com/Azure-Samples",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1844662?v=4"
+      },
+      "homepage": "https://learn.microsoft.com/samples/azure-samples/cosmos-javascript-sample/",
       "description": "A database sample",
       "private": false,
       "disabled": false,
       "archived": false,
       "size": 32,
       "default_branch": "main",
+      "created_at": "2025-04-10T08:30:00Z",
       "pushed_at": "2026-08-20T10:00:00Z",
       "topics": [],
       "files": [

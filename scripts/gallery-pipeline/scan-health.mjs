@@ -87,11 +87,16 @@ function requestEvidence(kind, method, status) {
 }
 
 function resultForStatus(status, { kind, method, evidence = [] } = {}) {
-  const classification = classifyHttpStatus(status);
+  const malformed = !Number.isInteger(status) || status < 100 || status > 599;
+  const partial = status === 206;
+  const classification = malformed || partial ? "indeterminate" : classifyHttpStatus(status);
+  const reason = malformed
+    ? "SOURCE_RESPONSE_MALFORMED"
+    : (partial ? "SOURCE_PARTIAL_RESPONSE" : `SOURCE_HTTP_${status}`);
   return {
     classification,
     statusCode: status,
-    reason: classification === "healthy" ? null : `SOURCE_HTTP_${status}`,
+    reason: classification === "healthy" ? null : reason,
     evidence: [...evidence, requestEvidence(kind, method, status)],
   };
 }

@@ -13,7 +13,9 @@
       "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search/?utm_source=fixture",
       "title": "Vector search in Azure Cosmos DB for NoSQL",
       "description": "Configure vector indexing and queries.",
+      "publishedAt": "2026-08-01T07:00:00Z",
       "lastModified": "2026-08-10T08:00:00Z",
+      "imageUrl": "https://learn.microsoft.com/media/azure-cosmos-db/vector-search.png",
       "sectionText": "Azure Cosmos DB for NoSQL supports integrated vector search."
     },
     {

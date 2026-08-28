@@ -1,0 +1,117 @@
+{
+  "checkedAt": "2026-08-28T12:34:56.000Z",
+  "policy": {
+    "http": {
+      "timeoutSeconds": 1,
+      "maxRedirects": 2
+    },
+    "batching": {
+      "maxCandidatesPerRun": 20
+    }
+  },
+  "trustedSources": {
+    "sources": [
+      {
+        "id": "trusted-feed",
+        "type": "rss-feed",
+        "endpoint": "https://example.com/feed",
+        "trustTier": "first-party",
+        "enabled": true
+      },
+      {
+        "id": "failed-feed",
+        "type": "rss-feed",
+        "endpoint": "https://example.com/failed-feed",
+        "trustTier": "first-party",
+        "enabled": true
+      },
+      {
+        "id": "trusted-github",
+        "type": "github-organization",
+        "endpoint": "https://api.github.com/orgs/AzureCosmosDB",
+        "trustTier": "first-party",
+        "enabled": true
+      }
+    ]
+  },
+  "activeCatalog": [],
+  "retiredCatalog": {
+    "entries": []
+  },
+  "discovery": {
+    "schemaVersion": "1.0.0",
+    "mode": "dry-run",
+    "mutationPerformed": false,
+    "status": "partial",
+    "startedAt": "2026-08-28T00:00:00.000Z",
+    "completedAt": "2026-08-28T00:00:00.000Z",
+    "sources": [
+      {
+        "sourceRegistryId": "trusted-feed",
+        "sourceType": "rss-feed",
+        "status": "succeeded",
+        "queried": true
+      },
+      {
+        "sourceRegistryId": "failed-feed",
+        "sourceType": "rss-feed",
+        "status": "indeterminate",
+        "queried": true
+      },
+      {
+        "sourceRegistryId": "trusted-github",
+        "sourceType": "github-organization",
+        "status": "succeeded",
+        "queried": true
+      }
+    ],
+    "candidates": [
+      {
+        "schemaVersion": "1.0.0",
+        "sourceType": "blog-post",
+        "sourceId": "alpha",
+        "identityKey": "blog-post:alpha",
+        "canonicalUrl": "https://example.com/alpha",
+        "title": "Alpha Cosmos DB article",
+        "description": "Practical Azure Cosmos DB guidance.",
+        "publisher": "Azure Cosmos DB Blog",
+        "publishedAt": null,
+        "modifiedAt": null,
+        "discoveredAt": "2026-08-28T00:00:00.000Z",
+        "evidence": [
+          {
+            "type": "feed-entry-content",
+            "value": "Azure Cosmos DB indexing guidance"
+          }
+        ],
+        "metadata": {
+          "sourceRegistryId": "trusted-feed",
+          "trustTier": "first-party"
+        }
+      },
+      {
+        "schemaVersion": "1.0.0",
+        "sourceType": "blog-post",
+        "sourceId": "beta",
+        "identityKey": "blog-post:beta",
+        "canonicalUrl": "https://example.com/beta",
+        "title": "Beta Cosmos DB article",
+        "description": "Practical Azure Cosmos DB guidance.",
+        "publisher": "Azure Cosmos DB Blog",
+        "publishedAt": null,
+        "modifiedAt": null,
+        "discoveredAt": "2026-08-28T00:00:00.000Z",
+        "evidence": [
+          {
+            "type": "feed-entry-content",
+            "value": "Azure Cosmos DB partitioning guidance"
+          }
+        ],
+        "metadata": {
+          "sourceRegistryId": "trusted-feed",
+          "trustTier": "first-party"
+        }
+      }
+    ]
+  }
+}

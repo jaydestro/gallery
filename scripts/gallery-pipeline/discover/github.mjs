@@ -1,4 +1,5 @@
 import { normalizeCandidates } from "../normalize.mjs";
+import { enrichCandidateMetadata } from "../enrich-candidate.mjs";
 
 const STRONG_PATTERNS = [
   {
@@ -46,6 +47,43 @@ const STRONG_PATTERNS = [
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
 const COSMOS_TOPIC = /^(?:azure-)?cosmos-?db$|^cosmosdb$/i;
 const OFFICIAL_COSMOS_LINK = /https:\/\/learn\.microsoft\.com\/(?:[a-z]{2}-[a-z]{2}\/)?azure\/cosmos-db(?:\/|\b)/i;
+const GITHUB_MEDIA_HOSTS = new Set(["github.com", "opengraph.githubassets.com"]);
+
+function matchingGitHubPath(value, expectedSegments) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    const hostname = url.hostname.toLowerCase();
+    const segments = url.pathname.split("/").filter(Boolean);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (hostname === "github.com" || hostname === "www.github.com") &&
+      segments.length === expectedSegments.length &&
+      segments.every((segment, index) =>
+        segment.toLowerCase() === expectedSegments[index].toLowerCase())
+    ) ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function trustedGitHubMediaUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    const hostname = url.hostname.toLowerCase();
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (GITHUB_MEDIA_HOSTS.has(hostname) || hostname.endsWith(".githubusercontent.com"))
+    ) ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 function fixturePayload({ fixture, apiData, offline }) {
   const payload = fixture ?? apiData;
@@ -162,15 +200,33 @@ export function discoverGitHub({ source, apiData, fixture, offline = false, disc
     }
 
     const fullName = repository.full_name ?? `${repository.owner.login}/${repository.name}`;
-    const canonicalUrl = repository.html_url ?? `https://github.com/${fullName}`;
+    const owner = repository.owner?.login ?? fullName.split("/")[0];
+    const repositoryName = fullName.split("/")[1] ?? repository.name;
+    const derivedRepositoryUrl = `https://github.com/${owner}/${repositoryName}`;
+    const launchUrl = matchingGitHubPath(repository.html_url, [owner, repositoryName]) ?? derivedRepositoryUrl;
+    const canonicalUrl = launchUrl;
+    const ownerProfileUrl = matchingGitHubPath(repository.owner?.html_url, [owner]);
+    const derivedOwnerUrl = `https://github.com/${owner}`;
+    const publishedAt = repository.created_at ?? null;
+    const catalogMetadata = enrichCandidateMetadata({
+      launchUrl,
+      websiteUrls: [ownerProfileUrl, repository.homepage, derivedOwnerUrl],
+      author: owner,
+      sourceOwner: owner,
+      publishedAt,
+      previewUrls: [
+        trustedGitHubMediaUrl(repository.open_graph_image_url ?? repository.openGraphImageUrl),
+        trustedGitHubMediaUrl(repository.owner?.avatar_url),
+      ],
+    });
     candidates.push({
       sourceType: "github-repository",
       sourceId: String(repository.id),
       canonicalUrl,
       title: repository.name,
       description: repository.description ?? "",
-      publisher: repository.owner?.login ?? fullName.split("/")[0],
-      publishedAt: repository.created_at ?? null,
+      publisher: owner,
+      publishedAt,
       modifiedAt: repository.pushed_at ?? repository.updated_at ?? null,
       discoveredAt: discoveryTime,
       evidence: [
@@ -184,6 +240,7 @@ export function discoverGitHub({ source, apiData, fixture, offline = false, disc
         })),
       ],
       metadata: {
+        ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
         repositoryId: repository.id,

@@ -77,6 +77,31 @@ test("HTTP checks fall back from unsupported HEAD to GET and keep rate limits in
   assert.equal(rateLimitCalls.length, 1);
 });
 
+test("HTTP checks fail closed for partial and malformed responses", async () => {
+  const partial = await checkHttpSource("https://example.com/partial", {
+    policy,
+    lookup: publicLookup,
+    fetchImpl: responseFetch({
+      "HEAD https://example.com/partial": { status: 206 },
+    }),
+  });
+  assert.equal(partial.classification, "indeterminate");
+  assert.equal(partial.reason, "SOURCE_PARTIAL_RESPONSE");
+
+  const malformed = await checkHttpSource("https://example.com/malformed", {
+    policy,
+    lookup: publicLookup,
+    fetchImpl: async () => ({
+      status: undefined,
+      statusText: "",
+      headers: new Headers(),
+      body: null,
+    }),
+  });
+  assert.equal(malformed.classification, "indeterminate");
+  assert.equal(malformed.reason, "SOURCE_RESPONSE_MALFORMED");
+});
+
 test("GitHub sources without a token use one bounded URL check", async () => {
   const calls = [];
   const context = await loadValidationContext(ROOT);

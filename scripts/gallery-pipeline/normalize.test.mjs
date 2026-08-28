@@ -57,3 +57,31 @@ test("normalizes a candidate to the common schema with a stable identity", () =>
   );
   assert.equal(candidate.discoveredAt, "2026-08-27T12:00:00.000Z");
 });
+
+test("does not invent source timestamps from metadata or numeric coercion", () => {
+  const baseCandidate = {
+    sourceType: "blog-post",
+    sourceId: "timestamp-evidence",
+    canonicalUrl: "https://example.com/article",
+    title: "Azure Cosmos DB article",
+    publisher: "Example Publisher",
+    discoveredAt: "2026-08-27T12:00:00Z",
+    evidence: [],
+    metadata: {
+      launchUrl: "https://Example.com/Article?view=Full#Evidence",
+      website: "https://example.com/",
+      author: "Example Publisher",
+      publishedAt: "2026-08-20T09:00:00Z",
+      preview: "coming soon",
+    },
+  };
+
+  assert.throws(
+    () => normalizeCandidate(baseCandidate),
+    /metadata\.publishedAt must match candidate publishedAt/,
+  );
+  assert.throws(
+    () => normalizeCandidate({ ...baseCandidate, publishedAt: 0 }),
+    /publishedAt must be a valid date-time string/,
+  );
+});

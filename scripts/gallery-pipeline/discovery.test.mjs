@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createFixtureTransport,
   isAllowedGitHubEndpoint,
+  parseFeedXml,
   parseSafeXml,
   runDiscovery,
 } from "./discovery.mjs";
@@ -92,11 +93,11 @@ async function runWithFixtures({ sources, responses, activeCatalog = [], retired
 }
 
 function rss(items) {
-  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title>${items.join("")}</channel></rss>`;
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title><link>https://devblogs.microsoft.com/cosmosdb/</link>${items.join("")}</channel></rss>`;
 }
 
 function rssItem(id, slug) {
-  return `<item><guid>${id}</guid><link>https://devblogs.microsoft.com/cosmosdb/${slug}/</link><title>Azure Cosmos DB ${slug}</title><description>Azure Cosmos DB guidance.</description></item>`;
+  return `<item><guid>${id}</guid><link>https://devblogs.microsoft.com/cosmosdb/${slug}/</link><title>Azure Cosmos DB ${slug}</title><description>Azure Cosmos DB guidance.</description><pubDate>Thu, 27 Aug 2026 09:00:00 GMT</pubDate></item>`;
 }
 
 test("GitHub endpoint allowlist permits only the configured org and selected content", () => {
@@ -305,6 +306,37 @@ test("unavailable official Learn sitemap is indeterminate", async () => {
   assert.equal(result.candidates.length, 0);
 });
 
+test("Learn sitemap preserves the authoritative launch URL and keeps lastmod modification-only", async () => {
+  const source = {
+    id: "learn-cosmos-db",
+    type: "documentation-root",
+    endpoint: "https://learn.microsoft.com/azure/cosmos-db/",
+    trustTier: "first-party",
+    enabled: true,
+    ownerLabel: "Microsoft Learn",
+  };
+  const launchUrl = "https://Learn.Microsoft.com/en-us/Azure/Cosmos-DB/NoSQL/Vector-Search?view=Full#Examples";
+  const { result } = await runWithFixtures({
+    sources: [source],
+    responses: {
+      "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": {
+        body: `<?xml version="1.0"?><urlset><url><loc>${launchUrl}</loc><lastmod>2026-08-25</lastmod></url></urlset>`,
+      },
+    },
+  });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].metadata.launchUrl, launchUrl);
+  assert.equal(
+    result.candidates[0].canonicalUrl,
+    "https://learn.microsoft.com/Azure/Cosmos-DB/NoSQL/Vector-Search?view=Full",
+  );
+  assert.equal(result.candidates[0].publishedAt, null);
+  assert.equal(result.candidates[0].metadata.publishedAt, null);
+  assert.equal(result.candidates[0].modifiedAt, "2026-08-25T00:00:00.000Z");
+});
+
 test("Learn follows a same-host redirect to the official root index", async () => {
   const source = {
     id: "learn-cosmos-db",
@@ -339,8 +371,13 @@ test("Learn follows a same-host redirect to the official root index", async () =
   assert.equal(result.sources[0].status, "succeeded");
   assert.deepEqual(
     result.candidates.map((candidate) => candidate.canonicalUrl),
-    ["https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search"],
+    ["https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search?view=azure-cli-latest"],
   );
+  assert.equal(
+    result.candidates[0].metadata.launchUrl,
+    "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search?view=azure-cli-latest#examples",
+  );
+  assert.equal(result.candidates[0].publishedAt, null);
   assert.ok(result.candidates[0].evidence.some((item) =>
     item.type === "learn-official-root-index" && item.url === source.endpoint));
   assert.equal(requests.filter((url) => url === source.endpoint).length, 1);
@@ -392,4 +429,28 @@ test("disabled and unconfigured YouTube sources perform no requests", async () =
   assert.deepEqual(requests, []);
   assert.deepEqual(result.sources.map((source) => source.status), ["skipped", "skipped"]);
   assert.equal(result.sources[1].reason, "immutable-youtube-source-id-required");
+});
+
+test("RSS parsing preserves fetched site, author, timestamp, and image metadata", () => {
+  const [entry] = parseFeedXml(`<?xml version="1.0"?>
+    <rss version="2.0" xmlns:dc="urn:dc" xmlns:media="urn:media">
+      <channel>
+        <title>Azure Cosmos DB Blog</title>
+        <link>https://devblogs.microsoft.com/cosmosdb/</link>
+        <item>
+          <guid>entry-1</guid>
+          <link>https://devblogs.microsoft.com/cosmosdb/vector-search/</link>
+          <title>Azure Cosmos DB vector search</title>
+          <description>Azure Cosmos DB guidance.</description>
+          <pubDate>Thu, 27 Aug 2026 09:00:00 GMT</pubDate>
+          <author>Azure Cosmos DB Team</author>
+          <media:thumbnail url="https://devblogs.microsoft.com/media/vector.png" />
+        </item>
+      </channel>
+    </rss>`);
+
+  assert.equal(entry.feedSiteUrl, "https://devblogs.microsoft.com/cosmosdb/");
+  assert.equal(entry.author, "Azure Cosmos DB Team");
+  assert.equal(entry.publishedAt, "Thu, 27 Aug 2026 09:00:00 GMT");
+  assert.equal(entry.imageUrl, "https://devblogs.microsoft.com/media/vector.png");
 });

@@ -1,8 +1,25 @@
 import { normalizeCandidates } from "../normalize.mjs";
+import { enrichCandidateMetadata } from "../enrich-candidate.mjs";
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;
 const COSMOS_TERM = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
+const YOUTUBE_THUMBNAIL_HOSTS = new Set(["i.ytimg.com", "img.youtube.com"]);
+
+function officialThumbnailUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      YOUTUBE_THUMBNAIL_HOSTS.has(url.hostname.toLowerCase())
+    ) ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 function configuredIds(source = {}) {
   const channelIds = new Set(
@@ -26,16 +43,19 @@ export function isYouTubeDiscoveryEnabled(source) {
 
 function normalizedVideo(video) {
   const snippet = video?.snippet ?? {};
+  const thumbnails = snippet.thumbnails ?? {};
   const rawId = typeof video?.id === "object" ? video.id.videoId : video?.id ?? video?.videoId;
   return {
     id: rawId,
-    title: video?.title ?? snippet.title,
-    description: video?.description ?? snippet.description ?? "",
-    publishedAt: video?.publishedAt ?? snippet.publishedAt ?? null,
-    channelId: video?.channelId ?? snippet.channelId,
-    channelTitle: video?.channelTitle ?? snippet.channelTitle,
+    title: snippet.title ?? video?.title,
+    description: snippet.description ?? video?.description ?? "",
+    publishedAt: snippet.publishedAt ?? null,
+    channelId: snippet.videoOwnerChannelId ?? snippet.channelId,
+    channelTitle: snippet.videoOwnerChannelTitle ?? snippet.channelTitle,
     playlistIds: [video?.playlistId, ...(video?.playlistIds ?? [])].filter(Boolean),
     transcript: video?.transcript ?? video?.captions ?? "",
+    thumbnailUrl: thumbnails.maxres?.url ?? thumbnails.high?.url ?? thumbnails.medium?.url ??
+      thumbnails.default?.url ?? null,
   };
 }
 
@@ -64,20 +84,35 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
   const candidates = [];
   for (const item of payload.videos ?? payload.items ?? []) {
     const video = normalizedVideo(item);
-    if (!VIDEO_ID_PATTERN.test(video.id ?? "") || !video.title || !comesFromConfiguredSource(video, ids)) {
+    if (
+      !VIDEO_ID_PATTERN.test(video.id ?? "") ||
+      !SOURCE_ID_PATTERN.test(video.channelId ?? "") ||
+      !video.title ||
+      !comesFromConfiguredSource(video, ids)
+    ) {
       continue;
     }
     if (!COSMOS_TERM.test([video.title, video.description, video.transcript].join("\n"))) {
       continue;
     }
+    const canonicalUrl = `https://www.youtube.com/watch?v=${video.id}`;
+    const author = video.channelTitle ?? video.channelId;
+    const catalogMetadata = enrichCandidateMetadata({
+      launchUrl: canonicalUrl,
+      websiteUrls: [`https://www.youtube.com/channel/${video.channelId}`],
+      author,
+      sourceOwner: author,
+      publishedAt: video.publishedAt,
+      previewUrls: [officialThumbnailUrl(video.thumbnailUrl)],
+    });
 
     candidates.push({
       sourceType: "video",
       sourceId: video.id,
-      canonicalUrl: `https://www.youtube.com/watch?v=${video.id}`,
+      canonicalUrl,
       title: video.title,
       description: video.description,
-      publisher: video.channelTitle ?? video.channelId,
+      publisher: author,
       publishedAt: video.publishedAt,
       modifiedAt: null,
       discoveredAt: discoveryTime,
@@ -88,6 +123,7 @@ export function discoverYouTube({ source, videos, fixture, offline = false, disc
           : []),
       ],
       metadata: {
+        ...catalogMetadata,
         sourceRegistryId: sourceConfig.id,
         trustTier: sourceConfig.trustTier,
         videoId: video.id,

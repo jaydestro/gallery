@@ -1,4 +1,5 @@
 import { canonicalizeUrl, generateIdentityKey, normalizeRepositoryPath } from "./shared/canonicalize.mjs";
+import { normalizeEnrichedMetadata } from "./enrich-candidate.mjs";
 
 export const CANDIDATE_SCHEMA_VERSION = "1.0.0";
 
@@ -23,6 +24,9 @@ function normalizeTimestamp(value, name, { required = false } = {}) {
       throw new TypeError(`${name} is required`);
     }
     return null;
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${name} must be a valid date-time string`);
   }
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.valueOf())) {
@@ -69,6 +73,7 @@ export function normalizeCandidate(candidate) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     throw new TypeError("metadata must be an object");
   }
+  const publishedAt = normalizeTimestamp(candidate.publishedAt, "publishedAt");
 
   return {
     schemaVersion: CANDIDATE_SCHEMA_VERSION,
@@ -79,11 +84,11 @@ export function normalizeCandidate(candidate) {
     title: requireString(candidate.title, "title"),
     description: typeof candidate.description === "string" ? candidate.description.trim() : "",
     publisher: requireString(candidate.publisher, "publisher"),
-    publishedAt: normalizeTimestamp(candidate.publishedAt, "publishedAt"),
+    publishedAt,
     modifiedAt: normalizeTimestamp(candidate.modifiedAt, "modifiedAt"),
     discoveredAt: normalizeTimestamp(candidate.discoveredAt, "discoveredAt", { required: true }),
     evidence: normalizeEvidence(candidate.evidence ?? []),
-    metadata: { ...metadata },
+    metadata: normalizeEnrichedMetadata(metadata, publishedAt),
   };
 }
 
