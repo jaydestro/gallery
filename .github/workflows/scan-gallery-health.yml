@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gallery-pipeline-scheduled-dry-run
+  group: gallery-health-dry-run
   cancel-in-progress: false
 
 jobs:

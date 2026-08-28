@@ -10,26 +10,14 @@ import { safeFetch } from "./shared/safe-fetch.mjs";
 const GITHUB_HOST = "api.github.com";
 const LEARN_HOST = "learn.microsoft.com";
 const IMMUTABLE_SOURCE_ID = /^[A-Za-z0-9_-]{10,}$/;
-const COSMOS_METADATA = /\b(?:azure\s+)?cosmos\s*db\b|\bcosmosdb\b/i;
 const MAX_XML_DEPTH = 64;
 const MAX_XML_NODES = 10_000;
-const GITHUB_CODE_QUERIES = [
-  "Microsoft.Azure.Cosmos",
-  "@azure/cosmos",
-  "azure.cosmos",
-  "com.azure.cosmos",
-  "azurerm_cosmosdb_account",
-  "Microsoft.DocumentDB/databaseAccounts",
-  "CosmosClient",
-];
+const LEARN_ROOT_PATH = "/azure/cosmos-db";
 
 const DEFAULT_LIMITS = Object.freeze({
   githubPageSize: 50,
   githubListingPages: 2,
-  githubSearchPages: 1,
   githubRepositories: 100,
-  githubSearchQueries: GITHUB_CODE_QUERIES.length,
-  githubFilesPerRepository: 4,
   feedEntries: 100,
   sitemapFiles: 4,
   learnDocuments: 500,
@@ -39,10 +27,7 @@ const DEFAULT_LIMITS = Object.freeze({
 const HARD_LIMITS = Object.freeze({
   githubPageSize: 100,
   githubListingPages: 5,
-  githubSearchPages: 2,
   githubRepositories: 250,
-  githubSearchQueries: GITHUB_CODE_QUERIES.length,
-  githubFilesPerRepository: 8,
   feedEntries: 250,
   sitemapFiles: 8,
   learnDocuments: 2_000,
@@ -357,16 +342,17 @@ export function isAllowedGitHubEndpoint(
     }
     const encodedOrganization = encodeURIComponent(organization);
     if (url.pathname === `/orgs/${encodedOrganization}/repos`) return true;
-    if (url.pathname === "/search/code") {
-      return url.searchParams.get("q")?.includes(`org:${organization}`) === true;
+    if (url.pathname === "/search/repositories") {
+      const allowedParameters = new Set(["q", "sort", "order", "per_page"]);
+      return (
+        url.searchParams.getAll("q").length === 1 &&
+        url.searchParams.get("q") === `cosmos db org:${organization}` &&
+        [...url.searchParams.keys()].every((name) => allowedParameters.has(name))
+      );
     }
     if (!repository) return false;
     const prefix = `/repos/${encodedOrganization}/${encodeURIComponent(repository)}`;
-    if (url.pathname === `${prefix}/readme`) return true;
-    return (
-      typeof contentPath === "string" &&
-      url.pathname === `${prefix}/contents/${contentPath.split("/").map(encodeURIComponent).join("/")}`
-    );
+    return url.pathname === `${prefix}/readme` && contentPath === null;
   } catch {
     return false;
   }
@@ -423,7 +409,7 @@ async function githubRequest(url, context) {
     fetchOptions: context.fetchOptions,
     limits: context.limits,
     headers: {
-      Accept: "application/vnd.github+json, application/vnd.github.text-match+json",
+      Accept: "application/vnd.github+json",
       Authorization: `Bearer ${context.githubToken}`,
       "User-Agent": "cosmos-gallery-discovery",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -451,12 +437,6 @@ function repositoryKey(repository) {
   return String(repository?.id ?? repository?.full_name ?? "").toLowerCase();
 }
 
-function relevantMetadata(repository) {
-  return COSMOS_METADATA.test(
-    [repository?.name, repository?.description, ...(repository?.topics ?? [])].filter(Boolean).join(" "),
-  );
-}
-
 function decodeGitHubContent(payload) {
   if (!payload || Array.isArray(payload) || payload.encoding !== "base64" || typeof payload.content !== "string") {
     throw new TypeError("GitHub content response was not a base64 file");
@@ -464,18 +444,21 @@ function decodeGitHubContent(payload) {
   return Buffer.from(payload.content.replace(/\s+/g, ""), "base64").toString("utf8");
 }
 
-async function fetchRepositoryFile(repository, path, url, context) {
+async function fetchRepositoryReadme(repository, context) {
   const fullName = String(repository.full_name ?? "");
   const [owner, name] = fullName.split("/");
   if (owner?.toLowerCase() !== context.source.organization.toLowerCase() || !name) {
     throw new TypeError(`Rejected repository outside configured organization: ${fullName}`);
   }
-  const allowlist = {
-    organization: context.source.organization,
-    repository: name,
-    contentPath: path === "README.md" ? null : path,
-  };
-  const response = await githubRequest(url, { ...context, allowlist });
+  const url = githubUrl(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/readme`);
+  const response = await githubRequest(url, {
+    ...context,
+    allowlist: {
+      organization: context.source.organization,
+      repository: name,
+      contentPath: null,
+    },
+  });
   if (response.status === 404) return null;
   requireSuccess(response);
   return decodeGitHubContent(response.json());
@@ -506,32 +489,30 @@ async function collectGitHub(source, context) {
   });
 
   const issues = [];
-  const searchResults = [];
-  const queries = GITHUB_CODE_QUERIES.slice(0, limits.githubSearchQueries);
-  for (const query of queries) {
-    try {
-      const results = await collectPages({
-        makeUrl: (page) => githubUrl("/search/code", {
-          q: `${query} org:${source.organization}`,
-          sort: "indexed",
-          order: "desc",
-          per_page: limits.githubPageSize,
-          page,
-        }),
-        extractItems: (payload) => {
-          if (payload?.incomplete_results) issues.push(`GitHub code search was incomplete for ${query}`);
-          return payload?.items;
-        },
-        maxPages: limits.githubSearchPages,
-        pageSize: limits.githubPageSize,
-        context,
+  let searchResults = [];
+  try {
+    const searchUrl = githubUrl("/search/repositories", {
+      q: `cosmos db org:${source.organization}`,
+      sort: "updated",
+      order: "desc",
+      per_page: Math.min(limits.githubPageSize, limits.githubRepositories),
+    });
+    const response = requireSuccess(
+      await githubRequest(searchUrl, {
+        ...context,
         allowlist: { organization: source.organization },
-      });
-      searchResults.push(...results);
-    } catch (error) {
-      issues.push(cleanError(error));
-      if ([401, 403, 429].includes(error?.status)) break;
+      }),
+    );
+    const payload = response.json();
+    if (!Array.isArray(payload?.items)) {
+      throw new TypeError("GitHub repository search did not contain an item array");
     }
+    if (payload.incomplete_results) {
+      issues.push("GitHub repository search was incomplete");
+    }
+    searchResults = payload.items;
+  } catch (error) {
+    issues.push(cleanError(error));
   }
 
   const byRepository = new Map();
@@ -539,46 +520,30 @@ async function collectGitHub(source, context) {
     const key = repositoryKey(repository);
     if (key && !byRepository.has(key)) byRepository.set(key, { ...repository, files: [] });
   }
-  const hits = new Map();
-  for (const result of searchResults) {
-    const repository = result?.repository;
+  const searchKeys = new Set();
+  for (const repository of searchResults) {
     const key = repositoryKey(repository);
     if (!key) continue;
+    searchKeys.add(key);
     if (!byRepository.has(key)) byRepository.set(key, { ...repository, files: [] });
-    const repositoryHits = hits.get(key) ?? [];
-    if (repositoryHits.length < limits.githubFilesPerRepository && result.path && result.url) {
-      repositoryHits.push({ path: result.path, url: result.url });
-      hits.set(key, repositoryHits);
-    }
   }
 
-  const boundedRepositories = [...byRepository.values()].slice(0, limits.githubRepositories);
+  const orderedKeys = [
+    ...searchKeys,
+    ...repositories.map(repositoryKey).filter(Boolean),
+  ];
+  const boundedRepositories = [...new Set(orderedKeys)]
+    .map((key) => byRepository.get(key))
+    .filter(Boolean)
+    .slice(0, limits.githubRepositories);
   for (const repository of boundedRepositories) {
-    const key = repositoryKey(repository);
-    const repositoryHits = hits.get(key) ?? [];
-    if (!relevantMetadata(repository) && repositoryHits.length === 0) continue;
-    const [owner, name] = String(repository.full_name).split("/");
     try {
-      const readmeUrl = githubUrl(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/readme`);
-      const readme = await fetchRepositoryFile(repository, "README.md", readmeUrl, {
+      const readme = await fetchRepositoryReadme(repository, {
         ...context,
         source,
       });
       if (readme) repository.readme = readme;
-    } catch (error) {
-      issues.push(cleanError(error));
-    }
-    for (const hit of repositoryHits) {
-      try {
-        const content = await fetchRepositoryFile(repository, hit.path, hit.url, {
-          ...context,
-          source,
-        });
-        if (content !== null) repository.files.push({ path: hit.path, content });
-      } catch (error) {
-        issues.push(cleanError(error));
-      }
-    }
+    } catch {}
   }
 
   const candidates = discoverGitHub({
@@ -640,11 +605,15 @@ function learnSitemapCandidates(source) {
   return [...new Set([source.sitemapUrl, derived, `${root.origin}/sitemap.xml`].filter(Boolean))];
 }
 
-function learnDocument(entry, source, sitemapUrl) {
+function localeNeutralLearnPath(pathname) {
+  return pathname.replace(/^\/[a-z]{2}-[a-z]{2}(?=\/)/i, "");
+}
+
+function learnDocument(entry, source, indexUrl, indexType) {
   const url = new URL(entry.url);
   const root = new URL(source.endpoint);
   const rootPath = root.pathname.replace(/\/$/, "");
-  const candidatePath = url.pathname.replace(/^\/[a-z]{2}-[a-z]{2}(?=\/)/i, "");
+  const candidatePath = localeNeutralLearnPath(url.pathname);
   if (
     url.protocol !== "https:" ||
     url.hostname !== root.hostname ||
@@ -663,10 +632,86 @@ function learnDocument(entry, source, sitemapUrl) {
     url: url.toString(),
     title: `Azure Cosmos DB: ${title}`,
     description: "Official Azure Cosmos DB documentation.",
-    sectionText: "Listed in a verified official Microsoft Learn sitemap under the Azure Cosmos DB root.",
+    sectionText: indexType === "root"
+      ? "Linked from the configured official Microsoft Learn Azure Cosmos DB root index."
+      : "Listed in a verified official Microsoft Learn sitemap under the Azure Cosmos DB root.",
     lastModified: entry.lastModified,
-    sitemapUrl,
+    indexUrl,
   };
+}
+
+function assertLearnRootEndpoint(value) {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== LEARN_HOST ||
+    url.username ||
+    url.password ||
+    localeNeutralLearnPath(url.pathname).replace(/\/$/, "") !== LEARN_ROOT_PATH
+  ) {
+    throw new TypeError(`Rejected unverified Microsoft Learn root endpoint: ${url}`);
+  }
+  return url;
+}
+
+function decodeHtmlAttribute(value) {
+  return String(value).replace(/&(#\d+|#x[0-9a-f]+|amp|quot|apos|lt|gt);/gi, (match, entity) => {
+    const normalized = entity.toLowerCase();
+    if (normalized === "amp") return "&";
+    if (normalized === "quot") return '"';
+    if (normalized === "apos") return "'";
+    if (normalized === "lt") return "<";
+    if (normalized === "gt") return ">";
+    const codePoint = normalized.startsWith("#x")
+      ? Number.parseInt(normalized.slice(2), 16)
+      : Number.parseInt(normalized.slice(1), 10);
+    return Number.isSafeInteger(codePoint) && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : match;
+  });
+}
+
+function learnRootEntries(html, source, limit) {
+  const root = assertLearnRootEndpoint(source.endpoint);
+  const sanitized = String(html)
+    .replace(/<!--([\s\S]*?)-->/g, "")
+    .replace(/<(?:script|style|template)\b[^>]*>[\s\S]*?<\/(?:script|style|template)>/gi, "");
+  const anchorPattern = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+  const entries = [];
+  const seen = new Set();
+  for (const match of sanitized.matchAll(anchorPattern)) {
+    try {
+      const url = new URL(decodeHtmlAttribute(match[1] ?? match[2] ?? match[3] ?? ""), root);
+      const candidatePath = localeNeutralLearnPath(url.pathname).replace(/\/$/, "");
+      if (
+        url.origin !== root.origin ||
+        (candidatePath !== LEARN_ROOT_PATH && !candidatePath.startsWith(`${LEARN_ROOT_PATH}/`))
+      ) {
+        continue;
+      }
+      url.hash = "";
+      url.search = "";
+      const normalized = url.toString();
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        entries.push({ url: normalized, lastModified: null });
+      }
+      if (entries.length >= limit) break;
+    } catch {}
+  }
+  return entries;
+}
+
+async function fetchLearnRootIndex(source, context) {
+  const root = assertLearnRootEndpoint(source.endpoint);
+  context.endpoints.push(root.toString());
+  const response = requireSuccess(await fetchBounded(root, {
+    trustedHosts: [LEARN_HOST],
+    fetchOptions: context.fetchOptions,
+    limits: context.limits,
+    headers: { Accept: "text/html" },
+  }));
+  return response.text();
 }
 
 async function fetchLearnSitemap(url, source, context) {
@@ -686,7 +731,6 @@ async function fetchLearnSitemap(url, source, context) {
 async function collectLearn(source, context) {
   let sitemap = null;
   let sitemapUrl = null;
-  const issues = [];
   for (const candidateUrl of learnSitemapCandidates(source)) {
     try {
       sitemap = await fetchLearnSitemap(candidateUrl, source, context);
@@ -694,14 +738,30 @@ async function collectLearn(source, context) {
         sitemapUrl = candidateUrl;
         break;
       }
-    } catch (error) {
-      issues.push(cleanError(error));
-    }
+    } catch {}
   }
   if (!sitemap || !sitemapUrl) {
-    throw new TypeError(`No verified official sitemap was available for ${source.id}`);
+    const html = await fetchLearnRootIndex(source, context);
+    const documents = learnRootEntries(html, source, context.limits.learnDocuments)
+      .map((entry) => learnDocument(entry, source, source.endpoint, "root"))
+      .filter(Boolean);
+    const candidates = discoverLearn({ source, documents, discoveredAt: context.discoveredAt }).map(
+      (candidate) => ({
+        ...candidate,
+        evidence: [
+          ...candidate.evidence,
+          {
+            type: "learn-official-root-index",
+            value: "Linked from the configured official Microsoft Learn root index",
+            url: source.endpoint,
+          },
+        ],
+      }),
+    );
+    return { candidates, rejected: [], issues: [] };
   }
 
+  const issues = [];
   const sitemapEntries = [];
   if (sitemap.type === "urlset") {
     sitemapEntries.push(...sitemap.entries);
@@ -737,7 +797,7 @@ async function collectLearn(source, context) {
   }
 
   const documents = sitemapEntries
-    .map((entry) => learnDocument(entry, source, sitemapUrl))
+    .map((entry) => learnDocument(entry, source, sitemapUrl, "sitemap"))
     .filter(Boolean)
     .slice(0, context.limits.learnDocuments);
   if (documents.length === 0) {

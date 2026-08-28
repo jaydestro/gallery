@@ -68,13 +68,12 @@ function listingUrl(page, pageSize) {
   });
 }
 
-function searchUrl(page, pageSize) {
-  return githubApiUrl("/search/code", {
-    q: "Microsoft.Azure.Cosmos org:AzureCosmosDB",
-    sort: "indexed",
+function searchUrl(pageSize) {
+  return githubApiUrl("/search/repositories", {
+    q: "cosmos db org:AzureCosmosDB",
+    sort: "updated",
     order: "desc",
     per_page: String(pageSize),
-    page: String(page),
   });
 }
 
@@ -108,10 +107,17 @@ test("GitHub endpoint allowlist permits only the configured org and selected con
   );
   assert.equal(
     isAllowedGitHubEndpoint(
-      "https://api.github.com/search/code?q=CosmosClient+org%3AAzureCosmosDB",
+      "https://api.github.com/search/repositories?q=cosmos+db+org%3AAzureCosmosDB",
       context,
     ),
     true,
+  );
+  assert.equal(
+    isAllowedGitHubEndpoint(
+      "https://api.github.com/search/code?q=CosmosClient+org%3AAzureCosmosDB",
+      context,
+    ),
+    false,
   );
   assert.equal(
     isAllowedGitHubEndpoint("https://api.github.com/orgs/microsoft/repos", context),
@@ -126,7 +132,7 @@ test("GitHub endpoint allowlist permits only the configured org and selected con
       "https://api.github.com/repos/AzureCosmosDB/demo/contents/package.json?ref=main",
       { ...context, repository: "demo", contentPath: "package.json" },
     ),
-    true,
+    false,
   );
   assert.equal(
     isAllowedGitHubEndpoint(
@@ -137,15 +143,14 @@ test("GitHub endpoint allowlist permits only the configured org and selected con
   );
 });
 
-test("GitHub pagination stops at configured listing and search page limits", async () => {
+test("GitHub listing pagination is bounded and repository search runs once per organization", async () => {
   const responses = {
     [listingUrl(1, 1)]: { body: [githubRepository(1)] },
     [listingUrl(2, 1)]: { body: [githubRepository(2)] },
-    [searchUrl(1, 1)]: {
-      body: { total_count: 2, incomplete_results: false, items: [
-        { path: "unselected.txt", url: "https://api.github.com/user", repository: githubRepository(1) },
-      ] },
+    [searchUrl(1)]: {
+      body: { total_count: 1, incomplete_results: false, items: [githubRepository(1)] },
     },
+    "https://api.github.com/repos/AzureCosmosDB/repository-1/readme": { status: 404 },
   };
   const { result, requests } = await runWithFixtures({
     sources: [githubSource()],
@@ -153,25 +158,45 @@ test("GitHub pagination stops at configured listing and search page limits", asy
     limits: {
       githubPageSize: 1,
       githubListingPages: 2,
-      githubSearchPages: 1,
       githubRepositories: 2,
-      githubSearchQueries: 1,
-      githubFilesPerRepository: 1,
     },
   });
 
   assert.equal(requests.includes(listingUrl(3, 1)), false);
-  assert.equal(requests.includes(searchUrl(2, 1)), false);
-  assert.equal(requests.includes("https://api.github.com/user"), false);
-  assert.equal(result.sources[0].status, "indeterminate");
-  assert.match(result.sources[0].reason, /non-allowlisted GitHub endpoint/);
+  assert.equal(requests.filter((url) => url.includes("/search/repositories?")).length, 1);
+  assert.equal(requests.some((url) => url.includes("/search/code?")), false);
+  assert.equal(result.sources[0].status, "succeeded");
+});
+
+test("GitHub repository search avoids a code-search 429 response", async () => {
+  const repository = githubRepository(3, {
+    description: "Azure Cosmos DB tooling",
+    topics: ["cosmos-db"],
+  });
+  const legacyCodeSearch = "https://api.github.com/search/code?q=Microsoft.Azure.Cosmos+org%3AAzureCosmosDB";
+  const responses = {
+    [listingUrl(1, 2)]: { body: [repository] },
+    [searchUrl(2)]: { body: { total_count: 1, incomplete_results: false, items: [repository] } },
+    [legacyCodeSearch]: { status: 429 },
+    "https://api.github.com/repos/AzureCosmosDB/repository-3/readme": { status: 503 },
+  };
+  const { result, requests } = await runWithFixtures({
+    sources: [githubSource()],
+    responses,
+    limits: { githubPageSize: 2, githubListingPages: 1, githubRepositories: 2 },
+  });
+
+  assert.equal(requests.includes(legacyCodeSearch), false);
+  assert.equal(requests.filter((url) => url.includes("/search/repositories?")).length, 1);
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.equal(result.candidates.length, 1);
 });
 
 test("GitHub does not accept a repository from a Cosmos DB keyword alone", async () => {
   const repository = githubRepository(10, { description: "Mentions Azure Cosmos DB once" });
   const responses = {
     [listingUrl(1, 2)]: { body: [repository] },
-    [searchUrl(1, 2)]: { body: { total_count: 0, incomplete_results: false, items: [] } },
+    [searchUrl(2)]: { body: { total_count: 1, incomplete_results: false, items: [repository] } },
     "https://api.github.com/repos/AzureCosmosDB/repository-10/readme": { status: 404 },
   };
   const { result } = await runWithFixtures({
@@ -180,10 +205,7 @@ test("GitHub does not accept a repository from a Cosmos DB keyword alone", async
     limits: {
       githubPageSize: 2,
       githubListingPages: 1,
-      githubSearchPages: 1,
       githubRepositories: 2,
-      githubSearchQueries: 1,
-      githubFilesPerRepository: 1,
     },
   });
 
@@ -191,6 +213,29 @@ test("GitHub does not accept a repository from a Cosmos DB keyword alone", async
   assert.equal(result.candidates.length, 0);
   assert.equal(result.rejected[0].reason, "insufficient-cosmos-evidence");
   assert.equal(result.rejected[0].sourceId, "10");
+});
+
+test("GitHub accepts strong SDK evidence found only in a bounded README", async () => {
+  const repository = githubRepository(11);
+  const responses = {
+    [listingUrl(1, 2)]: { body: [repository] },
+    [searchUrl(2)]: { body: { total_count: 0, incomplete_results: false, items: [] } },
+    "https://api.github.com/repos/AzureCosmosDB/repository-11/readme": {
+      body: {
+        encoding: "base64",
+        content: Buffer.from("dotnet add package Microsoft.Azure.Cosmos").toString("base64"),
+      },
+    },
+  };
+  const { result } = await runWithFixtures({
+    sources: [githubSource()],
+    responses,
+    limits: { githubPageSize: 2, githubListingPages: 1, githubRepositories: 2 },
+  });
+
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.equal(result.candidates.length, 1);
+  assert.deepEqual(result.candidates[0].metadata.strongSignalKinds, ["sdk"]);
 });
 
 test("exact duplicate rejection covers active and retired catalog records", async () => {
@@ -252,11 +297,49 @@ test("unavailable official Learn sitemap is indeterminate", async () => {
     responses: {
       "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": { status: 404 },
       "https://learn.microsoft.com/sitemap.xml": { status: 503 },
+      "https://learn.microsoft.com/azure/cosmos-db/": { status: 503 },
     },
   });
   assert.equal(result.status, "partial");
   assert.equal(result.sources[0].status, "indeterminate");
   assert.equal(result.candidates.length, 0);
+});
+
+test("Learn falls back to the official root index and rejects malicious or out-of-root links", async () => {
+  const source = {
+    id: "learn-cosmos-db",
+    type: "documentation-root",
+    endpoint: "https://learn.microsoft.com/azure/cosmos-db/",
+    trustTier: "first-party",
+    enabled: true,
+    ownerLabel: "Microsoft Learn",
+  };
+  const rootHtml = `<!doctype html><html><body>
+    <a href="/en-us/azure/cosmos-db/nosql/vector-search?view=azure-cli-latest#examples">Vector search</a>
+    <a href="https://evil.example/azure/cosmos-db/stolen">External</a>
+    <a href="//learn.microsoft.com.evil.example/azure/cosmos-db/spoofed">Spoofed</a>
+    <a href="/en-us/azure/storage/blobs/">Out of root</a>
+    <a href="javascript:alert(1)">Script</a>
+    <script>const fake = '<a href="/azure/cosmos-db/fake">fake</a>';</script>
+  </body></html>`;
+  const { result, requests } = await runWithFixtures({
+    sources: [source],
+    responses: {
+      "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": { status: 404 },
+      "https://learn.microsoft.com/sitemap.xml": { status: 404 },
+      "https://learn.microsoft.com/azure/cosmos-db/": { body: rootHtml },
+    },
+  });
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.sources[0].status, "succeeded");
+  assert.deepEqual(
+    result.candidates.map((candidate) => candidate.canonicalUrl),
+    ["https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search"],
+  );
+  assert.ok(result.candidates[0].evidence.some((item) =>
+    item.type === "learn-official-root-index" && item.url === source.endpoint));
+  assert.equal(requests.filter((url) => url === source.endpoint).length, 1);
 });
 
 test("safe XML parsing rejects declarations and custom entities", () => {
