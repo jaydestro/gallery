@@ -1,0 +1,14 @@
+[
+  {
+    "id": "verified-agent-kit",
+    "title": "Azure Cosmos DB Agent Kit",
+    "description": "Skills for AI coding agents that cover Azure Cosmos DB modeling, partitioning, queries, and SDK practices.",
+    "source": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit"
+  },
+  {
+    "id": "verified-vector-search",
+    "title": "Vector Search in Azure Cosmos DB for NoSQL",
+    "description": "Guidance for using vector search in Azure Cosmos DB for NoSQL.",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search"
+  }
+]
