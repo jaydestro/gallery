@@ -8,6 +8,7 @@ import {
   parseSafeXml,
   runDiscovery,
 } from "./discovery.mjs";
+import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
 
 const DISCOVERED_AT = "2026-08-27T12:00:00Z";
 
@@ -379,7 +380,7 @@ test("Learn follows a same-host redirect to the official root index", async () =
   );
   assert.equal(result.candidates[0].publishedAt, null);
   assert.ok(result.candidates[0].evidence.some((item) =>
-    item.type === "learn-official-root-index" && item.url === source.endpoint));
+    item.type === "learn-official-root-index" && item.url === canonicalizeLearnUrl(source.endpoint)));
   assert.equal(requests.filter((url) => url === source.endpoint).length, 1);
   assert.equal(requests.filter((url) => url === "https://learn.microsoft.com/en-us/azure/cosmos-db/").length, 1);
 });

@@ -5,6 +5,7 @@ import { discoverFeeds } from "./discover/feeds.mjs";
 import { discoverGitHub } from "./discover/github.mjs";
 import { discoverLearn } from "./discover/learn.mjs";
 import { isYouTubeDiscoveryEnabled } from "./discover/youtube.mjs";
+import { canonicalizeLearnUrl } from "./shared/canonicalize.mjs";
 import { safeFetch } from "./shared/safe-fetch.mjs";
 
 const GITHUB_HOST = "api.github.com";
@@ -802,7 +803,7 @@ async function collectLearn(source, context) {
           {
             type: "learn-official-root-index",
             value: "Linked from the configured official Microsoft Learn root index",
-            url: source.endpoint,
+            url: canonicalizeLearnUrl(source.endpoint),
           },
         ],
       }),
