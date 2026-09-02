@@ -24,6 +24,28 @@ param chatPrincipalId string
 var standardIndexingPolicy = {
   automatic: true
   indexingMode: 'consistent'
+  compositeIndexes: [
+    [
+      {
+        path: '/displayOrder'
+        order: 'ascending'
+      }
+      {
+        path: '/id'
+        order: 'ascending'
+      }
+    ]
+    [
+      {
+        path: '/displayOrder'
+        order: 'ascending'
+      }
+      {
+        path: '/catalogId'
+        order: 'ascending'
+      }
+    ]
+  ]
   includedPaths: [
     {
       path: '/*'

@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "status": "implemented",
-  "infrastructureState": "staged-disabled",
+  "infrastructureState": "active",
   "resources": {
     "storageAccount": {
       "name": "stgallerychatjgd826",
@@ -20,7 +20,7 @@
       "name": "func-gallery-chat-dev-jgd826",
       "runtime": "node",
       "runtimeVersion": "22",
-      "enabled": false,
+      "enabled": true,
       "deploymentAuthentication": "UserAssignedIdentity"
     },
     "applicationInsights": {
@@ -131,7 +131,7 @@
     "localAuthenticationAllowed": false
   },
   "activation": {
-    "functionAppEnabled": false,
+    "functionAppEnabled": true,
     "modelEvaluation": false,
     "candidateAnalysis": false,
     "cosmosPersistence": false,

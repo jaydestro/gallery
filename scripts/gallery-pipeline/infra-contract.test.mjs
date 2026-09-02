@@ -181,10 +181,10 @@ test("all workload identities are separate and GitHub trusts only exact environm
   assert.match(source, /var azureTokenExchangeAudience = 'api:\/\/AzureADTokenExchange'/);
 
   const expectedFederations = new Map([
-    ["modelEvaluationFederation", ["modelEvaluationIdentity", "repo:jaydestro/gallery:environment:gallery-model-evaluation"]],
-    ["candidateAnalysisFederation", ["candidateAnalysisIdentity", "repo:jaydestro/gallery:environment:gallery-candidate-analysis"]],
-    ["pipelineStorageFederation", ["pipelineWriterIdentity", "repo:jaydestro/gallery:environment:gallery-pipeline-storage"]],
-    ["publicationFederation", ["catalogPublisherIdentity", "repo:jaydestro/gallery:environment:gallery-publication"]],
+    ["modelEvaluationFederation", ["modelEvaluationIdentity", "repo:jaydestro@2974195/gallery@1348841742:environment:gallery-model-evaluation"]],
+    ["candidateAnalysisFederation", ["candidateAnalysisIdentity", "repo:jaydestro@2974195/gallery@1348841742:environment:gallery-candidate-analysis"]],
+    ["pipelineStorageFederation", ["pipelineWriterIdentity", "repo:jaydestro@2974195/gallery@1348841742:environment:gallery-pipeline-storage"]],
+    ["publicationFederation", ["catalogPublisherIdentity", "repo:jaydestro@2974195/gallery@1348841742:environment:gallery-publication"]],
   ]);
   for (const federation of federations) {
     const expected = expectedFederations.get(federation.symbol);
@@ -212,6 +212,8 @@ test("Cosmos is keyless serverless TLS 1.2 with exactly five no-throughput no-TT
   assert.match(account, /defaultConsistencyLevel: 'Session'/);
   assert.match(database, /name: 'gallery'/);
   assert.match(database, /id: 'gallery'/);
+  assert.match(source, /compositeIndexes:[\s\S]*path: '\/displayOrder'[\s\S]*path: '\/id'/);
+  assert.match(source, /compositeIndexes:[\s\S]*path: '\/displayOrder'[\s\S]*path: '\/catalogId'/);
 
   const expectedContainers = new Map([
     ["catalog-items", "/catalogPartition"],
@@ -374,10 +376,10 @@ test("diagnostics, workspace, Application Insights, action group, alerts, and bu
   }
 });
 
-test("phase-two API contract is implemented but staged disabled behind explicit Graph preflight", async () => {
+test("phase-two API contract is active behind resolved Graph preflight", async () => {
   const contract = JSON.parse(await readInfra("phase-2-api-contract.json"));
   assert.equal(contract.status, "implemented");
-  assert.equal(contract.infrastructureState, "staged-disabled");
+  assert.equal(contract.infrastructureState, "active");
   assert.equal(contract.graphProvisioning.mode, "external-precreated");
   assert.deepEqual(contract.graphProvisioning.requiredParameters, [
     "apiAppClientId",
@@ -388,7 +390,7 @@ test("phase-two API contract is implemented but staged disabled behind explicit 
   assert.deepEqual(contract.graphProvisioning.preflightOutputs, ["apiAuthPreflight", "graphPreflight"]);
   assert.equal(contract.resources.functionApp.runtime, "node");
   assert.equal(contract.resources.functionApp.runtimeVersion, "22");
-  assert.equal(contract.resources.functionApp.enabled, false);
+  assert.equal(contract.resources.functionApp.enabled, true);
   assert.equal(contract.resources.apiManagement.sku, "Consumption");
   assert.equal(contract.resources.apiManagement.capacity, 0);
   assert.equal(contract.runtimeIdentity, "id-gallery-chat-dev");
@@ -431,7 +433,7 @@ test("phase-two API contract is implemented but staged disabled behind explicit 
   assert.deepEqual(contract.security.authsettingsV2.allowedPrincipalObjectIds, ["apimPrincipalId"]);
   assert.equal(contract.security.roleEnforcement.requiredRole, "Chat.Invoke");
   assert.deepEqual(contract.activation, {
-    functionAppEnabled: false,
+    functionAppEnabled: true,
     modelEvaluation: false,
     candidateAnalysis: false,
     cosmosPersistence: false,
@@ -440,7 +442,7 @@ test("phase-two API contract is implemented but staged disabled behind explicit 
   });
 });
 
-test("Function API uses Node 22 Flex Consumption, keyless package storage, and starts disabled", async () => {
+test("Function API uses Node 22 Flex Consumption and keyless package storage", async () => {
   const source = await readInfra("modules/api.bicep");
   const resources = resourceBlocks(source);
   const storage = block(resources, "storageAccount");
@@ -471,12 +473,13 @@ test("Function API uses Node 22 Flex Consumption, keyless package storage, and s
   assert.equal(resources.get("functionApp").type, "Microsoft.Web/sites@2024-04-01");
   assert.match(source, /var functionAppName = 'func-gallery-chat-dev-jgd826'/);
   assert.match(app, /type: 'UserAssigned'/);
-  assert.match(app, /enabled: false/);
-  assert.match(app, /scmSiteAlsoStopped: true/);
+  assert.match(app, /enabled: true/);
+  assert.match(app, /scmSiteAlsoStopped: false/);
   assert.match(app, /httpsOnly: true/);
   assert.match(app, /type: 'blobContainer'/);
   assert.match(app, /type: 'UserAssignedIdentity'/);
   assert.match(app, /userAssignedIdentityResourceId: chatIdentityId/);
+  assert.match(app, /name: 'AZURE_CLIENT_ID'[\s\S]*value: chatClientId/);
   assert.match(app, /name: 'node'/);
   assert.match(app, /version: '22'/);
   assert.match(app, /name: 'AzureWebJobsStorage__credential'[\s\S]*value: 'managedidentity'/);
@@ -540,7 +543,7 @@ test("API Management exposes only the two public operations and authenticates to
   assert.doesNotMatch(service, /customProperties/);
   assert.doesNotMatch(service, /(?:developer|legacy)PortalStatus/);
   assert.match(backend, /protocol: 'http'/);
-  assert.match(backend, /url: '\$\{functionAppUrl\}\/api'/);
+  assert.match(backend, /url: '\$\{functionAppUrl\}\/api\/gallery'/);
   assert.match(api, /path: 'gallery'/);
   assert.match(api, /subscriptionRequired: false/);
   assert.match(api, /protocols:[\s\S]*'https'/);
