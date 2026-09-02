@@ -175,10 +175,10 @@ Use issuer `https://token.actions.githubusercontent.com` and audience
 
 | Identity | Federated subject |
 | --- | --- |
-| Evaluation | `repo:jaydestro/gallery:environment:gallery-model-evaluation` |
-| Candidate analysis | `repo:jaydestro/gallery:environment:gallery-candidate-analysis` |
-| Pipeline storage | `repo:jaydestro/gallery:environment:gallery-pipeline-storage` |
-| Catalog publication | `repo:jaydestro/gallery:environment:gallery-publication` |
+| Evaluation | `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-model-evaluation` |
+| Candidate analysis | `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-candidate-analysis` |
+| Pipeline storage | `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-pipeline-storage` |
+| Catalog publication | `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-publication` |
 
 Environment subjects intentionally bind trust to GitHub environments rather
 than a branch subject. GitHub environment deployment policies provide the branch

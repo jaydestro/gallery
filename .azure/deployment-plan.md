@@ -1,6 +1,6 @@
 # Gallery Foundry and Cosmos DB foundation deployment plan
 
-Status: Validated
+Status: Deployed and Active
 
 ## 1. Workload
 
@@ -53,10 +53,10 @@ Generate the environment configuration contract for the existing `gallery-model-
 
 ## 5. GitHub trust subjects
 
-- `repo:jaydestro/gallery:environment:gallery-model-evaluation`
-- `repo:jaydestro/gallery:environment:gallery-candidate-analysis`
-- `repo:jaydestro/gallery:environment:gallery-pipeline-storage`
-- `repo:jaydestro/gallery:environment:gallery-publication`
+- `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-model-evaluation`
+- `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-candidate-analysis`
+- `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-pipeline-storage`
+- `repo:jaydestro@2974195/gallery@1348841742:environment:gallery-publication`
 
 Issuer: `https://token.actions.githubusercontent.com`
 
@@ -140,7 +140,15 @@ All validation gates passed. The plan is `Validated`; deployment remains separat
 - Function package deployment succeeded through Flex Consumption One Deploy and the Function was returned to its disabled state.
 - Live RBAC verification passed for 11 Cosmos container-scoped assignments, three Foundry inference assignments, Function storage data roles, and Application Insights Metrics Publisher.
 - Direct Function and APIM requests return 403 while the Function remains stopped.
-- Catalog migration and API activation remain pending because migration provenance is intentionally bound to `.github/workflows/migrate-gallery-catalog.yml` on the repository default branch. No provenance was fabricated from the dirty local branch.
+- At initial deployment, catalog migration and API activation remained pending until the workflow's exact default-branch provenance checks passed.
+
+### Activation completed
+
+- The create-only migration verified 109 canonical records and 109 public projections at `sha256:5b247fd19cea8033479ef550abaa5e4156bb219907a6d5bd353b56ace75f63e9` before committing the active snapshot marker.
+- The Function is enabled and APIM routes `/gallery/items` and `/gallery/chat` to the Entra-protected backend.
+- Live checks passed: 109 total items, conditional GET returned 304, direct Function access returned 401, and MAI chat returned a grounded answer with a catalog citation.
+- GitHub Pages is deployed in Cosmos mode using `https://apim-gallery-chat-dev-jgd826.azure-api.net` and passed desktop/mobile browser validation without horizontal overflow.
+- The Microsoft tenant rejects GitHub OIDC tokens from this personal repository because they lack the required enterprise claim (`AADSTS7002381`). The one-time migration used temporary container-scoped operator roles after the workflow's exact main/SHA/provenance checks passed; both assignments were removed immediately after verification.
 
 ## 9. Activation controls
 

@@ -44,7 +44,7 @@ resource modelEvaluationFederation 'Microsoft.ManagedIdentity/userAssignedIdenti
   name: 'fic-gallery-model-evaluation'
   properties: {
     issuer: githubIssuer
-    subject: 'repo:jaydestro/gallery:environment:gallery-model-evaluation'
+    subject: 'repo:jaydestro@2974195/gallery@1348841742:environment:gallery-model-evaluation'
     audiences: [
       azureTokenExchangeAudience
     ]
@@ -56,7 +56,7 @@ resource candidateAnalysisFederation 'Microsoft.ManagedIdentity/userAssignedIden
   name: 'fic-gallery-candidate-analysis'
   properties: {
     issuer: githubIssuer
-    subject: 'repo:jaydestro/gallery:environment:gallery-candidate-analysis'
+    subject: 'repo:jaydestro@2974195/gallery@1348841742:environment:gallery-candidate-analysis'
     audiences: [
       azureTokenExchangeAudience
     ]
@@ -68,7 +68,7 @@ resource pipelineStorageFederation 'Microsoft.ManagedIdentity/userAssignedIdenti
   name: 'fic-gallery-pipeline-storage'
   properties: {
     issuer: githubIssuer
-    subject: 'repo:jaydestro/gallery:environment:gallery-pipeline-storage'
+    subject: 'repo:jaydestro@2974195/gallery@1348841742:environment:gallery-pipeline-storage'
     audiences: [
       azureTokenExchangeAudience
     ]
@@ -80,7 +80,7 @@ resource publicationFederation 'Microsoft.ManagedIdentity/userAssignedIdentities
   name: 'fic-gallery-publication'
   properties: {
     issuer: githubIssuer
-    subject: 'repo:jaydestro/gallery:environment:gallery-publication'
+    subject: 'repo:jaydestro@2974195/gallery@1348841742:environment:gallery-publication'
     audiences: [
       azureTokenExchangeAudience
     ]

@@ -142,7 +142,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     }
   }
   properties: {
-    enabled: false
+    enabled: true
     functionAppConfig: {
       deployment: {
         storage: {
@@ -170,11 +170,15 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     }
     httpsOnly: true
     publicNetworkAccess: 'Enabled'
-    scmSiteAlsoStopped: true
+    scmSiteAlsoStopped: false
     serverFarmId: functionPlan.id
     siteConfig: {
       alwaysOn: false
       appSettings: [
+        {
+          name: 'AZURE_CLIENT_ID'
+          value: chatClientId
+        }
         {
           name: 'AzureWebJobsStorage__accountName'
           value: storageAccount.name
@@ -382,7 +386,7 @@ output authPreflight object = {
   requiredRoleValue: 'Chat.Invoke'
   apimClientId: apimClientId
   apimPrincipalId: apimPrincipalId
-  functionAppEnabled: false
+  functionAppEnabled: true
   requiredChecks: [
     'API application and service principal exist in the deployment tenant.'
     'The API service principal requires assignment and exposes the Chat.Invoke application role.'

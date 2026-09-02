@@ -6,6 +6,7 @@ const {
   MAX_COMPLETION_TOKENS,
   MAX_CONTEXT_ITEMS,
   MAX_SEARCH_TERMS,
+  completeWithOneMalformedOutputRetry,
   createGalleryChatService,
   extractSearchTerms,
 } = require("../src/services/gallery-chat-service");
@@ -149,4 +150,38 @@ test("search terms are normalized, deduplicated, and capped", () => {
   assert.equal(terms[0], "cosmos");
   assert.equal(new Set(terms).size, terms.length);
   assert(terms.length <= MAX_SEARCH_TERMS);
+});
+
+test("retries one malformed provider response and then succeeds", async () => {
+  const calls = [];
+  const modelClient = {
+    async complete() {
+      calls.push(calls.length);
+      if (calls.length === 1) throw new ApiError(502, "MODEL_OUTPUT_INVALID", "malformed");
+      return '{"answer":"Use the starter.","citationIds":["alpha"]}';
+    },
+  };
+  const fixture = chatFixture();
+  const service = createGalleryChatService({
+    publicCatalogRepository: fixture.publicCatalogRepository,
+    modelClient,
+  });
+
+  const result = await service.answer({ question: "Cosmos starter" });
+  assert.equal(result.answer, "Use the starter.");
+  assert.equal(calls.length, 2);
+});
+
+test("fails closed after two malformed provider responses", async () => {
+  let calls = 0;
+  await assert.rejects(
+    completeWithOneMalformedOutputRetry({
+      async complete() {
+        calls += 1;
+        throw new ApiError(502, "MODEL_OUTPUT_INVALID", "malformed");
+      },
+    }, {}),
+    (error) => error instanceof ApiError && error.code === "MODEL_OUTPUT_INVALID",
+  );
+  assert.equal(calls, 2);
 });

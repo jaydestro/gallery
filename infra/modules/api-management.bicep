@@ -64,7 +64,7 @@ resource galleryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = 
   properties: {
     description: 'Entra-protected Gallery Function backend'
     protocol: 'http'
-    url: '${functionAppUrl}/api'
+    url: '${functionAppUrl}/api/gallery'
   }
 }
 
@@ -81,7 +81,7 @@ resource galleryApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
     protocols: [
       'https'
     ]
-    serviceUrl: '${functionAppUrl}/api'
+    serviceUrl: '${functionAppUrl}/api/gallery'
     subscriptionRequired: false
     type: 'http'
   }

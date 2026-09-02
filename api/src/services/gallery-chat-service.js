@@ -28,6 +28,19 @@ function invalidModelOutput(message) {
   throw new ApiError(502, "MODEL_OUTPUT_INVALID", message);
 }
 
+async function completeWithOneMalformedOutputRetry(modelClient, request) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await modelClient.complete(request);
+    } catch (error) {
+      if (attempt === 1 || !(error instanceof ApiError) || error.code !== "MODEL_OUTPUT_INVALID") {
+        throw error;
+      }
+    }
+  }
+  throw new ApiError(502, "MODEL_OUTPUT_INVALID", "The model returned malformed output.");
+}
+
 function validateQuestion(question) {
   if (typeof question !== "string") {
     throw new ApiError(400, "QUESTION_INVALID", "question must be a string.");
@@ -155,7 +168,7 @@ function createGalleryChatService({
       const records = validatedItems.map(toPublicRecord);
       const timeoutSignal = AbortSignal.timeout(timeoutMilliseconds);
       const effectiveSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-      const output = await modelClient.complete({
+      const output = await completeWithOneMalformedOutputRetry(modelClient, {
         systemInstructions: SYSTEM_INSTRUCTIONS,
         input: JSON.stringify({
           trustBoundary: "UNTRUSTED_CATALOG_CONTEXT",
@@ -176,6 +189,7 @@ module.exports = {
   MAX_SEARCH_TERMS,
   SYSTEM_INSTRUCTIONS,
   createGalleryChatService,
+  completeWithOneMalformedOutputRetry,
   extractSearchTerms,
   parseModelOutput,
 };
