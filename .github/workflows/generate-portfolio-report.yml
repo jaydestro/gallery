@@ -1,0 +1,103 @@
+name: Generate quarterly portfolio report
+
+on:
+  schedule:
+    - cron: "17 6 1 1,4,7,10 *"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: Optional report date in YYYY-MM-DD format
+        required: false
+        type: string
+      discovery_metrics_paths:
+        description: Optional JSON array of repository-relative discovery artifact paths
+        required: false
+        default: "[]"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quarterly-gallery-portfolio-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Generate read-only portfolio report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate portfolio reports
+        shell: bash
+        env:
+          REPORT_AS_OF: ${{ github.event.inputs.as_of }}
+          DISCOVERY_METRICS_PATHS: ${{ github.event.inputs.discovery_metrics_paths || '[]' }}
+        run: |
+          set -euo pipefail
+
+          as_of="${REPORT_AS_OF:-$(date -u +%F)}"
+          metrics_list="$RUNNER_TEMP/gallery-portfolio-discovery-paths.txt"
+
+          node <<'NODE' > "$metrics_list"
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const root = fs.realpathSync(process.env.GITHUB_WORKSPACE);
+          const raw = process.env.DISCOVERY_METRICS_PATHS || "[]";
+          const supplied = JSON.parse(raw);
+          if (!Array.isArray(supplied) || supplied.some((value) => typeof value !== "string")) {
+            throw new TypeError("discovery_metrics_paths must be a JSON array of strings");
+          }
+
+          for (const value of [...new Set(supplied)].sort()) {
+            if (value === "" || value.includes("\n") || value.includes("\r")) {
+              throw new TypeError("Discovery metric paths must be non-empty single-line paths");
+            }
+            const candidate = path.resolve(root, value);
+            const resolvedCandidate = fs.realpathSync(candidate);
+            const relative = path.relative(root, resolvedCandidate);
+            if (relative.startsWith("..") || path.isAbsolute(relative)) {
+              throw new TypeError(`Discovery metric path escapes the repository: ${value}`);
+            }
+            const stats = fs.lstatSync(candidate);
+            if (!stats.isFile() || stats.isSymbolicLink()) {
+              throw new TypeError(`Discovery metric path must be a regular file: ${value}`);
+            }
+            console.log(resolvedCandidate);
+          }
+          NODE
+
+          args=(--as-of "$as_of" --output-dir portfolio-report)
+          while IFS= read -r metrics_path; do
+            if [[ -n "$metrics_path" ]]; then
+              args+=(--discovery-metrics "$metrics_path")
+            fi
+          done < "$metrics_list"
+
+          npm run gallery:portfolio -- "${args[@]}"
+
+      - name: Write report to job summary
+        run: cat portfolio-report/portfolio-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload portfolio reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-portfolio-${{ github.run_id }}-${{ github.run_attempt }}
+          path: portfolio-report/
+          if-no-files-found: error
+          retention-days: 90

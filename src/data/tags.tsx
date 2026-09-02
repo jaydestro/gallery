@@ -15,14 +15,43 @@ export type Tag = {
   date?: string; // ISO 8601 format ("2024-09-23")
 };
 
-export type User = {
+export type SourceType =
+  | "github-repository"
+  | "github-path"
+  | "learn-document"
+  | "blog-post"
+  | "video"
+  | "tool"
+  | "other";
+
+export type LifecycleStatus =
+  | "active"
+  | "needs-review"
+  | "quarantined"
+  | "retired";
+
+export type CatalogUser = {
+  id: string;
   title: string;
-  description: string;
+  summary: string;
   preview: string;
-  website: string;
+  launchUrl: string;
+  canonicalSource: string;
+  sourceType: SourceType;
   author: string;
-  source: string | null;
+  sourceOwner: string | null;
+  website: string;
   tags: TagType[];
+  publishedAt: string;
+  dateAdded: string | null;
+  lastVerified: string | null;
+  lifecycleStatus: LifecycleStatus;
+  supersededBy?: string | null;
+};
+
+export type User = CatalogUser & {
+  description: string;
+  source: string;
   video?: string;
   previewTags?: TagType[];
 };
@@ -65,7 +94,12 @@ export type TagType =
   | "video"
   | "documentation"
   | "generativeai"
+  | "ai"
+  | "agent-skills"
+  | "best-practices"
+  | "copilot"
   | "architecturedesign"
+  | "event-driven"
   | "tools"
   | "infrastructure"
   | "migration"
@@ -402,9 +436,34 @@ export const Tags: { [type in TagType]: Tag } = {
     icon: "",
     type: "ContentType"
   },
+  ai: {
+    label: "AI",
+    description: "Artificial intelligence content and resources",
+    type: "GenerativeAI"
+  },
+  "agent-skills": {
+    label: "Agent Skills",
+    description: "Reusable skills and instructions for AI coding agents",
+    type: "GenerativeAI"
+  },
+  "best-practices": {
+    label: "Best Practices",
+    description: "Recommended practices and implementation guidance",
+    type: "ContentType"
+  },
+  copilot: {
+    label: "Copilot",
+    description: "Content that supports AI coding assistants such as GitHub Copilot",
+    type: "GenerativeAI"
+  },
   architecturedesign: {
     label: "Architecture",
     description: "Architecture and design patterns",
+    type: "ContentType"
+  },
+  "event-driven": {
+    label: "Event-Driven",
+    description: "Event-driven architecture and application patterns",
     type: "ContentType"
   },
   tools: {

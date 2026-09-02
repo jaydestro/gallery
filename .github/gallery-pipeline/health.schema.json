@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gallery health snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "version",
+    "entries"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/healthEntry"
+      }
+    }
+  },
+  "$defs": {
+    "healthEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "galleryId",
+        "canonicalSource",
+        "checkedAt",
+        "status",
+        "healthScore",
+        "components",
+        "healthReasons",
+        "consecutiveFindings",
+        "gracePeriodStartedAt",
+        "sourceState",
+        "evidence"
+      ],
+      "properties": {
+        "galleryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonicalSource": {
+          "type": "string",
+          "format": "uri"
+        },
+        "checkedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "healthy",
+            "needs-review",
+            "quarantined",
+            "retired",
+            "indeterminate"
+          ]
+        },
+        "healthScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availabilityIntegrity",
+            "maintenanceFreshness",
+            "sampleUsability",
+            "productRelevance",
+            "galleryValue"
+          ],
+          "properties": {
+            "availabilityIntegrity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25
+            },
+            "maintenanceFreshness": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25
+            },
+            "sampleUsability": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "productRelevance": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "galleryValue": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10
+            }
+          }
+        },
+        "healthReasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "consecutiveFindings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gracePeriodStartedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceState": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "archived",
+            "disabled",
+            "lastMeaningfulChange"
+          ],
+          "properties": {
+            "availability": {
+              "enum": [
+                "available",
+                "broken",
+                "indeterminate"
+              ]
+            },
+            "archived": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "disabled": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lastMeaningfulChange": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "observedAt",
+        "source",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string",
+          "format": "uri"
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

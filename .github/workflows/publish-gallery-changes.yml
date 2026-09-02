@@ -1,0 +1,640 @@
+name: Publish verified gallery changes
+
+on:
+  workflow_run:
+    workflows:
+      - Propose gallery changes (report only)
+    types:
+      - completed
+
+permissions: {}
+
+concurrency:
+  group: publish-gallery-changes
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify proposal before publication access
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      enabled: ${{ steps.policy.outputs.enabled }}
+      publishable: ${{ steps.bundle.outputs.publishable }}
+      payload_digest: ${{ steps.bundle.outputs.payload_digest }}
+      branch: ${{ steps.bundle.outputs.branch }}
+      base_ref: ${{ steps.bundle.outputs.base_ref }}
+      base_sha: ${{ steps.bundle.outputs.base_sha }}
+      proposal_run_id: ${{ steps.bundle.outputs.proposal_run_id }}
+      proposal_run_attempt: ${{ steps.bundle.outputs.proposal_run_attempt }}
+      proposal_artifact_id: ${{ steps.bundle.outputs.proposal_artifact_id }}
+      proposal_artifact_digest: ${{ steps.bundle.outputs.proposal_artifact_digest }}
+      batch_total: ${{ steps.bundle.outputs.batch_total }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+      TRIGGER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+    steps:
+      - name: Verify trusted producer and current default-branch SHA
+        id: trust
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$TRIGGER_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
+             [[ ! "$TRIGGER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The triggering run identity is invalid." >&2
+            exit 1
+          fi
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ]; then
+            echo "The repository API identity does not match the workflow repository." >&2
+            exit 1
+          fi
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          branch_json="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}")"
+          default_sha="$(jq -er '.commit.sha' <<< "$branch_json")"
+          if [[ ! "$default_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "The current default-branch SHA is invalid." >&2
+            exit 1
+          fi
+
+          workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/propose-gallery-changes.yml")"
+          workflow_id="$(jq -er '.id | tostring' <<< "$workflow_json")"
+          if [ "$(jq -er '.name' <<< "$workflow_json")" != "Propose gallery changes (report only)" ] || \
+             [ "$(jq -er '.path' <<< "$workflow_json")" != ".github/workflows/propose-gallery-changes.yml" ]; then
+            echo "The proposal workflow identity is not trusted." >&2
+            exit 1
+          fi
+          run_json="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$workflow_id" \
+            --arg defaultBranch "$default_branch" \
+            --arg defaultSha "$default_sha" \
+            --argjson attempt "$TRIGGER_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/propose-gallery-changes.yml" and
+              (.event == "schedule" or .event == "workflow_dispatch") and
+              .head_branch == $defaultBranch and
+              .head_sha == $defaultSha and
+              .run_attempt == $attempt and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$run_json" > /dev/null; then
+            echo "The triggering proposal run failed workflow, repository, default SHA, attempt, or success validation." >&2
+            exit 1
+          fi
+
+          echo "default_branch=${default_branch}" >> "$GITHUB_OUTPUT"
+          echo "default_sha=${default_sha}" >> "$GITHUB_OUTPUT"
+          echo "workflow_id=${workflow_id}" >> "$GITHUB_OUTPUT"
+          echo "run_started_at=$(jq -er '.run_started_at' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+          echo "run_updated_at=$(jq -er '.updated_at' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact API-verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trust.outputs.default_sha }}
+          persist-credentials: false
+
+      - name: Confirm trusted checkout and publication activation
+        id: policy
+        env:
+          TRUSTED_SHA: ${{ steps.trust.outputs.default_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$TRUSTED_SHA" ]; then
+            echo "The checkout does not match the API-verified default-branch SHA." >&2
+            exit 1
+          fi
+          enabled="$(node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const policy = JSON.parse(readFileSync(".github/gallery-pipeline/policy.json", "utf8"));
+          const ai = policy.automation?.ai;
+          const mutation = policy.automation?.mutation;
+          const enabled =
+            policy.automation?.emergencyDisable === false &&
+            policy.automation?.mutationMode === "dry-run" &&
+            ai && Object.values(ai).length === 5 && Object.values(ai).every((value) => value === true) &&
+            mutation && Object.values(mutation).length === 6 && Object.values(mutation).every((value) => value === true);
+          process.stdout.write(String(Boolean(enabled)));
+          NODE
+          )"
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" != "true" ]; then
+            printf '### Gallery publication\n\nPublication is disabled by the trusted default-branch policy.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Node.js
+        if: steps.policy.outputs.enabled == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install trusted default-branch dependencies
+        if: steps.policy.outputs.enabled == 'true'
+        run: npm ci
+
+      - name: Download and safely extract exact proposal artifact
+        if: steps.policy.outputs.enabled == 'true'
+        id: artifact
+        env:
+          DEFAULT_BRANCH: ${{ steps.trust.outputs.default_branch }}
+          DEFAULT_SHA: ${{ steps.trust.outputs.default_sha }}
+          WORKFLOW_ID: ${{ steps.trust.outputs.workflow_id }}
+          RUN_STARTED_AT: ${{ steps.trust.outputs.run_started_at }}
+          RUN_UPDATED_AT: ${{ steps.trust.outputs.run_updated_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p publication-input/artifact
+          expected_name="gallery-proposal-${TRIGGER_RUN_ID}-${TRIGGER_RUN_ATTEMPT}"
+          artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}/artifacts?per_page=100")"
+          artifact_count="$(jq --arg name "$expected_name" \
+            '[.artifacts[] | select(.name == $name)] | length' <<< "$artifacts_json")"
+          if [ "$artifact_count" -ne 1 ]; then
+            echo "The producer run must contain exactly one attempt-bound proposal artifact." >&2
+            exit 1
+          fi
+          artifact_json="$(jq -c --arg name "$expected_name" \
+            '.artifacts[] | select(.name == $name)' <<< "$artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type == "string") and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$artifact_json" > /dev/null; then
+            echo "The proposal artifact is expired or lacks a valid ID and digest." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -er '.id | tostring' <<< "$artifact_json")"
+          artifact_digest="$(jq -er '.digest' <<< "$artifact_json")"
+          gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > publication-input/proposal.zip
+
+          mapfile -t archive_entries < <(zipinfo -1 publication-input/proposal.zip)
+          if [ "${#archive_entries[@]}" -eq 0 ] || [ "${#archive_entries[@]}" -gt 40 ]; then
+            echo "The proposal archive has an invalid entry count." >&2
+            exit 1
+          fi
+          declare -A seen_entries=()
+          for entry in "${archive_entries[@]}"; do
+            if [ -z "$entry" ] || [[ "$entry" == /* ]] || [[ "$entry" == *\\* ]] || \
+               [[ "/$entry/" == *"/../"* ]] || [[ "/$entry/" == *"/./"* ]] || \
+               [ -n "${seen_entries[$entry]:-}" ]; then
+              echo "The proposal archive contains an unsafe or duplicate path." >&2
+              exit 1
+            fi
+            seen_entries[$entry]=1
+            if [[ "$entry" == */ ]]; then
+              if [[ ! "$entry" =~ ^(plans|proposed)/$ ]]; then
+                echo "The proposal archive contains an unexpected directory." >&2
+                exit 1
+              fi
+            elif [[ ! "$entry" =~ ^(proposal-report\.json|proposal-receipt\.json|upstream-artifact-diagnostics\.json|proposed/(templates|gallery-health|retired-templates|catalog-audit)\.json|plans/catalog-change-plan-[0-9]{3}\.json)$ ]]; then
+              echo "The proposal archive contains an unexpected file path." >&2
+              exit 1
+            fi
+          done
+          if zipinfo -l publication-input/proposal.zip | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The proposal archive contains a symbolic link." >&2
+            exit 1
+          fi
+          uncompressed_bytes="$(unzip -l publication-input/proposal.zip | tail -n 1 | awk '{print $1}')"
+          if [[ ! "$uncompressed_bytes" =~ ^[0-9]+$ ]] || [ "$uncompressed_bytes" -gt 104857600 ]; then
+            echo "The proposal archive exceeds its uncompressed size limit." >&2
+            exit 1
+          fi
+          unzip -q publication-input/proposal.zip -d publication-input/artifact
+
+          jq -n \
+            --arg repository "$GH_REPO" \
+            --arg defaultBranch "$DEFAULT_BRANCH" \
+            --arg defaultSha "$DEFAULT_SHA" \
+            --arg workflowId "$WORKFLOW_ID" \
+            --arg runId "$TRIGGER_RUN_ID" \
+            --argjson runAttempt "$TRIGGER_RUN_ATTEMPT" \
+            --arg runStartedAt "$RUN_STARTED_AT" \
+            --arg updatedAt "$RUN_UPDATED_AT" \
+            --arg artifactId "$artifact_id" \
+            --arg artifactName "$expected_name" \
+            --arg artifactDigest "$artifact_digest" 'input as $run |
+              {
+                schemaVersion: "1.0.0",
+                repository: $repository,
+                defaultBranch: $defaultBranch,
+                defaultSha: $defaultSha,
+                producerWorkflow: {
+                  id: $workflowId,
+                  name: "Propose gallery changes (report only)",
+                  path: ".github/workflows/propose-gallery-changes.yml"
+                },
+                producerRun: {
+                  id: $runId,
+                  attempt: $runAttempt,
+                  event: $run.event,
+                  status: $run.status,
+                  conclusion: $run.conclusion,
+                  workflowId: $workflowId,
+                  workflowPath: $run.path,
+                  repository: $run.repository.full_name,
+                  headRepository: $run.head_repository.full_name,
+                  headBranch: $run.head_branch,
+                  headSha: $run.head_sha,
+                  runStartedAt: $runStartedAt,
+                  updatedAt: $updatedAt
+                },
+                artifact: {
+                  id: $artifactId,
+                  name: $artifactName,
+                  digest: $artifactDigest,
+                  expired: false
+                }
+              }
+            ' < <(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}") \
+            > publication-input/api-metadata.json
+
+      - name: Verify artifact receipt, replay, paths, and batches
+        if: steps.policy.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/gallery-pipeline/verify-publication-artifact.mjs \
+            --artifact-directory publication-input/artifact \
+            --artifact-archive publication-input/proposal.zip \
+            --api-metadata publication-input/api-metadata.json \
+            --repository-root . \
+            --output-directory publication-payload
+
+      - name: Seal verified publication payload
+        if: steps.policy.outputs.enabled == 'true'
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="publication-payload/publication-manifest.json"
+          if ! jq -e '
+            .schemaVersion == "1.0.0" and
+            (.baseSha | test("^[a-f0-9]{40}$")) and
+            (.proposal.runId | test("^[1-9][0-9]*$")) and
+            (.proposal.runAttempt | type == "number" and . >= 1) and
+            (.proposal.artifactId | test("^[1-9][0-9]*$")) and
+            (.proposal.artifactDigest | test("^sha256:[a-f0-9]{64}$")) and
+            (
+              if .publishable == true then
+                (.branch | test("^automation/gallery/[1-9][0-9]*-[1-9][0-9]*$")) and
+                .batch.number == 1 and
+                (.batch.total | type == "number" and . >= 1) and
+                (.paths | length >= 2 and length <= 5)
+              elif .publishable == false then
+                .branch == null and .batch == null and .paths == []
+              else false
+              end
+            )
+          ' "$manifest" > /dev/null; then
+            echo "The verified publication manifest is invalid." >&2
+            exit 1
+          fi
+          publishable="$(jq -r '.publishable' "$manifest")"
+          echo "publishable=${publishable}" >> "$GITHUB_OUTPUT"
+          if [ "$publishable" != "true" ]; then
+            printf '### Gallery publication\n\nThe verified proposal contains no operations; protected publication access was not requested.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf publication-payload.tar -C publication-payload .
+          payload_digest="sha256:$(sha256sum publication-payload.tar | cut -d ' ' -f 1)"
+          echo "payload_digest=${payload_digest}" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -er '.branch' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$(jq -er '.baseRef' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -er '.baseSha' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "proposal_run_id=$(jq -er '.proposal.runId' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "proposal_run_attempt=$(jq -er '.proposal.runAttempt' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "proposal_artifact_id=$(jq -er '.proposal.artifactId' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "proposal_artifact_digest=$(jq -er '.proposal.artifactDigest' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "batch_total=$(jq -er '.batch.total' "$manifest")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed verified publication payload
+        if: steps.policy.outputs.enabled == 'true' && steps.bundle.outputs.publishable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-gallery-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-payload.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Create protected gallery pull request
+    needs: verify
+    if: needs.verify.outputs.enabled == 'true' && needs.verify.outputs.publishable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: gallery-publication
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      EXPECTED_PAYLOAD_DIGEST: ${{ needs.verify.outputs.payload_digest }}
+      EXPECTED_BRANCH: ${{ needs.verify.outputs.branch }}
+      EXPECTED_BASE_REF: ${{ needs.verify.outputs.base_ref }}
+      EXPECTED_BASE_SHA: ${{ needs.verify.outputs.base_sha }}
+      EXPECTED_PROPOSAL_RUN_ID: ${{ needs.verify.outputs.proposal_run_id }}
+      EXPECTED_PROPOSAL_RUN_ATTEMPT: ${{ needs.verify.outputs.proposal_run_attempt }}
+      EXPECTED_PROPOSAL_ARTIFACT_ID: ${{ needs.verify.outputs.proposal_artifact_id }}
+      EXPECTED_PROPOSAL_ARTIFACT_DIGEST: ${{ needs.verify.outputs.proposal_artifact_digest }}
+      EXPECTED_BATCH_TOTAL: ${{ needs.verify.outputs.batch_total }}
+    steps:
+      - name: Download sealed verified publication payload
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: verified-gallery-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-transfer
+
+      - name: Verify sealed payload and new-ref preconditions before token access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="verified-transfer/publication-payload.tar"
+          if [ ! -f "$payload" ] || [ -L "$payload" ]; then
+            echo "The sealed publication payload is missing or unsafe." >&2
+            exit 1
+          fi
+          actual_digest="sha256:$(sha256sum "$payload" | cut -d ' ' -f 1)"
+          if [ "$actual_digest" != "$EXPECTED_PAYLOAD_DIGEST" ]; then
+            echo "The sealed publication payload digest is invalid." >&2
+            exit 1
+          fi
+          if tar -tvf "$payload" | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The sealed publication payload contains a symbolic link." >&2
+            exit 1
+          fi
+          mapfile -t payload_entries < <(tar -tf "$payload")
+          for entry in "${payload_entries[@]}"; do
+            normalized="${entry#./}"
+            if [[ "$normalized" == /* ]] || [[ "$normalized" == *\\* ]] || \
+               [[ "/$normalized/" == *"/../"* ]]; then
+              echo "The sealed publication payload contains an unsafe path." >&2
+              exit 1
+            fi
+          done
+          mkdir publication
+          tar -xf "$payload" -C publication
+
+          EXPECTED_REPOSITORY="$GH_REPO" node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { lstatSync, readFileSync, readdirSync } from "node:fs";
+          import path from "node:path";
+
+          const fail = (message) => {
+            process.stderr.write(`${message}\n`);
+            process.exit(1);
+          };
+          const root = "publication";
+          const manifest = JSON.parse(readFileSync(path.join(root, "publication-manifest.json"), "utf8"));
+          const expected = {
+            repository: process.env.EXPECTED_REPOSITORY,
+            branch: process.env.EXPECTED_BRANCH,
+            baseRef: process.env.EXPECTED_BASE_REF,
+            baseSha: process.env.EXPECTED_BASE_SHA,
+            runId: process.env.EXPECTED_PROPOSAL_RUN_ID,
+            runAttempt: Number(process.env.EXPECTED_PROPOSAL_RUN_ATTEMPT),
+            artifactId: process.env.EXPECTED_PROPOSAL_ARTIFACT_ID,
+            artifactDigest: process.env.EXPECTED_PROPOSAL_ARTIFACT_DIGEST,
+            batchTotal: Number(process.env.EXPECTED_BATCH_TOTAL),
+          };
+          if (
+            manifest.schemaVersion !== "1.0.0" ||
+            manifest.publishable !== true ||
+            manifest.repository !== expected.repository ||
+            manifest.branch !== expected.branch ||
+            manifest.baseRef !== expected.baseRef ||
+            manifest.baseSha !== expected.baseSha ||
+            manifest.proposal?.runId !== expected.runId ||
+            manifest.proposal?.runAttempt !== expected.runAttempt ||
+            manifest.proposal?.artifactId !== expected.artifactId ||
+            manifest.proposal?.artifactDigest !== expected.artifactDigest ||
+            manifest.batch?.number !== 1 ||
+            manifest.batch?.total !== expected.batchTotal ||
+            !Array.isArray(manifest.paths) ||
+            manifest.paths.length < 2 || manifest.paths.length > 5
+          ) {
+            fail("The publication manifest does not match the verified job outputs.");
+          }
+          const files = [];
+          const walk = (directory, relative = "") => {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const relativePath = relative ? `${relative}/${entry.name}` : entry.name;
+              const absolutePath = path.join(directory, entry.name);
+              const metadata = lstatSync(absolutePath);
+              if (metadata.isSymbolicLink()) fail(`Symbolic link ${relativePath} is forbidden.`);
+              if (metadata.isDirectory()) walk(absolutePath, relativePath);
+              else if (metadata.isFile()) files.push(relativePath);
+              else fail(`Non-file payload entry ${relativePath} is forbidden.`);
+            }
+          };
+          walk(root);
+          const expectedPaths = ["publication-manifest.json", ...manifest.paths.map((entry) => entry.path)].sort();
+          if (new Set(expectedPaths).size !== expectedPaths.length || JSON.stringify(files.sort()) !== JSON.stringify(expectedPaths)) {
+            fail("The publication payload path set is not exact.");
+          }
+          for (const entry of manifest.paths) {
+            if (!/^sha256:[a-f0-9]{64}$/.test(entry.digest)) fail(`Invalid digest for ${entry.path}.`);
+            const digest = `sha256:${createHash("sha256").update(readFileSync(path.join(root, ...entry.path.split("/")))).digest("hex")}`;
+            if (digest !== entry.digest) fail(`Payload digest mismatch for ${entry.path}.`);
+          }
+          NODE
+
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          if [ "$EXPECTED_BASE_REF" != "refs/heads/${default_branch}" ]; then
+            echo "The publication base ref is no longer the repository default branch." >&2
+            exit 1
+          fi
+          encoded_default="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          current_sha="$(gh api "repos/${GH_REPO}/branches/${encoded_default}" --jq '.commit.sha')"
+          if [ "$current_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "The default branch advanced after proposal verification." >&2
+            exit 1
+          fi
+          encoded_branch="$(jq -rn --arg value "$EXPECTED_BRANCH" '$value | @uri')"
+          matching_refs="$(gh api "repos/${GH_REPO}/git/matching-refs/heads/${encoded_branch}")"
+          if ! jq -e --arg ref "refs/heads/${EXPECTED_BRANCH}" \
+            '[.[] | select(.ref == $ref)] | length == 0' <<< "$matching_refs" > /dev/null; then
+            echo "The publication branch already exists; publisher refs are create-only." >&2
+            exit 1
+          fi
+          owner="${GH_REPO%%/*}"
+          open_prs="$(gh api "repos/${GH_REPO}/pulls?state=all&head=${owner}:${EXPECTED_BRANCH}&per_page=100")"
+          if [ "$(jq 'length' <<< "$open_prs")" -ne 0 ]; then
+            echo "A pull request already exists for the create-only publication branch." >&2
+            exit 1
+          fi
+
+      - name: Create selected-repository GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.GALLERY_PUBLISHER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GALLERY_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create new ref, same-repository pull request, and native auto-merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_APP_ID: ${{ vars.GALLERY_PUBLISHER_APP_ID }}
+          EXPECTED_APP_SLUG: ${{ vars.GALLERY_PUBLISHER_APP_SLUG }}
+          TOKEN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_APP_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "GALLERY_PUBLISHER_APP_ID must be a positive integer." >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_APP_SLUG" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]] || \
+             [ "$TOKEN_APP_SLUG" != "$EXPECTED_APP_SLUG" ]; then
+            echo "The installation token was issued for an unexpected App slug." >&2
+            exit 1
+          fi
+          installation_json="$(gh api /installation)"
+          if [ "$(jq -er '.app_id | tostring' <<< "$installation_json")" != "$EXPECTED_APP_ID" ]; then
+            echo "The installation token was issued for an unexpected App." >&2
+            exit 1
+          fi
+          app_login="${EXPECTED_APP_SLUG}[bot]"
+          encoded_app_login="$(jq -rn --arg value "$app_login" '$value | @uri')"
+          app_user_json="$(gh api "/users/${encoded_app_login}")"
+          app_user_id="$(jq -er '.id | tostring' <<< "$app_user_json")"
+          if [ "$(jq -er '.login' <<< "$app_user_json")" != "$app_login" ] || \
+             [ "$(jq -er '.type' <<< "$app_user_json")" != "Bot" ] || \
+             [[ ! "$app_user_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The publisher App bot identity is invalid." >&2
+            exit 1
+          fi
+          app_email="${app_user_id}+${app_login}@users.noreply.github.com"
+          repositories_json="$(gh api /installation/repositories?per_page=100)"
+          if ! jq -e --arg repository "$GH_REPO" '
+            .total_count == 1 and
+            (.repositories | length) == 1 and
+            .repositories[0].full_name == $repository
+          ' <<< "$repositories_json" > /dev/null; then
+            echo "The App token is not restricted to the selected repository." >&2
+            exit 1
+          fi
+
+          manifest="publication/publication-manifest.json"
+          base_tree="$(gh api "repos/${GH_REPO}/git/commits/${EXPECTED_BASE_SHA}" --jq '.tree.sha')"
+          tree_entries='[]'
+          while IFS= read -r file_path; do
+            request_file="$(mktemp)"
+            FILE_PATH="publication/${file_path}" REQUEST_FILE="$request_file" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          writeFileSync(process.env.REQUEST_FILE, JSON.stringify({
+            content: readFileSync(process.env.FILE_PATH).toString("base64"),
+            encoding: "base64",
+          }));
+          NODE
+            blob_sha="$(gh api --method POST "repos/${GH_REPO}/git/blobs" --input "$request_file" --jq '.sha')"
+            rm -f "$request_file"
+            tree_entries="$(jq -c --arg path "$file_path" --arg sha "$blob_sha" \
+              '. + [{path: $path, mode: "100644", type: "blob", sha: $sha}]' <<< "$tree_entries")"
+          done < <(jq -r '.paths[].path' "$manifest")
+
+          tree_request="$(mktemp)"
+          jq -n --arg baseTree "$base_tree" --argjson tree "$tree_entries" \
+            '{base_tree: $baseTree, tree: $tree}' > "$tree_request"
+          tree_sha="$(gh api --method POST "repos/${GH_REPO}/git/trees" --input "$tree_request" --jq '.sha')"
+          rm -f "$tree_request"
+
+          title="chore(gallery): publish proposal ${EXPECTED_PROPOSAL_RUN_ID} (batch 1/${EXPECTED_BATCH_TOTAL})"
+          commit_request="$(mktemp)"
+          jq -n \
+            --arg message "$title" \
+            --arg tree "$tree_sha" \
+            --arg parent "$EXPECTED_BASE_SHA" \
+            --arg name "$app_login" \
+            --arg email "$app_email" \
+            '{
+              message: $message,
+              tree: $tree,
+              parents: [$parent],
+              author: {name: $name, email: $email},
+              committer: {name: $name, email: $email}
+            }' > "$commit_request"
+          commit_json="$(gh api --method POST "repos/${GH_REPO}/git/commits" --input "$commit_request")"
+          rm -f "$commit_request"
+          commit_sha="$(jq -er '.sha' <<< "$commit_json")"
+          if [ "$(jq -er '.tree.sha' <<< "$commit_json")" != "$tree_sha" ] || \
+             [ "$(jq -er '.parents[0].sha' <<< "$commit_json")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "The created publication commit is not bound to the verified tree and base." >&2
+            exit 1
+          fi
+
+          ref_request="$(mktemp)"
+          jq -n --arg ref "refs/heads/${EXPECTED_BRANCH}" --arg sha "$commit_sha" \
+            '{ref: $ref, sha: $sha}' > "$ref_request"
+          gh api --method POST "repos/${GH_REPO}/git/refs" --input "$ref_request" > /dev/null
+          rm -f "$ref_request"
+
+          marker="<!-- gallery-publication:v1 run=${EXPECTED_PROPOSAL_RUN_ID} attempt=${EXPECTED_PROPOSAL_RUN_ATTEMPT} artifact=${EXPECTED_PROPOSAL_ARTIFACT_ID} digest=${EXPECTED_PROPOSAL_ARTIFACT_DIGEST} base=${EXPECTED_BASE_SHA} batch=1/${EXPECTED_BATCH_TOTAL} -->"
+          body="$(printf 'Automated gallery catalog update from a verified proposal artifact.\n\n- Proposal run: https://github.com/%s/actions/runs/%s\n- Proposal artifact: %s\n- Batch: 1/%s\n\n%s' \
+            "$GH_REPO" "$EXPECTED_PROPOSAL_RUN_ID" "$EXPECTED_PROPOSAL_ARTIFACT_ID" "$EXPECTED_BATCH_TOTAL" "$marker")"
+          pr_request="$(mktemp)"
+          jq -n \
+            --arg title "$title" \
+            --arg head "$EXPECTED_BRANCH" \
+            --arg base "${EXPECTED_BASE_REF#refs/heads/}" \
+            --arg body "$body" \
+            '{title: $title, head: $head, base: $base, body: $body, draft: false, maintainer_can_modify: false}' \
+            > "$pr_request"
+          pr_json="$(gh api --method POST "repos/${GH_REPO}/pulls" --input "$pr_request")"
+          rm -f "$pr_request"
+          pr_number="$(jq -er '.number' <<< "$pr_json")"
+          pr_node_id="$(jq -er '.node_id' <<< "$pr_json")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg branch "$EXPECTED_BRANCH" \
+            --arg base "${EXPECTED_BASE_REF#refs/heads/}" \
+            --arg sha "$commit_sha" \
+            --arg appLogin "$app_login" \
+            --argjson appUserId "$app_user_id" '
+              .head.repo.full_name == $repository and
+              .head.ref == $branch and
+              .head.sha == $sha and
+              .base.repo.full_name == $repository and
+              .base.ref == $base and
+              .user.login == $appLogin and
+              .user.id == $appUserId and
+              .user.type == "Bot"
+            ' <<< "$pr_json" > /dev/null; then
+            echo "The created pull request is not bound to the same repository, new ref, commit, and publisher App bot." >&2
+            exit 1
+          fi
+
+          auto_merge_json="$(gh api graphql \
+            -f query='mutation($pullRequestId: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) { pullRequest { number autoMergeRequest { mergeMethod } } } }' \
+            -f pullRequestId="$pr_node_id")"
+          if [ "$(jq -er '.data.enablePullRequestAutoMerge.pullRequest.number' <<< "$auto_merge_json")" != "$pr_number" ] || \
+             [ "$(jq -er '.data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest.mergeMethod' <<< "$auto_merge_json")" != "SQUASH" ]; then
+            echo "GitHub did not enable native auto-merge for the publication pull request." >&2
+            exit 1
+          fi
+          printf '### Gallery publication\n\nCreated pull request #%s from verified proposal run %s and enabled native squash auto-merge.\n' \
+            "$pr_number" "$EXPECTED_PROPOSAL_RUN_ID" >> "$GITHUB_STEP_SUMMARY"

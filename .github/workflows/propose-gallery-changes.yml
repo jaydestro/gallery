@@ -1,0 +1,675 @@
+name: Propose gallery changes (report only)
+
+on:
+  schedule:
+    - cron: "11 6 * * 4"
+  workflow_dispatch:
+    inputs:
+      discovery_run_id:
+        description: Successful Discover gallery content run ID for this exact commit
+        required: false
+        type: string
+      health_run_id:
+        description: Successful Scan gallery health run ID for this exact commit
+        required: false
+        type: string
+      freshness_run_id:
+        description: Successful Evaluate repository freshness run ID for this exact commit
+        required: false
+        type: string
+      model_analysis_run_id:
+        description: Required when AI policy is enabled; successful trusted candidate analysis run ID for this exact commit
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: gallery-proposal-report-only
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    name: Build catalog proposal artifacts without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Verify trusted default-branch SHA and discovery artifact metadata
+        id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PROPOSAL_RUN_ID: ${{ github.run_id }}
+          PROPOSAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          REQUESTED_DISCOVERY_RUN_ID: ${{ inputs.discovery_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ]; then
+            echo "The repository API identity does not match the workflow repository." >&2
+            exit 1
+          fi
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          if [ "$default_branch" != "$EVENT_DEFAULT_BRANCH" ]; then
+            echo "The event default branch does not match the repository API." >&2
+            exit 1
+          fi
+          trusted_ref="refs/heads/${default_branch}"
+          if [ "$EVENT_REF" != "$trusted_ref" ]; then
+            echo "The proposal run is not bound to the default branch ref." >&2
+            exit 1
+          fi
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          branch_json="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}")"
+          trusted_sha="$(jq -er '.commit.sha' <<< "$branch_json")"
+          if [[ ! "$trusted_sha" =~ ^[a-f0-9]{40}$ ]] || [ "$EVENT_SHA" != "$trusted_sha" ]; then
+            echo "The workflow SHA is not the current default-branch SHA." >&2
+            exit 1
+          fi
+
+          proposal_workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/propose-gallery-changes.yml")"
+          proposal_workflow_id="$(jq -er '.id | tostring' <<< "$proposal_workflow_json")"
+          if [ "$(jq -er '.path' <<< "$proposal_workflow_json")" != ".github/workflows/propose-gallery-changes.yml" ]; then
+            echo "The proposal workflow path does not match its expected identity." >&2
+            exit 1
+          fi
+          proposal_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${PROPOSAL_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$proposal_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" \
+            --argjson runAttempt "$PROPOSAL_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/propose-gallery-changes.yml" and
+              (.event == "schedule" or .event == "workflow_dispatch") and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .run_attempt == $runAttempt
+            ' <<< "$proposal_run_json" > /dev/null; then
+            echo "The current proposal run failed repository, workflow, ref, SHA, or attempt validation." >&2
+            exit 1
+          fi
+
+          discovery_workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/discover-content.yml")"
+          discovery_workflow_id="$(jq -er '.id | tostring' <<< "$discovery_workflow_json")"
+          if [ "$(jq -er '.path' <<< "$discovery_workflow_json")" != ".github/workflows/discover-content.yml" ]; then
+            echo "The discovery workflow path does not match its expected identity." >&2
+            exit 1
+          fi
+          discovery_run_id="$REQUESTED_DISCOVERY_RUN_ID"
+          if [ -z "$discovery_run_id" ]; then
+            discovery_runs_json="$(gh api \
+              "repos/${GH_REPO}/actions/workflows/discover-content.yml/runs?status=completed&head_sha=${trusted_sha}&per_page=100")"
+            discovery_run_id="$(jq -r \
+              --arg repository "$GH_REPO" \
+              --arg workflowId "$discovery_workflow_id" \
+              --arg branch "$default_branch" \
+              --arg sha "$trusted_sha" '
+                [.workflow_runs[] | select(
+                  .repository.full_name == $repository and
+                  .head_repository.full_name == $repository and
+                  (.workflow_id | tostring) == $workflowId and
+                  .path == ".github/workflows/discover-content.yml" and
+                  .head_branch == $branch and
+                  .head_sha == $sha and
+                  .status == "completed" and
+                  .conclusion == "success"
+                )] | if length == 0 then "" else (.[0].id | tostring) end
+              ' <<< "$discovery_runs_json")"
+          fi
+          if [[ ! "$discovery_run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "No valid exact discovery run ID was supplied or discovered." >&2
+            exit 1
+          fi
+          discovery_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${discovery_run_id}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$discovery_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/discover-content.yml" and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$discovery_run_json" > /dev/null; then
+            echo "The discovery run failed repository, workflow, ref, SHA, or success validation." >&2
+            exit 1
+          fi
+          discovery_run_attempt="$(jq -er '.run_attempt' <<< "$discovery_run_json")"
+          discovery_artifact_name="gallery-discovery-${discovery_run_id}-${discovery_run_attempt}"
+          discovery_artifacts_json="$(gh api \
+            "repos/${GH_REPO}/actions/runs/${discovery_run_id}/artifacts?per_page=100")"
+          discovery_artifact_count="$(jq --arg artifactName "$discovery_artifact_name" \
+            '[.artifacts[] | select(.name == $artifactName)] | length' <<< "$discovery_artifacts_json")"
+          if [ "$discovery_artifact_count" -ne 1 ]; then
+            echo "The discovery run must have exactly one attempt-bound discovery artifact." >&2
+            exit 1
+          fi
+          discovery_artifact_json="$(jq -c --arg artifactName "$discovery_artifact_name" \
+            '.artifacts[] | select(.name == $artifactName)' <<< "$discovery_artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type) == "string" and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$discovery_artifact_json" > /dev/null; then
+            echo "The discovery artifact is expired or lacks a valid ID and digest." >&2
+            exit 1
+          fi
+
+          echo "discovery_run_id=${discovery_run_id}" >> "$GITHUB_OUTPUT"
+          echo "trusted_ref=${trusted_ref}" >> "$GITHUB_OUTPUT"
+          echo "trusted_sha=${trusted_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Confirm exact verified checkout
+        env:
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$TRUSTED_SHA" ]; then
+            echo "The checkout does not match the API-verified default-branch SHA." >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve and verify exact upstream artifacts
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PROPOSAL_RUN_ID: ${{ github.run_id }}
+          TRUSTED_REF: ${{ steps.trust.outputs.trusted_ref }}
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+          DISCOVERY_RUN_ID: ${{ steps.trust.outputs.discovery_run_id }}
+          HEALTH_RUN_ID: ${{ inputs.health_run_id }}
+          FRESHNESS_RUN_ID: ${{ inputs.freshness_run_id }}
+          MODEL_ANALYSIS_RUN_ID: ${{ inputs.model_analysis_run_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p proposal-inputs/discovery proposal-inputs/health proposal-inputs/freshness gallery-proposal
+          mkdir -p proposal-inputs/model-analysis
+          diagnostics_lines="$(mktemp)"
+          manifest_lines="$(mktemp)"
+          overall_status="failed"
+          workflow_started_at=""
+          : > "$diagnostics_lines"
+          : > "$manifest_lines"
+
+          record_check() {
+            jq -nc \
+              --arg name "$1" \
+              --arg status "$2" \
+              --arg message "$3" \
+              '{name: $name, status: $status, message: $message}' >> "$diagnostics_lines"
+          }
+
+          write_diagnostics() {
+            jq -n \
+              --arg status "$overall_status" \
+              --arg repository "$GH_REPO" \
+              --arg trustedRef "$TRUSTED_REF" \
+              --arg trustedSha "$TRUSTED_SHA" \
+              --arg workflowRunId "$PROPOSAL_RUN_ID" \
+              --arg workflowStartedAt "$workflow_started_at" \
+              --slurpfile checks "$diagnostics_lines" \
+              '{
+                schemaVersion: "1.0.0",
+                status: $status,
+                repository: $repository,
+                trustedRef: $trustedRef,
+                trustedSha: $trustedSha,
+                workflowRunId: $workflowRunId,
+                workflowStartedAt: (if $workflowStartedAt == "" then null else $workflowStartedAt end),
+                checks: $checks
+              }' > gallery-proposal/upstream-artifact-diagnostics.json
+          }
+
+          finalize_diagnostics() {
+            local exit_code=$?
+            trap - EXIT
+            if ! write_diagnostics; then
+              printf 'Failed to finalize upstream artifact diagnostics.\n' >&2
+            fi
+            exit "$exit_code"
+          }
+
+          if ! write_diagnostics; then
+            printf 'Failed to initialize upstream artifact diagnostics.\n' >&2
+            exit 1
+          fi
+          trap finalize_diagnostics EXIT
+
+          if [[ "$TRUSTED_REF" != refs/heads/* ]]; then
+            record_check "proposal-context" "failed" "The proposal ref is not a branch ref."
+            exit 1
+          fi
+          expected_branch="${TRUSTED_REF#refs/heads/}"
+          checkout_sha="$(git rev-parse HEAD)"
+          if [ "$checkout_sha" != "$TRUSTED_SHA" ]; then
+            record_check "proposal-context" "failed" "The checkout SHA differs from the trusted workflow SHA."
+            exit 1
+          fi
+          if ! proposal_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${PROPOSAL_RUN_ID}")"; then
+            record_check "proposal-context" "failed" "The proposal workflow run could not be read."
+            exit 1
+          fi
+          if ! workflow_started_at="$(jq -er '.run_started_at // .created_at' <<< "$proposal_run_json")"; then
+            record_check "proposal-context" "failed" "The proposal workflow start timestamp is unavailable."
+            exit 1
+          fi
+          record_check "proposal-context" "verified" "Checkout repository, branch ref, SHA, and workflow start are bound."
+
+          resolve_artifact() {
+            local name="$1"
+            local workflow_file="$2"
+            local workflow_path="$3"
+            local artifact_prefix="$4"
+            local requested_run_id="$5"
+            local destination="$6"
+            local required_files="$7"
+            local exact_files="${8:-false}"
+            local workflow_json expected_workflow_id expected_workflow_path runs_json run_id run_json
+            local run_attempt expected_artifact_name artifacts_json artifact_count artifact_json
+            local artifact_id artifact_digest zip_path actual_digest required_file file_count
+
+            if ! workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/${workflow_file}")"; then
+              record_check "$name" "failed" "Expected producer workflow could not be read."
+              return 1
+            fi
+            expected_workflow_id="$(jq -er '.id | tostring' <<< "$workflow_json")" || return 1
+            expected_workflow_path="$(jq -er '.path' <<< "$workflow_json")" || return 1
+            if [ "$expected_workflow_path" != "$workflow_path" ]; then
+              record_check "$name" "failed" "Producer workflow path does not match the expected identity."
+              return 1
+            fi
+
+            run_id="$requested_run_id"
+            if [ -z "$run_id" ]; then
+              if ! runs_json="$(gh api "repos/${GH_REPO}/actions/workflows/${workflow_file}/runs?status=completed&head_sha=${TRUSTED_SHA}&per_page=100")"; then
+                record_check "$name" "failed" "Producer runs could not be listed."
+                return 1
+              fi
+              run_id="$(jq -r \
+                --arg repository "$GH_REPO" \
+                --arg workflowId "$expected_workflow_id" \
+                --arg workflowPath "$workflow_path" \
+                --arg branch "$expected_branch" \
+                --arg sha "$TRUSTED_SHA" \
+                '[.workflow_runs[] | select(
+                  .repository.full_name == $repository and
+                  .head_repository.full_name == $repository and
+                  (.workflow_id | tostring) == $workflowId and
+                  .path == $workflowPath and
+                  .head_branch == $branch and
+                  .head_sha == $sha and
+                  .status == "completed" and
+                  .conclusion == "success"
+                )] | if length == 0 then "" else (.[0].id | tostring) end' <<< "$runs_json")"
+            fi
+            if [[ ! "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+              record_check "$name" "failed" "No valid exact producer run ID was supplied or discovered."
+              return 1
+            fi
+            if ! run_json="$(gh api "repos/${GH_REPO}/actions/runs/${run_id}")"; then
+              record_check "$name" "failed" "Producer run ${run_id} could not be read."
+              return 1
+            fi
+            if ! jq -e \
+              --arg repository "$GH_REPO" \
+              --arg workflowId "$expected_workflow_id" \
+              --arg workflowPath "$workflow_path" \
+              --arg branch "$expected_branch" \
+              --arg sha "$TRUSTED_SHA" \
+              '(.repository.full_name == $repository) and
+               (.head_repository.full_name == $repository) and
+               ((.workflow_id | tostring) == $workflowId) and
+               (.path == $workflowPath) and
+               (.head_branch == $branch) and
+               (.head_sha == $sha) and
+               (.status == "completed") and
+               (.conclusion == "success")' <<< "$run_json" > /dev/null; then
+              record_check "$name" "failed" "Producer run ${run_id} failed repository, workflow, ref, SHA, or success validation."
+              return 1
+            fi
+
+            run_attempt="$(jq -er '.run_attempt' <<< "$run_json")" || return 1
+            expected_artifact_name="${artifact_prefix}${run_id}-${run_attempt}"
+            if ! artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/artifacts?per_page=100")"; then
+              record_check "$name" "failed" "Artifacts for producer run ${run_id} could not be read."
+              return 1
+            fi
+            artifact_count="$(jq --arg artifactName "$expected_artifact_name" \
+              '[.artifacts[] | select(.name == $artifactName)] | length' <<< "$artifacts_json")"
+            if [ "$artifact_count" -ne 1 ]; then
+              record_check "$name" "failed" "Producer run ${run_id} does not have exactly one artifact named ${expected_artifact_name}."
+              return 1
+            fi
+            artifact_json="$(jq -c --arg artifactName "$expected_artifact_name" \
+              '.artifacts[] | select(.name == $artifactName)' <<< "$artifacts_json")"
+            if ! jq -e '
+              (.expired == false) and
+              (((.id | tostring) | test("^[1-9][0-9]*$"))) and
+              ((.digest | type) == "string") and
+              (.digest | test("^sha256:[a-f0-9]{64}$"))
+            ' <<< "$artifact_json" > /dev/null; then
+              record_check "$name" "failed" "Artifact ${expected_artifact_name} has no valid ID or SHA-256 digest, or is expired."
+              return 1
+            fi
+
+            artifact_id="$(jq -r '.id | tostring' <<< "$artifact_json")"
+            artifact_digest="$(jq -r '.digest' <<< "$artifact_json")"
+            zip_path="proposal-inputs/${name}-${artifact_id}.zip"
+            if ! gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > "$zip_path"; then
+              record_check "$name" "failed" "Artifact ${artifact_id} could not be downloaded."
+              return 1
+            fi
+            actual_digest="sha256:$(sha256sum "$zip_path" | cut -d ' ' -f 1)"
+            if [ "$actual_digest" != "$artifact_digest" ]; then
+              record_check "$name" "failed" "Artifact ${artifact_id} digest verification failed."
+              return 1
+            fi
+            if [ "$exact_files" = "true" ]; then
+              actual_entries="$(zipinfo -1 "$zip_path" | LC_ALL=C sort)"
+              expected_entries="$(tr ',' '\n' <<< "$required_files" | LC_ALL=C sort)"
+              if [ "$actual_entries" != "$expected_entries" ]; then
+                record_check "$name" "failed" "Artifact ${artifact_id} contains missing, duplicate, nested, or extra files."
+                return 1
+              fi
+            fi
+            if ! unzip -q "$zip_path" -d "$destination"; then
+              record_check "$name" "failed" "Artifact ${artifact_id} could not be extracted."
+              return 1
+            fi
+            rm -f "$zip_path"
+
+            while IFS= read -r required_file; do
+              file_count="$(find "$destination" -type f -name "$required_file" | wc -l | tr -d ' ')"
+              if [ "$file_count" -ne 1 ]; then
+                record_check "$name" "failed" "Artifact ${artifact_id} does not contain exactly one ${required_file}."
+                return 1
+              fi
+            done < <(tr ',' '\n' <<< "$required_files")
+
+            jq -nc \
+              --arg name "$name" \
+              --arg repository "$GH_REPO" \
+              --arg workflowId "$expected_workflow_id" \
+              --arg workflowPath "$workflow_path" \
+              --arg runId "$run_id" \
+              --argjson runAttempt "$run_attempt" \
+              --arg sourceRef "$TRUSTED_REF" \
+              --arg sourceSha "$TRUSTED_SHA" \
+              --arg artifactId "$artifact_id" \
+              --arg artifactName "$expected_artifact_name" \
+              --arg digest "$artifact_digest" \
+              '{
+                name: $name,
+                repository: $repository,
+                workflowId: $workflowId,
+                workflowPath: $workflowPath,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                sourceRef: $sourceRef,
+                sourceSha: $sourceSha,
+                artifactId: $artifactId,
+                artifactName: $artifactName,
+                digest: $digest
+              }' >> "$manifest_lines"
+            record_check "$name" "verified" "Producer run ${run_id}, artifact ${artifact_id}, and digest ${artifact_digest} are bound and verified."
+          }
+
+          ai_enabled="false"
+          if jq -e '
+            (.automation.ai | type) == "object" and
+            (.automation.ai | length) > 0 and
+            all(.automation.ai[]; . == true)
+          ' .github/gallery-pipeline/policy.json > /dev/null; then
+            ai_enabled="true"
+          fi
+          if [ "$ai_enabled" = "true" ] && [[ ! "$MODEL_ANALYSIS_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            record_check "modelAnalysis" "failed" "model_analysis_run_id is required when AI policy flags are enabled."
+            exit 1
+          fi
+
+          resolution_failed=0
+          resolve_artifact \
+            "discovery" \
+            "discover-content.yml" \
+            ".github/workflows/discover-content.yml" \
+            "gallery-discovery-" \
+            "$DISCOVERY_RUN_ID" \
+            "proposal-inputs/discovery" \
+            "discovery.json,candidate-gates.json" || resolution_failed=1
+          resolve_artifact \
+            "health" \
+            "scan-gallery-health.yml" \
+            ".github/workflows/scan-gallery-health.yml" \
+            "gallery-health-" \
+            "$HEALTH_RUN_ID" \
+            "proposal-inputs/health" \
+            "gallery-health-report.json,proposed-gallery-health.json,gallery-health-receipt.json" \
+            "true" || resolution_failed=1
+          resolve_artifact \
+            "freshness" \
+            "evaluate-repository-freshness.yml" \
+            ".github/workflows/evaluate-repository-freshness.yml" \
+            "gallery-freshness-" \
+            "$FRESHNESS_RUN_ID" \
+            "proposal-inputs/freshness" \
+            "gallery-freshness.json" || resolution_failed=1
+          if [ "$ai_enabled" = "true" ]; then
+            resolve_artifact \
+              "modelAnalysis" \
+              "analyze-gallery-candidates.yml" \
+              ".github/workflows/analyze-gallery-candidates.yml" \
+              "gallery-candidate-analysis-" \
+              "$MODEL_ANALYSIS_RUN_ID" \
+              "proposal-inputs/model-analysis" \
+              "model-analysis.json,model-analysis-receipt.json" \
+              "true" || resolution_failed=1
+          fi
+
+          if [ "$resolution_failed" -ne 0 ]; then
+            exit 1
+          fi
+          jq -s '.' "$manifest_lines" > proposal-inputs/upstream-artifacts.json
+          expected_artifact_count=3
+          expected_names='["discovery","freshness","health"]'
+          if [ "$ai_enabled" = "true" ]; then
+            expected_artifact_count=4
+            expected_names='["discovery","freshness","health","modelAnalysis"]'
+          fi
+          if ! jq -e \
+            --argjson expectedCount "$expected_artifact_count" \
+            --argjson expectedNames "$expected_names" '
+            length == $expectedCount and
+            (map(.name) | sort) == $expectedNames and
+            (map(.name) | unique | length) == $expectedCount and
+            all(.[];
+              (.artifactId | test("^[1-9][0-9]*$")) and
+              (.artifactName | type == "string") and
+              (.digest | test("^sha256:[a-f0-9]{64}$"))
+            )
+          ' proposal-inputs/upstream-artifacts.json > /dev/null; then
+            record_check "manifest" "failed" "The verified artifact manifest is incomplete."
+            exit 1
+          fi
+          if [ "$ai_enabled" = "true" ]; then
+            if ! node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { isDeepStrictEqual } from "node:util";
+
+          const reportBytes = readFileSync("proposal-inputs/model-analysis/model-analysis.json");
+          const report = JSON.parse(reportBytes);
+          const receipt = JSON.parse(readFileSync(
+            "proposal-inputs/model-analysis/model-analysis-receipt.json",
+            "utf8",
+          ));
+          const manifest = JSON.parse(readFileSync("proposal-inputs/upstream-artifacts.json", "utf8"));
+          const discovery = manifest.find((entry) => entry.name === "discovery");
+          const model = manifest.find((entry) => entry.name === "modelAnalysis");
+          const reportHash = `sha256:${createHash("sha256").update(reportBytes).digest("hex")}`;
+          const producerFields = [
+            "repository",
+            "workflowId",
+            "workflowPath",
+            "runId",
+            "runAttempt",
+            "sourceRef",
+            "sourceSha",
+          ];
+          const fail = (message) => {
+            process.stderr.write(`${message}\n`);
+            process.exit(1);
+          };
+          if (receipt.reportFile !== "model-analysis.json" || receipt.reportFileHash !== reportHash) {
+            fail("The model analysis receipt does not bind the downloaded report bytes.");
+          }
+          if (
+            !discovery || !model ||
+            !isDeepStrictEqual(report.provenance?.sourceDiscoveryArtifact, discovery) ||
+            !isDeepStrictEqual(receipt.provenance?.sourceDiscoveryArtifact, discovery) ||
+            !isDeepStrictEqual(receipt.provenance, report.provenance)
+          ) {
+            fail("The model analysis receipt does not bind the exact discovery artifact provenance.");
+          }
+          if (producerFields.some((field) => report.provenance?.[field] !== model[field])) {
+            fail("The model analysis report does not bind its verified producer run.");
+          }
+          NODE
+            then
+              record_check "modelAnalysis" "failed" "Model report, receipt, or discovery provenance binding is invalid."
+              exit 1
+            fi
+          fi
+          overall_status="verified"
+          echo "workflow_started_at=${workflow_started_at}" >> "$GITHUB_OUTPUT"
+          echo "model_analysis_required=${ai_enabled}" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Generate report-only catalog proposals
+        id: proposal
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRUSTED_REF: ${{ steps.trust.outputs.trusted_ref }}
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+          WORKFLOW_STARTED_AT: ${{ steps.upstream.outputs.workflow_started_at }}
+          MODEL_ANALYSIS_REQUIRED: ${{ steps.upstream.outputs.model_analysis_required }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          single_file() {
+            mapfile -t matches < <(find "$1" -type f -name "$2")
+            if [ "${#matches[@]}" -ne 1 ]; then
+              printf 'Expected exactly one %s beneath %s.\n' "$2" "$1" >&2
+              return 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          discovery="$(single_file proposal-inputs/discovery discovery.json)"
+          candidate_gates="$(single_file proposal-inputs/discovery candidate-gates.json)"
+          health="$(single_file proposal-inputs/health proposed-gallery-health.json)"
+          health_report="$(single_file proposal-inputs/health gallery-health-report.json)"
+          health_receipt="$(single_file proposal-inputs/health gallery-health-receipt.json)"
+          freshness="$(single_file proposal-inputs/freshness gallery-freshness.json)"
+          model_analysis=""
+          model_analysis_receipt=""
+          if [ "$MODEL_ANALYSIS_REQUIRED" = "true" ]; then
+            model_analysis="$(single_file proposal-inputs/model-analysis model-analysis.json)"
+            model_analysis_receipt="$(single_file proposal-inputs/model-analysis model-analysis-receipt.json)"
+          fi
+          generated_at="$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ')"
+          args=(
+            --report-directory gallery-proposal
+            --discovery "$discovery"
+            --candidate-gates "$candidate_gates"
+            --health "$health"
+            --health-report "$health_report"
+            --health-receipt "$health_receipt"
+            --freshness "$freshness"
+            --active static/templates.json
+            --retired static/retired-templates.json
+            --exemptions .github/gallery-pipeline/exemptions.json
+            --policy .github/gallery-pipeline/policy.json
+            --analysis-schema .github/gallery-pipeline/analysis.schema.json
+            --upstream-artifacts proposal-inputs/upstream-artifacts.json
+            --run-id "proposal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --generated-at "$generated_at"
+            --workflow-started-at "$WORKFLOW_STARTED_AT"
+            --trusted-repository "$GITHUB_REPOSITORY"
+            --trusted-ref "$TRUSTED_REF"
+            --trusted-sha "$TRUSTED_SHA"
+          )
+          if [ "$MODEL_ANALYSIS_REQUIRED" = "true" ]; then
+            args+=(
+              --model-analysis "$model_analysis"
+              --model-analysis-receipt "$model_analysis_receipt"
+            )
+          fi
+          set +e
+          npm run gallery:propose -- "${args[@]}"
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 2 ]; then
+            exit "$exit_code"
+          fi
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize proposal stage
+        if: always()
+        shell: bash
+        run: |
+          if [ -f gallery-proposal/proposal-report.json ]; then
+            node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const report = JSON.parse(readFileSync("gallery-proposal/proposal-report.json", "utf8"));
+              process.stdout.write(`### Gallery proposal\n\n` +
+                `- Status: ${report.status}\n` +
+                `- Plans: ${report.summary.plans}\n` +
+                `- Operations: ${report.summary.operations}\n` +
+                `- Rejected candidates: ${report.summary.rejectedCandidates}\n`);
+            ' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Gallery proposal\n\nProposal generation did not produce a report.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload proposal reports and proposed state
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gallery-proposal/
+          if-no-files-found: error
+          retention-days: 30

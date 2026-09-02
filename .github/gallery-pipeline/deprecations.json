@@ -1,0 +1,54 @@
+{
+  "$schema": "./deprecations.schema.json",
+  "version": "1.0.0",
+  "rules": [
+    {
+      "id": "legacy-dotnet-documentdb-sdk",
+      "category": "legacy-sdk",
+      "ecosystem": "nuget",
+      "pattern": {
+        "kind": "regex",
+        "value": "\\bMicrosoft\\.Azure\\.DocumentDB(?:\\.Core)?\\b",
+        "flags": "i"
+      },
+      "disposition": "flag",
+      "message": "Legacy Azure Cosmos DB SDK identifier detected; require source evidence and maintainer review."
+    },
+    {
+      "id": "legacy-java-documentdb-sdks",
+      "category": "legacy-sdk",
+      "ecosystem": "maven",
+      "pattern": {
+        "kind": "regex",
+        "value": "\\bcom\\.microsoft\\.azure:(?:azure-documentdb|azure-cosmosdb)\\b",
+        "flags": "i"
+      },
+      "disposition": "flag",
+      "message": "Legacy Azure Cosmos DB SDK identifier detected; require source evidence and maintainer review."
+    },
+    {
+      "id": "legacy-node-documentdb-sdk",
+      "category": "legacy-sdk",
+      "ecosystem": "npm",
+      "pattern": {
+        "kind": "regex",
+        "value": "(?:[\"']documentdb[\"']\\s*:|(?:npm|yarn|pnpm)\\s+(?:install|add)\\s+documentdb\\b)",
+        "flags": "i"
+      },
+      "disposition": "flag",
+      "message": "Legacy Azure Cosmos DB SDK identifier detected; require source evidence and maintainer review."
+    },
+    {
+      "id": "legacy-python-pydocumentdb-sdk",
+      "category": "legacy-sdk",
+      "ecosystem": "pypi",
+      "pattern": {
+        "kind": "regex",
+        "value": "(?:^|[\\s\"'=])pydocumentdb(?:[<>=!~\\s\"']|$)",
+        "flags": "im"
+      },
+      "disposition": "flag",
+      "message": "Legacy Azure Cosmos DB SDK identifier detected; require source evidence and maintainer review."
+    }
+  ]
+}

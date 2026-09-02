@@ -1,0 +1,262 @@
+name: Persist gallery candidates to Cosmos DB
+
+on:
+  workflow_run:
+    workflows:
+      - Discover gallery content (dry run)
+    types:
+      - completed
+
+permissions: {}
+
+concurrency:
+  group: persist-gallery-candidates
+  cancel-in-progress: false
+
+jobs:
+  persist:
+    name: Persist exact trusted discovery candidates
+    if: >-
+      ${{
+        vars.ENABLE_GALLERY_COSMOS_PERSISTENCE == 'true' &&
+        github.event.workflow_run.conclusion == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gallery-pipeline-storage
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+      TRIGGER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      AZURE_COSMOS_ENDPOINT: ${{ vars.AZURE_COSMOS_ENDPOINT }}
+      AZURE_COSMOS_DATABASE: ${{ vars.AZURE_COSMOS_DATABASE }}
+      AZURE_COSMOS_CANDIDATE_CONTAINER: ${{ vars.AZURE_COSMOS_CANDIDATE_CONTAINER }}
+      AZURE_COSMOS_AUDIT_CONTAINER: ${{ vars.AZURE_COSMOS_AUDIT_CONTAINER }}
+      AZURE_COSMOS_CREDENTIAL: azure-cli
+    steps:
+      - name: Verify exact discovery run and artifact before OIDC
+        id: trust
+        env:
+          PERSIST_RUN_ID: ${{ github.run_id }}
+          PERSIST_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          trusted_sha="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}" --jq '.commit.sha')"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ] || \
+             [[ ! "$trusted_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "The repository or current default-branch SHA is invalid." >&2
+            exit 1
+          fi
+
+          producer_workflow="$(gh api "repos/${GH_REPO}/actions/workflows/discover-content.yml")"
+          producer_workflow_id="$(jq -er '.id | tostring' <<< "$producer_workflow")"
+          if [ "$(jq -er '.name' <<< "$producer_workflow")" != "Discover gallery content (dry run)" ] || \
+             [ "$(jq -er '.path' <<< "$producer_workflow")" != ".github/workflows/discover-content.yml" ]; then
+            echo "The discovery producer workflow identity is not trusted." >&2
+            exit 1
+          fi
+          producer_run="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$producer_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" \
+            --argjson attempt "$TRIGGER_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/discover-content.yml" and
+              (.event == "schedule" or .event == "workflow_dispatch") and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .run_attempt == $attempt and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$producer_run" > /dev/null; then
+            echo "The discovery run failed repository, workflow, ref, SHA, attempt, or success validation." >&2
+            exit 1
+          fi
+
+          persistence_workflow="$(gh api "repos/${GH_REPO}/actions/workflows/persist-gallery-candidates.yml")"
+          persistence_workflow_id="$(jq -er '.id | tostring' <<< "$persistence_workflow")"
+          persistence_run="$(gh api "repos/${GH_REPO}/actions/runs/${PERSIST_RUN_ID}")"
+          if [ "$(jq -er '.path' <<< "$persistence_workflow")" != ".github/workflows/persist-gallery-candidates.yml" ] || \
+             ! jq -e \
+               --arg repository "$GH_REPO" \
+               --arg workflowId "$persistence_workflow_id" \
+               --arg branch "$default_branch" \
+               --arg sha "$trusted_sha" \
+               --argjson attempt "$PERSIST_RUN_ATTEMPT" '
+                 .repository.full_name == $repository and
+                 .head_repository.full_name == $repository and
+                 (.workflow_id | tostring) == $workflowId and
+                 .path == ".github/workflows/persist-gallery-candidates.yml" and
+                 .event == "workflow_run" and
+                 .head_branch == $branch and
+                 .head_sha == $sha and
+                 .run_attempt == $attempt
+               ' <<< "$persistence_run" > /dev/null; then
+            echo "The persistence run failed repository, workflow, ref, SHA, or attempt validation." >&2
+            exit 1
+          fi
+
+          expected_name="gallery-discovery-${TRIGGER_RUN_ID}-${TRIGGER_RUN_ATTEMPT}"
+          artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}/artifacts?per_page=100")"
+          if [ "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name)] | length' <<< "$artifacts_json")" -ne 1 ]; then
+            echo "The discovery run must contain one exact attempt-bound artifact." >&2
+            exit 1
+          fi
+          artifact="$(jq -c --arg name "$expected_name" '.artifacts[] | select(.name == $name)' <<< "$artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type == "string") and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$artifact" > /dev/null; then
+            echo "The discovery artifact identity or digest is invalid." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -er '.id | tostring' <<< "$artifact")"
+          artifact_digest="$(jq -er '.digest' <<< "$artifact")"
+          input_directory="$RUNNER_TEMP/gallery-candidate-persistence-input"
+          rm -rf "$input_directory"
+          mkdir -p "$input_directory"
+          zip_path="$RUNNER_TEMP/gallery-discovery-${artifact_id}.zip"
+          gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > "$zip_path"
+          actual_digest="sha256:$(sha256sum "$zip_path" | cut -d ' ' -f 1)"
+          if [ "$actual_digest" != "$artifact_digest" ]; then
+            echo "The downloaded discovery artifact digest does not match GitHub metadata." >&2
+            exit 1
+          fi
+          mapfile -t entries < <(zipinfo -1 "$zip_path" | LC_ALL=C sort)
+          expected_entries=("candidate-gates.json" "discovery.json")
+          if [ "${#entries[@]}" -ne 2 ] || \
+             [ "${entries[0]}" != "${expected_entries[0]}" ] || \
+             [ "${entries[1]}" != "${expected_entries[1]}" ]; then
+            echo "The discovery artifact member allowlist is not exact." >&2
+            exit 1
+          fi
+          if zipinfo -l "$zip_path" | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The discovery artifact contains a symbolic link." >&2
+            exit 1
+          fi
+          unzip -q "$zip_path" -d "$input_directory"
+          rm -f "$zip_path"
+          for member in candidate-gates.json discovery.json; do
+            if [ ! -f "$input_directory/$member" ] || [ -L "$input_directory/$member" ]; then
+              echo "The discovery artifact contains an unsafe member." >&2
+              exit 1
+            fi
+          done
+          members="$(
+            for member in candidate-gates.json discovery.json; do
+              member_hash="sha256:$(sha256sum "$input_directory/$member" | cut -d ' ' -f 1)"
+              jq -nc --arg path "$member" --arg sha256 "$member_hash" '{path: $path, sha256: $sha256}'
+            done | jq -s 'sort_by(.path)'
+          )"
+          jq -n \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$producer_workflow_id" \
+            --arg workflowPath ".github/workflows/discover-content.yml" \
+            --arg runId "$TRIGGER_RUN_ID" \
+            --argjson runAttempt "$TRIGGER_RUN_ATTEMPT" \
+            --arg sourceRef "refs/heads/${default_branch}" \
+            --arg sourceSha "$trusted_sha" \
+            --arg artifactId "$artifact_id" \
+            --arg artifactName "$expected_name" \
+            --arg digest "$artifact_digest" \
+            --argjson members "$members" '
+              {
+                repository: $repository,
+                workflowId: $workflowId,
+                workflowPath: $workflowPath,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                sourceRef: $sourceRef,
+                sourceSha: $sourceSha,
+                artifactId: $artifactId,
+                artifactName: $artifactName,
+                digest: $digest,
+                members: $members
+              }
+            ' > "$input_directory/artifact.json"
+          echo "input_directory=${input_directory}" >> "$GITHUB_OUTPUT"
+          echo "trusted_sha=${trusted_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Confirm exact verified checkout
+        env:
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$TRUSTED_SHA" ] || exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate exact candidate payload and configuration before OIDC
+        env:
+          INPUT_DIRECTORY: ${{ steps.trust.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/gallery-cosmos/persist-candidates-cli.mjs \
+            --artifact "$INPUT_DIRECTORY/artifact.json" \
+            --discovery "$INPUT_DIRECTORY/discovery.json" \
+            --candidate-gates "$INPUT_DIRECTORY/candidate-gates.json" \
+            --dry-run > "$RUNNER_TEMP/gallery-candidate-persistence-dry-run.json"
+          jq -e '.mode == "dry-run" and .candidateCount >= 0' \
+            "$RUNNER_TEMP/gallery-candidate-persistence-dry-run.json" > /dev/null
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Persist and verify trusted candidates
+        env:
+          INPUT_DIRECTORY: ${{ steps.trust.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            --artifact "$INPUT_DIRECTORY/artifact.json"
+            --discovery "$INPUT_DIRECTORY/discovery.json"
+            --candidate-gates "$INPUT_DIRECTORY/candidate-gates.json"
+          )
+          node scripts/gallery-cosmos/persist-candidates-cli.mjs "${common[@]}" \
+            | tee "$RUNNER_TEMP/gallery-candidate-persistence-result.json"
+          node scripts/gallery-cosmos/persist-candidates-cli.mjs "${common[@]}" --verify \
+            > "$RUNNER_TEMP/gallery-candidate-persistence-verify.json"
+          jq -e '.mode == "write" and .candidateCount >= 0' \
+            "$RUNNER_TEMP/gallery-candidate-persistence-result.json" > /dev/null
+          jq -e '.mode == "verify" and .candidateCount >= 0' \
+            "$RUNNER_TEMP/gallery-candidate-persistence-verify.json" > /dev/null
+          if grep -E -q 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.' \
+            "$RUNNER_TEMP/gallery-candidate-persistence-result.json" \
+            "$RUNNER_TEMP/gallery-candidate-persistence-verify.json"; then
+            echo "Candidate persistence output contains token-shaped material." >&2
+            exit 1
+          fi

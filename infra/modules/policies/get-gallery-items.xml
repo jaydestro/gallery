@@ -1,0 +1,20 @@
+<policies>
+  <inbound>
+    <base />
+    <cache-lookup vary-by-developer="false" vary-by-developer-groups="false" caching-type="internal" downstream-caching-type="public" must-revalidate="true">
+      <vary-by-header>Accept</vary-by-header>
+      <vary-by-query-parameter>continuationToken</vary-by-query-parameter>
+      <vary-by-query-parameter>pageSize</vary-by-query-parameter>
+    </cache-lookup>
+  </inbound>
+  <backend>
+    <forward-request timeout="30" buffer-request-body="false" buffer-response="true" fail-on-error-status-code="false" />
+  </backend>
+  <outbound>
+    <cache-store duration="60" />
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

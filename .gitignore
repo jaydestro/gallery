@@ -7,6 +7,8 @@
 # Generated files
 .docusaurus
 .cache-loader
+/artifacts/
+/infra/main.json
 
 # Misc
 .DS_Store

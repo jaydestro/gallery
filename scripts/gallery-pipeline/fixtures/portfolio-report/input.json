@@ -1,0 +1,152 @@
+{
+  "asOf": "2026-08-28",
+  "catalog": [
+    {
+      "id": "first-party-agent",
+      "sourceOwner": "Microsoft",
+      "publishedAt": "2026-08-15",
+      "lifecycleStatus": "active",
+      "tags": [
+        "python",
+        "vectorcosmosnosql",
+        "langchain",
+        "ragPattern",
+        "example",
+        "microsoft"
+      ]
+    },
+    {
+      "id": "community-video",
+      "sourceOwner": null,
+      "publishedAt": "2025-08-28",
+      "lifecycleStatus": "active",
+      "tags": [
+        "typescript",
+        "vectoraisearch",
+        "agent",
+        "video",
+        "community"
+      ]
+    },
+    {
+      "id": "unknown-document",
+      "sourceOwner": null,
+      "publishedAt": null,
+      "lifecycleStatus": "needs-review",
+      "tags": [
+        "documentation"
+      ]
+    },
+    {
+      "id": "conflicting-future-sample",
+      "sourceOwner": "Contoso",
+      "publishedAt": "2027-01-01",
+      "lifecycleStatus": "active",
+      "tags": [
+        "csharp",
+        "java",
+        "vectorcosmosmongo",
+        "vectorpostrgresql",
+        "semantickernel",
+        "example",
+        "microsoft",
+        "community"
+      ]
+    }
+  ],
+  "retired": {
+    "version": "1.0.0",
+    "entries": [
+      {
+        "record": {
+          "id": "retired-sample",
+          "sourceOwner": "Microsoft",
+          "publishedAt": "2023-01-01",
+          "lifecycleStatus": "retired",
+          "tags": [
+            "python",
+            "example",
+            "microsoft"
+          ]
+        }
+      }
+    ]
+  },
+  "health": {
+    "version": "1.0.0",
+    "entries": [
+      {
+        "galleryId": "first-party-agent",
+        "status": "healthy",
+        "healthScore": 95,
+        "healthReasons": []
+      },
+      {
+        "galleryId": "community-video",
+        "status": "needs-review",
+        "healthScore": 72,
+        "healthReasons": [
+          "STALE_SOURCE"
+        ]
+      },
+      {
+        "galleryId": "conflicting-future-sample",
+        "status": "quarantined",
+        "healthScore": 40,
+        "healthReasons": [
+          "ARCHIVED_SOURCE"
+        ]
+      },
+      {
+        "galleryId": "orphaned-health-row",
+        "status": "indeterminate",
+        "healthScore": 0,
+        "healthReasons": []
+      }
+    ]
+  },
+  "trustedSources": {
+    "version": "1.0.0",
+    "sources": [
+      {
+        "id": "source-a",
+        "type": "github-organization",
+        "trustTier": "first-party",
+        "enabled": true,
+        "cadence": "weekly",
+        "ownerLabel": "Microsoft"
+      },
+      {
+        "id": "source-disabled",
+        "type": "rss-feed",
+        "trustTier": "first-party",
+        "enabled": false,
+        "cadence": "quarterly",
+        "ownerLabel": "Disabled source"
+      }
+    ]
+  },
+  "discovery": {
+    "schemaVersion": "1.0.0",
+    "status": "complete",
+    "summary": {
+      "sources": 2,
+      "candidates": 4,
+      "rejected": 8
+    },
+    "sources": [
+      {
+        "sourceRegistryId": "source-a",
+        "status": "succeeded",
+        "candidateCount": 4,
+        "rejectedCount": 6
+      },
+      {
+        "sourceRegistryId": "source-b",
+        "status": "indeterminate",
+        "candidateCount": 0,
+        "rejectedCount": 2
+      }
+    ]
+  }
+}

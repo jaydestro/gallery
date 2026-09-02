@@ -1,0 +1,374 @@
+name: Analyze trusted gallery candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      discovery_run_id:
+        description: Successful Discover gallery content run ID for this exact default-branch commit
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: gallery-candidate-analysis-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: Analyze live candidates without mutation
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.repository == github.event.repository.full_name &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: gallery-candidate-analysis
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Verify trusted default-branch SHA and discovery artifact
+        id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ANALYSIS_RUN_ID: ${{ github.run_id }}
+          ANALYSIS_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISCOVERY_RUN_ID: ${{ inputs.discovery_run_id }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$DISCOVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "discovery_run_id must be a positive integer." >&2
+            exit 1
+          fi
+
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ]; then
+            echo "The repository API identity does not match the workflow repository." >&2
+            exit 1
+          fi
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          if [ "$default_branch" != "$EVENT_DEFAULT_BRANCH" ]; then
+            echo "The event default branch does not match the repository API." >&2
+            exit 1
+          fi
+          expected_ref="refs/heads/${default_branch}"
+          if [ "$EVENT_REF" != "$expected_ref" ]; then
+            echo "The analysis run is not bound to the default branch ref." >&2
+            exit 1
+          fi
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          branch_json="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}")"
+          trusted_sha="$(jq -er '.commit.sha' <<< "$branch_json")"
+          if [[ ! "$trusted_sha" =~ ^[a-f0-9]{40}$ ]] || [ "$EVENT_SHA" != "$trusted_sha" ]; then
+            echo "The workflow SHA is not the current default-branch SHA." >&2
+            exit 1
+          fi
+
+          analysis_workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/analyze-gallery-candidates.yml")"
+          analysis_workflow_id="$(jq -er '.id | tostring' <<< "$analysis_workflow_json")"
+          if [ "$(jq -er '.path' <<< "$analysis_workflow_json")" != ".github/workflows/analyze-gallery-candidates.yml" ]; then
+            echo "The analysis workflow path does not match its expected identity." >&2
+            exit 1
+          fi
+          analysis_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${ANALYSIS_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$analysis_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" \
+            --argjson runAttempt "$ANALYSIS_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/analyze-gallery-candidates.yml" and
+              .event == "workflow_dispatch" and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .run_attempt == $runAttempt
+            ' <<< "$analysis_run_json" > /dev/null; then
+            echo "The current analysis run failed repository, workflow, ref, SHA, or attempt validation." >&2
+            exit 1
+          fi
+
+          discovery_workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/discover-content.yml")"
+          discovery_workflow_id="$(jq -er '.id | tostring' <<< "$discovery_workflow_json")"
+          if [ "$(jq -er '.path' <<< "$discovery_workflow_json")" != ".github/workflows/discover-content.yml" ]; then
+            echo "The discovery workflow path does not match its expected identity." >&2
+            exit 1
+          fi
+          discovery_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${DISCOVERY_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$discovery_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/discover-content.yml" and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$discovery_run_json" > /dev/null; then
+            echo "The discovery run failed repository, workflow, ref, SHA, or success validation." >&2
+            exit 1
+          fi
+
+          discovery_run_attempt="$(jq -er '.run_attempt' <<< "$discovery_run_json")"
+          artifact_name="gallery-discovery-${DISCOVERY_RUN_ID}-${discovery_run_attempt}"
+          artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${DISCOVERY_RUN_ID}/artifacts?per_page=100")"
+          artifact_count="$(jq --arg artifactName "$artifact_name" \
+            '[.artifacts[] | select(.name == $artifactName)] | length' <<< "$artifacts_json")"
+          if [ "$artifact_count" -ne 1 ]; then
+            echo "The discovery run must have exactly one attempt-bound discovery artifact." >&2
+            exit 1
+          fi
+          artifact_json="$(jq -c --arg artifactName "$artifact_name" \
+            '.artifacts[] | select(.name == $artifactName)' <<< "$artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type) == "string" and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$artifact_json" > /dev/null; then
+            echo "The discovery artifact is expired or lacks a valid ID and digest." >&2
+            exit 1
+          fi
+
+          artifact_id="$(jq -r '.id | tostring' <<< "$artifact_json")"
+          artifact_digest="$(jq -r '.digest' <<< "$artifact_json")"
+          inputs_directory="${RUNNER_TEMP}/gallery-candidate-analysis-inputs"
+          rm -rf "$inputs_directory"
+          mkdir -p "$inputs_directory/discovery"
+          zip_path="${RUNNER_TEMP}/gallery-discovery-${artifact_id}.zip"
+          gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > "$zip_path"
+          actual_digest="sha256:$(sha256sum "$zip_path" | cut -d ' ' -f 1)"
+          if [ "$actual_digest" != "$artifact_digest" ]; then
+            echo "The downloaded discovery artifact digest does not match the API digest." >&2
+            exit 1
+          fi
+          mapfile -t zip_entries < <(zipinfo -1 "$zip_path" | LC_ALL=C sort)
+          expected_entries=("candidate-gates.json" "discovery.json")
+          if [ "${#zip_entries[@]}" -ne 2 ] || \
+             [ "${zip_entries[0]}" != "${expected_entries[0]}" ] || \
+             [ "${zip_entries[1]}" != "${expected_entries[1]}" ]; then
+            echo "The discovery artifact must contain only the two exact report files." >&2
+            exit 1
+          fi
+          unzip -q "$zip_path" "candidate-gates.json" "discovery.json" -d "$inputs_directory/discovery"
+          rm -f "$zip_path"
+          for report_file in candidate-gates.json discovery.json; do
+            report_path="$inputs_directory/discovery/${report_file}"
+            if [ ! -f "$report_path" ] || [ -L "$report_path" ]; then
+              echo "The discovery artifact contains a non-regular report file." >&2
+              exit 1
+            fi
+          done
+          if ! jq -e '
+            .schemaVersion == "1.0.0" and .status == "complete" and
+            .mode == "dry-run" and .mutationPerformed == false and
+            (.candidates | type) == "array" and (.rejected | type) == "array" and
+            (.sources | type) == "array" and
+            .summary.sources == (.sources | length) and
+            .summary.succeededSources == .summary.sources and
+            .summary.skippedSources == 0 and .summary.indeterminateSources == 0 and
+            .summary.candidates == (.candidates | length) and
+            .summary.rejected == (.rejected | length) and
+            all(.sources[]; .queried == true and .status == "succeeded")
+          ' "$inputs_directory/discovery/discovery.json" > /dev/null; then
+            echo "Discovery report must be complete and non-mutating." >&2
+            exit 1
+          fi
+          if ! jq -e --slurpfile discovery "$inputs_directory/discovery/discovery.json" '
+            . as $report |
+            ($discovery[0]) as $source |
+            ([.eligible[].candidate.identityKey] + [.rejected[].candidateId]) as $candidateIds |
+            .schemaVersion == "2.0.0" and .status == "complete" and
+            (.coverageStatus == "complete" or .coverageStatus == "partial") and
+            .mode == "dry-run" and .mutationPerformed == false and
+            (.eligible | type) == "array" and (.rejected | type) == "array" and
+            .summary.candidates == ($source.candidates | length) and
+            .summary.selectedCandidates == .summary.candidates and
+            .summary.executedCandidateChecks == .summary.selectedCandidates and
+            .summary.executedAvailabilityChecks == .summary.availabilityChecks and
+            .summary.deadlineExceededAvailabilityChecks == 0 and
+            .summary.eligible == (.eligible | length) and
+            .summary.rejected == (.rejected | length) and
+            .summary.eligible + .summary.rejected == .summary.candidates and
+            ($candidateIds | length) == .summary.candidates and
+            ($candidateIds | unique | length) == .summary.candidates and
+            ($candidateIds | sort) == ([$source.candidates[].identityKey] | sort) and
+            all(.eligible[];
+              .availability.classification == "healthy" and
+              (.availability.statusCode >= 200 and .availability.statusCode < 300) and
+              .availability.statusCode != 206 and .availability.reasonCode == null
+            ) and
+            ((.summary.indeterminateAvailabilityChecks == 0 and .coverageStatus == "complete") or
+             (.summary.indeterminateAvailabilityChecks > 0 and .coverageStatus == "partial"))
+          ' "$inputs_directory/discovery/candidate-gates.json" > /dev/null; then
+            echo "Candidate gates must have complete execution and an exact candidate partition." >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg name "discovery" \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$discovery_workflow_id" \
+            --arg workflowPath ".github/workflows/discover-content.yml" \
+            --arg runId "$DISCOVERY_RUN_ID" \
+            --argjson runAttempt "$discovery_run_attempt" \
+            --arg sourceRef "$expected_ref" \
+            --arg sourceSha "$trusted_sha" \
+            --arg artifactId "$artifact_id" \
+            --arg artifactName "$artifact_name" \
+            --arg digest "$artifact_digest" '
+              {
+                name: $name,
+                repository: $repository,
+                workflowId: $workflowId,
+                workflowPath: $workflowPath,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                sourceRef: $sourceRef,
+                sourceSha: $sourceSha,
+                artifactId: $artifactId,
+                artifactName: $artifactName,
+                digest: $digest
+              }
+            ' > "$inputs_directory/source-discovery-artifact.json"
+          echo "analysis_workflow_id=${analysis_workflow_id}" >> "$GITHUB_OUTPUT"
+          echo "inputs_directory=${inputs_directory}" >> "$GITHUB_OUTPUT"
+          echo "trusted_ref=${expected_ref}" >> "$GITHUB_OUTPUT"
+          echo "trusted_sha=${trusted_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Confirm exact verified checkout
+        env:
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$TRUSTED_SHA" ]; then
+            echo "The checkout does not match the API-verified default-branch SHA." >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate enabled policy and live configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_MODE: ${{ vars.AZURE_OPENAI_API_MODE || 'responses' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${AZURE_CLIENT_ID:-}" ] || missing+=("AZURE_CLIENT_ID")
+          [ -n "${AZURE_TENANT_ID:-}" ] || missing+=("AZURE_TENANT_ID")
+          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("AZURE_SUBSCRIPTION_ID")
+          [ -n "${AZURE_OPENAI_ENDPOINT:-}" ] || missing+=("AZURE_OPENAI_ENDPOINT")
+          [ -n "${AZURE_OPENAI_DEPLOYMENT:-}" ] || missing+=("AZURE_OPENAI_DEPLOYMENT")
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Live candidate analysis requires configured variables: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          if ! jq -e '
+            (.automation.ai | type) == "object" and
+            (.automation.ai | length) > 0 and
+            all(.automation.ai[]; . == true)
+          ' .github/gallery-pipeline/policy.json > /dev/null; then
+            echo "Every AI automation policy flag must be enabled for live candidate analysis." >&2
+            exit 1
+          fi
+          case "$AZURE_OPENAI_API_MODE" in
+            responses|chat|mai-chat) ;;
+            *) echo "AZURE_OPENAI_API_MODE must be responses, chat, or mai-chat." >&2; exit 1 ;;
+          esac
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Analyze every eligible candidate
+        env:
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_MODE: ${{ vars.AZURE_OPENAI_API_MODE || 'responses' }}
+          GITHUB_WORKFLOW_ID: ${{ steps.trust.outputs.analysis_workflow_id }}
+          GITHUB_WORKFLOW_PATH: .github/workflows/analyze-gallery-candidates.yml
+          ANALYSIS_INPUTS: ${{ steps.trust.outputs.inputs_directory }}
+          TRUSTED_REF: ${{ steps.trust.outputs.trusted_ref }}
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token \
+            --resource "https://cognitiveservices.azure.com/" \
+            --query accessToken \
+            --output tsv)"
+          if [ -z "$token" ]; then
+            echo "Azure returned an empty Cognitive Services token." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          trap 'unset token' EXIT
+          AZURE_OPENAI_BEARER_TOKEN="$token" npm run gallery:analyze:candidates -- \
+            --discovery "$ANALYSIS_INPUTS/discovery/discovery.json" \
+            --candidate-gates "$ANALYSIS_INPUTS/discovery/candidate-gates.json" \
+            --active-catalog static/templates.json \
+            --retired-catalog static/retired-templates.json \
+            --policy .github/gallery-pipeline/policy.json \
+            --analysis-schema .github/gallery-pipeline/analysis.schema.json \
+            --source-discovery-artifact "$ANALYSIS_INPUTS/source-discovery-artifact.json" \
+            --output-directory artifacts/candidate-analysis \
+            --mode "$AZURE_OPENAI_API_MODE"
+          mapfile -t outputs < <(find artifacts/candidate-analysis -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          if [ "${#outputs[@]}" -ne 2 ] || \
+             [ "${outputs[0]}" != "model-analysis-receipt.json" ] || \
+             [ "${outputs[1]}" != "model-analysis.json" ]; then
+            echo "Candidate analysis must emit exactly its report and receipt." >&2
+            exit 1
+          fi
+          if grep -R -F -q -- "$token" artifacts/candidate-analysis; then
+            echo "Candidate analysis output contains credential material." >&2
+            exit 1
+          fi
+
+      - name: Upload trusted candidate analysis
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-candidate-analysis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/candidate-analysis/model-analysis.json
+            artifacts/candidate-analysis/model-analysis-receipt.json
+          if-no-files-found: error
+          retention-days: 30

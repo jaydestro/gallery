@@ -1,0 +1,125 @@
+{
+  "version": "1.1.0",
+  "labels": [
+    {
+      "candidateId": "eval-7c9e14a2",
+      "category": "verified-positive",
+      "relevanceMaterial": true,
+      "duplicateClassification": "duplicate",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-a41d8c73",
+      "category": "verified-positive",
+      "relevanceMaterial": true,
+      "duplicateClassification": "duplicate",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-2f6b90d4",
+      "category": "incidental-negative",
+      "relevanceMaterial": false,
+      "duplicateClassification": "unique",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-d85c31a7",
+      "category": "incidental-negative",
+      "relevanceMaterial": false,
+      "duplicateClassification": "unique",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-91a7e3c5",
+      "category": "exact-duplicate",
+      "relevanceMaterial": true,
+      "duplicateClassification": "duplicate",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-5d20c8f9",
+      "category": "semantic-duplicate",
+      "relevanceMaterial": true,
+      "duplicateClassification": "duplicate",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-b83f27d1",
+      "category": "unsupported-summary",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "publish",
+      "grounding": "evaluated"
+    },
+    {
+      "candidateId": "eval-3a76d0e8",
+      "category": "non-duplicate",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "publish",
+      "grounding": "evaluated"
+    },
+    {
+      "candidateId": "eval-c40e6b29",
+      "category": "video-source",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "publish",
+      "grounding": "evaluated"
+    },
+    {
+      "candidateId": "eval-68f1a4d3",
+      "category": "retired-technology",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "retire",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-f30b6e92",
+      "category": "evergreen-inactive",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "keep",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-47d9c2a6",
+      "category": "stale-inactive",
+      "relevanceMaterial": true,
+      "duplicateClassification": "unique",
+      "recommendation": "retire",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-e62a05b8",
+      "category": "canonical-duplicate",
+      "relevanceMaterial": true,
+      "duplicateClassification": "duplicate",
+      "recommendation": "reject",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-1b84f6d0",
+      "category": "duplicate-indeterminate",
+      "relevanceMaterial": true,
+      "duplicateClassification": "indeterminate",
+      "recommendation": "quarantine",
+      "grounding": "not-evaluated"
+    },
+    {
+      "candidateId": "eval-9f23d7c1",
+      "category": "prompt-injection",
+      "relevanceMaterial": false,
+      "duplicateClassification": "unique",
+      "recommendation": "quarantine",
+      "grounding": "not-evaluated"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "http": {
+    "timeoutSeconds": 1,
+    "maxRedirects": 2
+  },
+  "batching": {
+    "maxCandidatesPerRun": 20
+  },
+  "automation": {
+    "ai": {
+      "relevanceClassification": false,
+      "summaryGeneration": false,
+      "summaryGroundingVerification": false,
+      "semanticDuplicateDetection": false,
+      "freshnessAnalysis": false
+    },
+    "mutation": {
+      "catalogPublication": false,
+      "metadataUpdate": false,
+      "quarantine": false,
+      "retirement": false,
+      "restoration": false,
+      "automaticMerge": false
+    }
+  }
+}

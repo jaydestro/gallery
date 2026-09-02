@@ -1,0 +1,56 @@
+{
+  "active": [
+    {
+      "sourceType": "learn-document",
+      "sourceId": "https://learn.microsoft.com/azure/cosmos-db/nosql",
+      "canonicalUrl": "https://learn.microsoft.com/azure/cosmos-db/nosql",
+      "title": "Azure Cosmos DB for NoSQL",
+      "publisher": "Microsoft Learn",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    }
+  ],
+  "retired": [
+    {
+      "sourceType": "video",
+      "sourceId": "6IIUtEFKJec",
+      "canonicalUrl": "https://www.youtube.com/watch?v=6IIUtEFKJec",
+      "title": "Azure Cosmos DB overview",
+      "publisher": "Microsoft Mechanics",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    }
+  ],
+  "candidates": [
+    {
+      "sourceType": "learn-document",
+      "sourceId": "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/",
+      "canonicalUrl": "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/?utm_source=fixture",
+      "title": "Localized URL duplicate",
+      "publisher": "Microsoft Learn",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    },
+    {
+      "sourceType": "video",
+      "sourceId": "6IIUtEFKJec",
+      "canonicalUrl": "https://youtu.be/6IIUtEFKJec?t=30",
+      "title": "Short URL duplicate",
+      "publisher": "Microsoft Mechanics",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    },
+    {
+      "sourceType": "github-repository",
+      "sourceId": "101",
+      "canonicalUrl": "https://github.com/Azure-Samples/cosmos-demo",
+      "title": "Cosmos demo",
+      "publisher": "Azure-Samples",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    },
+    {
+      "sourceType": "github-repository",
+      "sourceId": "202",
+      "canonicalUrl": "https://github.com/azure-samples/COSMOS-DEMO.git?utm_campaign=fixture",
+      "title": "Renamed Cosmos demo",
+      "publisher": "Azure-Samples",
+      "discoveredAt": "2026-08-27T12:00:00Z"
+    }
+  ]
+}

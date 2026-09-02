@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gallery AI analysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "candidateId",
+    "relevance",
+    "grounding",
+    "duplicate",
+    "quality",
+    "recommendation",
+    "reasonCodes",
+    "generatedSummary"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "candidateId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "relevance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "material",
+        "evidence",
+        "rationale"
+      ],
+      "properties": {
+        "score": {
+          "$ref": "#/$defs/score"
+        },
+        "material": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "grounding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claims"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not-evaluated",
+            "evaluated"
+          ]
+        },
+        "score": {
+          "$ref": "#/$defs/score"
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "claim",
+              "entailed",
+              "evidence"
+            ],
+            "properties": {
+              "claim": {
+                "type": "string",
+                "minLength": 1
+              },
+              "entailed": {
+                "type": "boolean"
+              },
+              "evidence": {
+                "$ref": "#/$defs/evidenceList"
+              }
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "score"
+          ],
+          "properties": {
+            "status": {
+              "const": "evaluated"
+            },
+            "score": {
+              "$ref": "#/$defs/score"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "not-evaluated"
+            },
+            "score": false,
+            "claims": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "score"
+          ],
+          "properties": {
+            "status": false,
+            "score": {
+              "$ref": "#/$defs/score"
+            }
+          }
+        }
+      ]
+    },
+    "duplicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "classification",
+        "matchedEntryId",
+        "evidence"
+      ],
+      "properties": {
+        "score": {
+          "$ref": "#/$defs/score"
+        },
+        "classification": {
+          "enum": [
+            "unique",
+            "duplicate",
+            "indeterminate"
+          ]
+        },
+        "matchedEntryId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passes",
+        "flags"
+      ],
+      "properties": {
+        "passes": {
+          "type": "boolean"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "recommendation": {
+      "enum": [
+        "publish",
+        "update",
+        "keep",
+        "reject",
+        "quarantine",
+        "retire"
+      ]
+    },
+    "reasonCodes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      },
+      "uniqueItems": true
+    },
+    "generatedSummary": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidenceList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "excerpt"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "discoveredAt": "2026-08-27T12:00:00Z",
+  "source": {
+    "id": "github-org-azure-samples",
+    "organization": "Azure-Samples",
+    "trustTier": "first-party",
+    "enabled": true
+  },
+  "repositories": [
+    {
+      "id": 1001,
+      "name": "cosmos-javascript-sample",
+      "full_name": "Azure-Samples/cosmos-javascript-sample",
+      "html_url": "https://github.com/Azure-Samples/cosmos-javascript-sample",
+      "owner": {
+        "login": "Azure-Samples",
+        "html_url": "https://github.com/Azure-Samples",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1844662?v=4"
+      },
+      "homepage": "https://learn.microsoft.com/samples/azure-samples/cosmos-javascript-sample/",
+      "description": "A database sample",
+      "private": false,
+      "disabled": false,
+      "archived": false,
+      "size": 32,
+      "default_branch": "main",
+      "created_at": "2025-04-10T08:30:00Z",
+      "pushed_at": "2026-08-20T10:00:00Z",
+      "topics": [],
+      "files": [
+        { "path": "package.json", "content": "{\"dependencies\":{\"@azure/cosmos\":\"^4.0.0\"}}" }
+      ]
+    },
+    {
+      "id": 1002,
+      "name": "cosmos-infrastructure-sample",
+      "full_name": "Azure-Samples/cosmos-infrastructure-sample",
+      "html_url": "https://github.com/Azure-Samples/cosmos-infrastructure-sample",
+      "owner": { "login": "Azure-Samples" },
+      "description": "Infrastructure sample",
+      "private": false,
+      "disabled": false,
+      "archived": false,
+      "size": 20,
+      "default_branch": "main",
+      "pushed_at": "2026-08-21T10:00:00Z",
+      "topics": [],
+      "files": [
+        { "path": "infra/main.bicep", "content": "resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = { name: 'demo' }" }
+      ]
+    },
+    {
+      "id": 1003,
+      "name": "cosmos-client-sample",
+      "full_name": "Azure-Samples/cosmos-client-sample",
+      "html_url": "https://github.com/Azure-Samples/cosmos-client-sample",
+      "owner": { "login": "Azure-Samples" },
+      "description": "Client sample",
+      "private": false,
+      "disabled": false,
+      "archived": false,
+      "size": 18,
+      "default_branch": "main",
+      "pushed_at": "2026-08-22T10:00:00Z",
+      "topics": [],
+      "files": [
+        { "path": "src/client.js", "content": "const client = new CosmosClient(process.env.COSMOS_ENDPOINT);" }
+      ]
+    },
+    {
+      "id": 1004,
+      "name": "metadata-corroborated-sample",
+      "full_name": "Azure-Samples/metadata-corroborated-sample",
+      "html_url": "https://github.com/Azure-Samples/metadata-corroborated-sample",
+      "owner": { "login": "Azure-Samples" },
+      "description": "Shows Azure Cosmos DB data access.",
+      "readme": "Follow the Azure Cosmos DB guide.",
+      "private": false,
+      "disabled": false,
+      "archived": false,
+      "size": 10,
+      "default_branch": "main",
+      "pushed_at": "2026-08-23T10:00:00Z",
+      "topics": ["azure-cosmos-db"],
+      "files": []
+    },
+    {
+      "id": 1005,
+      "name": "cosmos-keyword-only",
+      "full_name": "Azure-Samples/cosmos-keyword-only",
+      "html_url": "https://github.com/Azure-Samples/cosmos-keyword-only",
+      "owner": { "login": "Azure-Samples" },
+      "description": "Generic sample",
+      "private": false,
+      "disabled": false,
+      "archived": false,
+      "size": 10,
+      "default_branch": "main",
+      "pushed_at": "2026-08-24T10:00:00Z",
+      "topics": [],
+      "files": []
+    }
+  ]
+}

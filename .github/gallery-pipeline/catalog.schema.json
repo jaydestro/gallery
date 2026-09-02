@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gallery-pipeline:schema:catalog:2.0.0",
+  "title": "Gallery catalog",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/catalogRecord"
+  },
+  "$defs": {
+    "catalogRecord": {
+      "$ref": "#/$defs/v2Record"
+    },
+    "v2Record": {
+      "title": "Gallery record v2",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "summary",
+        "preview",
+        "launchUrl",
+        "canonicalSource",
+        "sourceType",
+        "author",
+        "sourceOwner",
+        "website",
+        "tags",
+        "publishedAt",
+        "dateAdded",
+        "lastVerified",
+        "lifecycleStatus"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preview": {
+          "type": "string",
+          "minLength": 1
+        },
+        "launchUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "canonicalSource": {
+          "type": "string",
+          "format": "uri"
+        },
+        "sourceType": {
+          "enum": [
+            "github-repository",
+            "github-path",
+            "learn-document",
+            "blog-post",
+            "video",
+            "tool",
+            "other"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceOwner": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "website": {
+          "type": "string",
+          "format": "uri"
+        },
+        "tags": {
+          "$ref": "#/$defs/tags"
+        },
+        "publishedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date"
+            },
+            {
+              "type": "string",
+              "format": "date-time"
+            }
+          ]
+        },
+        "dateAdded": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastVerified": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lifecycleStatus": {
+          "enum": [
+            "active",
+            "needs-review",
+            "quarantined",
+            "retired"
+          ]
+        },
+        "supersededBy": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}

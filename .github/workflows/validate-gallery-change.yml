@@ -1,0 +1,70 @@
+name: Validate gallery change
+
+on:
+  pull_request:
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-gallery-change-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Test, validate, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: true
+      TZ: UTC
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate catalog replay proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              base_ref="$(node -p "require(process.env.GITHUB_EVENT_PATH).pull_request.base.sha")"
+              ;;
+            merge_group)
+              base_ref="$(node -p "require(process.env.GITHUB_EVENT_PATH).merge_group.base_sha")"
+              ;;
+            *)
+              base_ref="HEAD^"
+              ;;
+          esac
+          mapfile -d '' changed_paths < <(git diff --name-only --no-renames -z "${base_ref}...HEAD" --)
+          validator_args=(--base "$base_ref" --changed-paths-complete)
+          for changed_path in "${changed_paths[@]}"; do
+            validator_args+=(--changed-path "$changed_path")
+          done
+          node scripts/gallery-pipeline/validate-catalog-diff.mjs "${validator_args[@]}"
+
+      - name: Run gallery tests
+        run: npm run gallery:test
+
+      - name: Validate gallery
+        run: npm run gallery:validate
+
+      - name: Build site
+        run: npm run build

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Retired gallery entries",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "version",
+    "entries"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/retiredEntry"
+      }
+    }
+  },
+  "$defs": {
+    "retiredEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "retiredAt",
+        "retentionUntil",
+        "reasonCodes",
+        "evidence",
+        "supersededBy",
+        "decisionRunUrl",
+        "decisionPullRequestUrl"
+      ],
+      "properties": {
+        "record": {
+          "$ref": "urn:gallery-pipeline:schema:catalog:2.0.0#/$defs/catalogRecord"
+        },
+        "retiredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "retentionUntil": {
+          "type": "string",
+          "format": "date"
+        },
+        "reasonCodes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "observedAt",
+              "source",
+              "reason"
+            ],
+            "properties": {
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "source": {
+                "type": "string",
+                "format": "uri"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "supersededBy": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decisionRunUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "decisionPullRequestUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    }
+  }
+}

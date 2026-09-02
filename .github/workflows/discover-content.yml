@@ -1,0 +1,135 @@
+name: Discover gallery content (dry run)
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gallery-discovery-dry-run
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Discover and gate content without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Initialize diagnostic report envelopes
+        run: |
+          node --input-type=module <<'NODE'
+          import {
+            appendFileSync,
+            mkdirSync,
+            readFileSync,
+            renameSync,
+            rmSync,
+            writeFileSync,
+          } from "node:fs";
+
+          const reportDirectory = "gallery-reports";
+          const timestamp = new Date().toISOString();
+          const discovery = {
+            schemaVersion: "1.0.0",
+            mode: "dry-run",
+            mutationPerformed: false,
+            status: "partial",
+            startedAt: timestamp,
+            completedAt: timestamp,
+            summary: {
+              sources: 0,
+              succeededSources: 0,
+              skippedSources: 0,
+              indeterminateSources: 0,
+              candidates: 0,
+              rejected: 0,
+            },
+            candidates: [],
+            rejected: [],
+            sources: [],
+            evidence: [],
+          };
+          const candidateGates = {
+            schemaVersion: "2.0.0",
+            mode: "dry-run",
+            mutationPerformed: false,
+            status: "incomplete",
+            coverageStatus: "partial",
+            startedAt: timestamp,
+            completedAt: timestamp,
+            summary: {
+              candidates: 0,
+              selectedCandidates: 0,
+              executedCandidateChecks: 0,
+              availabilityChecks: 0,
+              executedAvailabilityChecks: 0,
+              indeterminateAvailabilityChecks: 0,
+              deadlineExceededAvailabilityChecks: 0,
+              eligible: 0,
+              rejected: 0,
+            },
+            eligible: [],
+            rejected: [],
+          };
+
+          function writeJsonAtomic(fileName, value) {
+            const filePath = `${reportDirectory}/${fileName}`;
+            const temporaryPath = `${filePath}.${process.pid}.tmp`;
+            try {
+              writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+              renameSync(temporaryPath, filePath);
+            } finally {
+              rmSync(temporaryPath, { force: true });
+            }
+          }
+
+          mkdirSync(reportDirectory, { recursive: true });
+          writeJsonAtomic("discovery.json", discovery);
+          writeJsonAtomic("candidate-gates.json", candidateGates);
+
+          const policy = JSON.parse(readFileSync(".github/gallery-pipeline/policy.json", "utf8"));
+          const deadlineSeconds = policy?.discovery?.operationDeadlineSeconds;
+          if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds <= 0) {
+            throw new TypeError("policy.discovery.operationDeadlineSeconds must be positive");
+          }
+          if (!process.env.GITHUB_ENV) throw new TypeError("GITHUB_ENV is required");
+          const deadlineMilliseconds = Date.parse(timestamp) + deadlineSeconds * 1000;
+          appendFileSync(
+            process.env.GITHUB_ENV,
+            `GALLERY_DISCOVERY_DEADLINE_MILLISECONDS=${deadlineMilliseconds}\n`,
+            "utf8",
+          );
+          NODE
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Discover and gate content in report-only mode
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run gallery:discover -- --dry-run --report-directory gallery-reports
+
+      - name: Upload discovery and candidate gate reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            gallery-reports/discovery.json
+            gallery-reports/candidate-gates.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,84 @@
+{
+  "evaluatedAt": "2026-08-27T12:00:00.000Z",
+  "records": [
+    {
+      "id": "cosmos-sample",
+      "title": "Azure Cosmos DB sample",
+      "canonicalSource": "https://github.com/Example/Cosmos-Sample",
+      "sourceType": "github-repository",
+      "tags": [
+        "example"
+      ]
+    },
+    {
+      "id": "cosmos-doc",
+      "title": "Azure Cosmos DB documentation",
+      "canonicalSource": "https://learn.microsoft.com/azure/cosmos-db",
+      "sourceType": "learn-document",
+      "tags": [
+        "documentation"
+      ]
+    }
+  ],
+  "githubMetadata": [
+    {
+      "repository": {
+        "full_name": "example/cosmos-sample",
+        "html_url": "https://github.com/example/cosmos-sample",
+        "archived": false,
+        "disabled": false,
+        "private": false,
+        "default_branch": "main",
+        "license": {
+          "spdx_id": "MIT"
+        },
+        "topics": [
+          "azure-cosmos-db"
+        ]
+      },
+      "commits": [
+        {
+          "committedAt": "2026-08-20T12:00:00.000Z",
+          "author": {
+            "login": "maintainer",
+            "type": "User"
+          },
+          "files": [
+            "src/app.js"
+          ]
+        }
+      ],
+      "releases": [
+        {
+          "published_at": "2026-08-01T12:00:00.000Z"
+        }
+      ],
+      "issues": [],
+      "pulls": [],
+      "readme": "# Sample\n## Prerequisites\n## Setup\n## Cleanup",
+      "signals": {
+        "defaultBranchExists": true,
+        "readmePresent": true,
+        "prerequisitesPresent": true,
+        "setupPresent": true,
+        "cleanupPresent": true,
+        "licensePresent": true,
+        "reproducible": true,
+        "supportedRuntime": true,
+        "supportedDependencies": true,
+        "cosmosDbMaterial": true,
+        "currentProductFeature": true,
+        "currentAuthAndDeploymentGuidance": true,
+        "uniqueCoverage": true,
+        "audienceDemand": true,
+        "strategicPriority": true,
+        "noBetterReplacement": true
+      }
+    }
+  ],
+  "health": {
+    "$schema": "../.github/gallery-pipeline/health.schema.json",
+    "version": "1.0.0",
+    "entries": []
+  }
+}

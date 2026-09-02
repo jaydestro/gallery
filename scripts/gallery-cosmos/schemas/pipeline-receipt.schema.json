@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gallery-cosmos:schema:pipeline-receipt:1.0.0",
+  "title": "Durable gallery pipeline receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "schemaVersion",
+    "runKey",
+    "operationId",
+    "stage",
+    "status",
+    "recordedAt",
+    "inputHash",
+    "outputHash",
+    "policyHash",
+    "modelHash",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 1023, "pattern": "^[^/\\\\?#]+$" },
+    "type": { "const": "pipeline-receipt" },
+    "schemaVersion": { "const": "1.0.0" },
+    "runKey": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "stage": { "enum": ["collect", "review", "migrate", "publish", "query"] },
+    "status": { "enum": ["completed", "failed", "no-op"] },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "inputHash": { "$ref": "#/$defs/hash" },
+    "outputHash": {
+      "oneOf": [
+        { "$ref": "#/$defs/hash" },
+        { "type": "null" }
+      ]
+    },
+    "policyHash": {
+      "oneOf": [
+        { "$ref": "#/$defs/hash" },
+        { "type": "null" }
+      ]
+    },
+    "modelHash": {
+      "oneOf": [
+        { "$ref": "#/$defs/hash" },
+        { "type": "null" }
+      ]
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "workflowPath",
+        "sourceRef",
+        "sourceSha",
+        "runId",
+        "runAttempt",
+        "artifactDigest"
+      ],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._/-]+\\.ya?ml$" },
+        "sourceRef": { "type": "string", "pattern": "^refs/heads/\\S+$" },
+        "sourceSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "runId": { "type": "string", "minLength": 1 },
+        "runAttempt": { "type": "integer", "minimum": 1 },
+        "artifactDigest": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

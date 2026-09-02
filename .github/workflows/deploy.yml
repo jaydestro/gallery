@@ -4,45 +4,75 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-  deployments: write
+permissions: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: https://azurecosmosdb.github.io/gallery/
+    permissions:
+      contents: read
     steps:
-      # Checkout source repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
-      # Setup Node.js
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
-          cache: yarn
+          cache: npm
 
-      # Install dependencies
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: npm ci
 
-      # Build the site
+      - name: Select gallery data source
+        env:
+          COSMOS_CATALOG_ENABLED: ${{ vars.ENABLE_GALLERY_COSMOS_CATALOG }}
+          CONFIGURED_API_BASE_URL: ${{ vars.GALLERY_API_BASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${COSMOS_CATALOG_ENABLED:-false}" = "true" ]; then
+            if [ -z "${CONFIGURED_API_BASE_URL:-}" ]; then
+              echo "GALLERY_API_BASE_URL is required when the Cosmos catalog is enabled." >&2
+              exit 1
+            fi
+            case "$CONFIGURED_API_BASE_URL" in
+              https://*) ;;
+              *) echo "GALLERY_API_BASE_URL must use HTTPS." >&2; exit 1 ;;
+            esac
+            echo "GALLERY_API_BASE_URL=$CONFIGURED_API_BASE_URL" >> "$GITHUB_ENV"
+            echo "GALLERY_USE_STATIC_CATALOG=false" >> "$GITHUB_ENV"
+          else
+            echo "GALLERY_USE_STATIC_CATALOG=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Build website
-        run: yarn build
+        run: npm run build
 
-      # Deploy to gh-pages branch using PAT
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
-          personal_token: ${{ secrets.GH_PAT }}
-          publish_dir: ./build
-          publish_branch: gh-pages
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
+          path: build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

@@ -1,0 +1,28 @@
+{
+  "valid": {
+    "launchUrl": "https://Example.com/Resource/Launch?view=Full&utm_source=fixture#Overview",
+    "websiteUrls": [
+      "javascript:alert(1)",
+      "https://Publisher.Example/profile/?ref=gallery"
+    ],
+    "author": "  Example   Publisher  ",
+    "sourceOwner": null,
+    "publishedAt": "2026-08-25T09:00:00Z",
+    "previewUrls": [
+      "data:image/png;base64,unsafe",
+      "https://CDN.Example/previews/resource.png?utm_medium=fixture"
+    ]
+  },
+  "invalid": {
+    "launchUrl": "javascript:alert(1)",
+    "websiteUrls": [
+      "https://user:password@example.com/profile",
+      "http://example.com/profile"
+    ],
+    "author": "Invalid Publisher",
+    "publishedAt": "not-a-timestamp",
+    "previewUrls": [
+      "file:///tmp/preview.png"
+    ]
+  }
+}

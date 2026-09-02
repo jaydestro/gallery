@@ -1,0 +1,59 @@
+name: Scan gallery health (dry run)
+
+on:
+  schedule:
+    - cron: "43 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gallery-health-dry-run
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan health without mutation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan gallery health in dry-run mode
+        id: health
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_directory="${RUNNER_TEMP}/gallery-health-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node scripts/gallery-pipeline/scan-health.mjs \
+            --dry-run \
+            --output-directory "$artifact_directory" \
+            > /dev/null
+          printf 'artifact_directory=%s\n' "$artifact_directory" >> "$GITHUB_OUTPUT"
+
+      - name: Upload health report and proposed state
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gallery-health-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.health.outputs.artifact_directory }}/gallery-health-report.json
+            ${{ steps.health.outputs.artifact_directory }}/proposed-gallery-health.json
+            ${{ steps.health.outputs.artifact_directory }}/gallery-health-receipt.json
+          if-no-files-found: error
+          retention-days: 30

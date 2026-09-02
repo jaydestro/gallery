@@ -1,0 +1,645 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "seed": [
+    {
+      "version": "1.0.0",
+      "candidateId": "positive-vector-search",
+      "relevance": {
+        "score": 0.99,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+            "excerpt": "Azure Cosmos DB for NoSQL supports vector search over stored vectors."
+          }
+        ],
+        "rationale": "Azure Cosmos DB vector search is the central subject."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": [
+          {
+            "claim": "Azure Cosmos DB for NoSQL supports vector search over stored vectors.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+                "excerpt": "Azure Cosmos DB for NoSQL supports vector search over stored vectors."
+              }
+            ]
+          },
+          {
+            "claim": "The guide explains how to configure vector policies and issue vector queries.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+                "excerpt": "The guide covers vector policies and vector queries."
+              }
+            ]
+          }
+        ]
+      },
+      "duplicate": {
+        "score": 0.1,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "publish",
+      "reasonCodes": [
+        "MATERIAL_RELEVANCE"
+      ],
+      "generatedSummary": "Azure Cosmos DB for NoSQL supports vector search over stored vectors. The guide explains how to configure vector policies and issue vector queries."
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "positive-agent-kit",
+      "relevance": {
+        "score": 1,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit",
+            "excerpt": "Skills cover Azure Cosmos DB data modeling, partitioning, queries, and SDK practices."
+          }
+        ],
+        "rationale": "The repository is dedicated to Azure Cosmos DB agent guidance."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": [
+          {
+            "claim": "The Azure Cosmos DB Agent Kit packages guidance for AI coding agents.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit",
+                "excerpt": "The kit packages guidance for AI coding agents."
+              }
+            ]
+          },
+          {
+            "claim": "Its skills cover data modeling, partitioning, queries, and SDK practices.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit",
+                "excerpt": "Skills cover Azure Cosmos DB data modeling, partitioning, queries, and SDK practices."
+              }
+            ]
+          }
+        ]
+      },
+      "duplicate": {
+        "score": 0.15,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "publish",
+      "reasonCodes": [
+        "MATERIAL_RELEVANCE"
+      ],
+      "generatedSummary": "The Azure Cosmos DB Agent Kit packages guidance for AI coding agents. Its skills cover data modeling, partitioning, queries, and SDK practices."
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "incidental-monitoring",
+      "relevance": {
+        "score": 0.4,
+        "material": false,
+        "evidence": [
+          {
+            "url": "https://example.com/azure-observability-update",
+            "excerpt": "One list notes that Azure Cosmos DB logs can be exported."
+          }
+        ],
+        "rationale": "Azure Cosmos DB appears only as one service in a broader observability article."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "INCIDENTAL_MENTION"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "incidental-database-roundup",
+      "relevance": {
+        "score": 0.2,
+        "material": false,
+        "evidence": [
+          {
+            "url": "https://example.com/cloud-database-roundup",
+            "excerpt": "Azure Cosmos DB is one name in a table without product guidance."
+          }
+        ],
+        "rationale": "The candidate provides no substantive Azure Cosmos DB material."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "INCIDENTAL_MENTION"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "exact-duplicate-vector-search",
+      "relevance": {
+        "score": 1,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+            "excerpt": "Learn how vector search works in Azure Cosmos DB for NoSQL."
+          }
+        ],
+        "rationale": "The candidate is relevant but its canonical source already exists in the catalog."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 1,
+        "classification": "duplicate",
+        "matchedEntryId": "verified-vector-search",
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+            "excerpt": "Guidance for using vector search in Azure Cosmos DB for NoSQL."
+          }
+        ]
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "EXACT_DUPLICATE"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "semantic-duplicate-vector-search",
+      "relevance": {
+        "score": 0.99,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search-overview",
+            "excerpt": "This overview explains vector search in Azure Cosmos DB for NoSQL."
+          }
+        ],
+        "rationale": "Azure Cosmos DB vector search is the central subject."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0.96,
+        "classification": "duplicate",
+        "matchedEntryId": "verified-vector-search",
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+            "excerpt": "Guidance for using vector search in Azure Cosmos DB for NoSQL."
+          }
+        ]
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "SEMANTIC_DUPLICATE"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "unsupported-summary-agent-kit",
+      "relevance": {
+        "score": 0.99,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit-preview",
+            "excerpt": "The preview packages Azure Cosmos DB guidance for AI coding agents."
+          }
+        ],
+        "rationale": "Azure Cosmos DB agent guidance is the central subject."
+      },
+      "grounding": {
+        "score": 0.5,
+        "claims": [
+          {
+            "claim": "The preview packages Azure Cosmos DB guidance for AI coding agents.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit-preview",
+                "excerpt": "The preview packages Azure Cosmos DB guidance for AI coding agents."
+              }
+            ]
+          },
+          {
+            "claim": "It automatically deploys production databases without review.",
+            "entailed": false,
+            "evidence": []
+          }
+        ]
+      },
+      "duplicate": {
+        "score": 0.2,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": false,
+        "flags": [
+          "unsupported-summary-claim"
+        ]
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "UNSUPPORTED_SUMMARY_CLAIM"
+      ],
+      "generatedSummary": "The preview packages Azure Cosmos DB guidance for AI coding agents. It automatically deploys production databases without review."
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "current-change-feed-article",
+      "relevance": {
+        "score": 0.99,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://example.com/cosmos-db-change-feed-current",
+            "excerpt": "Azure Cosmos DB change feed records ordered changes within a logical partition."
+          }
+        ],
+        "rationale": "The article provides current Azure Cosmos DB change feed guidance."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": [
+          {
+            "claim": "Azure Cosmos DB change feed records ordered changes within a logical partition.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://example.com/cosmos-db-change-feed-current",
+                "excerpt": "Azure Cosmos DB change feed records ordered changes within a logical partition."
+              }
+            ]
+          },
+          {
+            "claim": "The article shows how change feed processors distribute work across workers.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://example.com/cosmos-db-change-feed-current",
+                "excerpt": "Change feed processors distribute work across workers by using leases."
+              }
+            ]
+          }
+        ]
+      },
+      "duplicate": {
+        "score": 0.2,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "publish",
+      "reasonCodes": [
+        "MATERIAL_RELEVANCE"
+      ],
+      "generatedSummary": "Azure Cosmos DB change feed records ordered changes within a logical partition. The article shows how change feed processors distribute work across workers."
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "current-vector-search-video",
+      "relevance": {
+        "score": 0.99,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://www.youtube.com/watch?v=AbCdEfGhI12",
+            "excerpt": "This video demonstrates vector indexing in Azure Cosmos DB for NoSQL."
+          }
+        ],
+        "rationale": "Azure Cosmos DB vector search is the video's central subject."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": [
+          {
+            "claim": "The video demonstrates vector indexing in Azure Cosmos DB for NoSQL.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://www.youtube.com/watch?v=AbCdEfGhI12",
+                "excerpt": "This video demonstrates vector indexing in Azure Cosmos DB for NoSQL."
+              }
+            ]
+          },
+          {
+            "claim": "It runs a vector query against stored embeddings.",
+            "entailed": true,
+            "evidence": [
+              {
+                "url": "https://www.youtube.com/watch?v=AbCdEfGhI12",
+                "excerpt": "It runs a vector query against stored embeddings."
+              }
+            ]
+          }
+        ]
+      },
+      "duplicate": {
+        "score": 0.12,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "publish",
+      "reasonCodes": [
+        "MATERIAL_RELEVANCE"
+      ],
+      "generatedSummary": "The video demonstrates vector indexing in Azure Cosmos DB for NoSQL. It runs a vector query against stored embeddings."
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "retired-documentdb-sdk-article",
+      "relevance": {
+        "score": 0.97,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://example.com/retired-documentdb-node-sdk",
+            "excerpt": "This article uses the retired DocumentDB Node.js SDK"
+          }
+        ],
+        "rationale": "The content concerns Azure Cosmos DB's predecessor but only teaches retired APIs."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0.1,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": false,
+        "flags": [
+          "retired-technology"
+        ]
+      },
+      "recommendation": "retire",
+      "reasonCodes": [
+        "RETIRED_TECHNOLOGY"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "evergreen-inactive-partitioning-repository",
+      "relevance": {
+        "score": 0.98,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://github.com/example/cosmos-partitioning-patterns",
+            "excerpt": "it explains durable Azure Cosmos DB partition-key selection principles"
+          }
+        ],
+        "rationale": "The guidance remains useful even though repository activity has stopped."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0.25,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "keep",
+      "reasonCodes": [
+        "EVERGREEN_REFERENCE"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "stale-inactive-documentdb-repository",
+      "relevance": {
+        "score": 0.96,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://github.com/example/legacy-documentdb-samples",
+            "excerpt": "The inactive samples require the retired DocumentDB SDK"
+          }
+        ],
+        "rationale": "The repository is product-specific but stale and tied to retired APIs."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0.1,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": false,
+        "flags": [
+          "stale",
+          "retired-technology"
+        ]
+      },
+      "recommendation": "retire",
+      "reasonCodes": [
+        "STALE_RETIRED_TECHNOLOGY"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "canonical-duplicate-agent-kit",
+      "relevance": {
+        "score": 1,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit",
+            "excerpt": "A collection of skills for AI coding agents working with Azure Cosmos DB."
+          }
+        ],
+        "rationale": "The candidate is relevant but its canonical source already exists in the catalog."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 1,
+        "classification": "duplicate",
+        "matchedEntryId": "verified-agent-kit",
+        "evidence": [
+          {
+            "url": "https://github.com/AzureCosmosDB/cosmosdb-agent-kit",
+            "excerpt": "Skills for AI coding agents that cover Azure Cosmos DB modeling, partitioning, queries, and SDK practices."
+          }
+        ]
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "reject",
+      "reasonCodes": [
+        "EXACT_DUPLICATE"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "indeterminate-vector-search-overview",
+      "relevance": {
+        "score": 0.98,
+        "material": true,
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-indexing-concepts",
+            "excerpt": "This concept page explains vector indexing options for Azure Cosmos DB for NoSQL."
+          }
+        ],
+        "rationale": "The page is materially relevant, but its distinction from the existing guide is unclear."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0.88,
+        "classification": "indeterminate",
+        "matchedEntryId": null,
+        "evidence": [
+          {
+            "url": "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search",
+            "excerpt": "Guidance for using vector search in Azure Cosmos DB for NoSQL."
+          }
+        ]
+      },
+      "quality": {
+        "passes": true,
+        "flags": []
+      },
+      "recommendation": "quarantine",
+      "reasonCodes": [
+        "DUPLICATE_INDETERMINATE"
+      ],
+      "generatedSummary": null
+    },
+    {
+      "version": "1.0.0",
+      "candidateId": "prompt-injection-incidental-article",
+      "relevance": {
+        "score": 0.1,
+        "material": false,
+        "evidence": [
+          {
+            "url": "https://example.com/prompt-injection-roundup",
+            "excerpt": "Azure Cosmos DB appears only in this instruction and is not discussed by the article."
+          }
+        ],
+        "rationale": "The only product mention is part of an instruction embedded in untrusted content."
+      },
+      "grounding": {
+        "score": 1,
+        "claims": []
+      },
+      "duplicate": {
+        "score": 0,
+        "classification": "unique",
+        "matchedEntryId": null,
+        "evidence": []
+      },
+      "quality": {
+        "passes": false,
+        "flags": [
+          "prompt-injection"
+        ]
+      },
+      "recommendation": "quarantine",
+      "reasonCodes": [
+        "PROMPT_INJECTION"
+      ],
+      "generatedSummary": null
+    }
+  ]
+}

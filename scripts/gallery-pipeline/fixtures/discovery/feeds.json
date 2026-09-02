@@ -1,0 +1,34 @@
+{
+  "discoveredAt": "2026-08-27T12:00:00Z",
+  "source": {
+    "id": "devblogs-cosmos-db-rss",
+    "endpoint": "https://devblogs.microsoft.com/cosmosdb/feed/",
+    "trustTier": "first-party",
+    "enabled": true,
+    "ownerLabel": "Azure Cosmos DB Blog"
+  },
+  "entries": [
+    {
+      "guid": "https://devblogs.microsoft.com/cosmosdb/?p=12345",
+      "link": "https://devblogs.microsoft.com/cosmosdb/vector-search-update/?utm_medium=rss&utm_source=fixture",
+      "title": "Vector search updates for Azure Cosmos DB",
+      "description": "New indexing options for Azure Cosmos DB workloads.",
+      "author": "Azure Cosmos DB Team",
+      "feedSiteUrl": "https://devblogs.microsoft.com/cosmosdb/",
+      "imageUrl": "https://devblogs.microsoft.com/cosmosdb/wp-content/uploads/sites/52/2026/08/vector-search.png",
+      "publishedAt": "2026-08-25T09:00:00Z",
+      "content": "This release adds vector indexing controls for Azure Cosmos DB."
+    },
+    {
+      "link": "https://devblogs.microsoft.com/cosmosdb/missing-guid/",
+      "title": "Entry without a stable identifier",
+      "description": "Azure Cosmos DB update."
+    },
+    {
+      "guid": "off-host",
+      "link": "https://example.com/reposted-cosmos-article",
+      "title": "Reposted Azure Cosmos DB article",
+      "description": "Not hosted by the configured feed owner."
+    }
+  ]
+}

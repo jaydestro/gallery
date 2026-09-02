@@ -1,0 +1,111 @@
+{
+  "https://api.github.com/orgs/AzureCosmosDB/repos?type=public&sort=updated&direction=desc&per_page=1&page=1": {
+    "body": [
+      {
+        "id": 7001,
+        "name": "cosmos-demo",
+        "full_name": "AzureCosmosDB/cosmos-demo",
+        "html_url": "https://github.com/AzureCosmosDB/cosmos-demo",
+        "owner": { "login": "AzureCosmosDB" },
+        "description": "An Azure Cosmos DB sample",
+        "private": false,
+        "disabled": false,
+        "archived": false,
+        "size": 20,
+        "default_branch": "main",
+        "created_at": "2026-01-02T00:00:00Z",
+        "pushed_at": "2026-08-20T00:00:00Z",
+        "topics": []
+      }
+    ]
+  },
+  "https://api.github.com/orgs/AzureCosmosDB/repos?type=public&sort=updated&direction=desc&per_page=1&page=2": {
+    "body": []
+  },
+  "https://api.github.com/search/repositories?q=cosmos+db+org%3AAzureCosmosDB&sort=updated&order=desc&per_page=1": {
+    "body": {
+      "total_count": 1,
+      "incomplete_results": false,
+      "items": [
+        {
+          "id": 7001,
+          "name": "cosmos-demo",
+          "full_name": "AzureCosmosDB/cosmos-demo",
+          "html_url": "https://github.com/AzureCosmosDB/cosmos-demo",
+          "owner": { "login": "AzureCosmosDB" },
+          "description": "An Azure Cosmos DB sample",
+          "private": false,
+          "disabled": false,
+          "archived": false,
+          "size": 20,
+          "default_branch": "main",
+          "created_at": "2026-01-02T00:00:00Z",
+          "pushed_at": "2026-08-20T00:00:00Z",
+          "topics": []
+        }
+      ]
+    }
+  },
+  "https://api.github.com/repos/AzureCosmosDB/cosmos-demo/readme": {
+    "body": {
+      "encoding": "base64",
+      "content": "QXp1cmUgQ29zbW9zIERCIHNhbXBsZS4="
+    }
+  },
+  "https://devblogs.microsoft.com/cosmosdb/feed/": {
+    "headers": { "content-type": "application/rss+xml" },
+    "body": "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Azure Cosmos DB Blog</title><item><guid>https://devblogs.microsoft.com/cosmosdb/?p=9001</guid><link>https://devblogs.microsoft.com/cosmosdb/vector-index-update/?utm_source=rss</link><title>Vector indexing in Azure Cosmos DB</title><description><![CDATA[New vector indexing controls for Azure Cosmos DB.]]></description><pubDate>Wed, 26 Aug 2026 09:00:00 GMT</pubDate></item></channel></rss>"
+  },
+  "https://learn.microsoft.com/azure/cosmos-db/sitemap.xml": {
+    "headers": { "content-type": "application/xml" },
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search</loc><lastmod>2026-08-25</lastmod></url></urlset>"
+  },
+  "https://youtube.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=PL12345678901234567890123456789012&maxResults=2&fields=nextPageToken%2Citems%28contentDetails%2FvideoId%29": {
+    "body": {
+      "items": [
+        { "contentDetails": { "videoId": "YtFixture01" } }
+      ]
+    }
+  },
+  "https://youtube.googleapis.com/youtube/v3/videos?part=contentDetails%2Csnippet&id=YtFixture01&fields=items%28id%2Csnippet%28title%2Cdescription%2CpublishedAt%2CchannelId%2CchannelTitle%2Cthumbnails%29%2CcontentDetails%2Fcaption%29": {
+    "body": {
+      "items": [
+        {
+          "id": "YtFixture01",
+          "snippet": {
+            "title": "Build with Azure Cosmos DB",
+            "description": "Create an application with Azure Cosmos DB for NoSQL.",
+            "publishedAt": "2026-08-24T15:00:00Z",
+            "channelId": "UC1234567890123456789012",
+            "channelTitle": "Microsoft Developer",
+            "thumbnails": {
+              "high": { "url": "https://i.ytimg.com/vi/YtFixture01/hqdefault.jpg" }
+            }
+          },
+          "contentDetails": { "caption": "true" }
+        }
+      ]
+    }
+  },
+  "https://github.com/AzureCosmosDB/cosmos-demo": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/vector-index-update/": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/vector-index-update": {
+    "status": 200
+  },
+  "https://devblogs.microsoft.com/cosmosdb/?p=9001": {
+    "status": 200
+  },
+  "https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search": {
+    "status": 200
+  },
+  "https://learn.microsoft.com/azure/cosmos-db/nosql/vector-search": {
+    "status": 200
+  },
+  "https://www.youtube.com/watch?v=YtFixture01": {
+    "status": 200
+  }
+}
