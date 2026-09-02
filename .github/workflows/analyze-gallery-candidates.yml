@@ -307,8 +307,8 @@ jobs:
             exit 1
           fi
           case "$AZURE_OPENAI_API_MODE" in
-            responses|chat) ;;
-            *) echo "AZURE_OPENAI_API_MODE must be responses or chat." >&2; exit 1 ;;
+            responses|chat|mai-chat) ;;
+            *) echo "AZURE_OPENAI_API_MODE must be responses, chat, or mai-chat." >&2; exit 1 ;;
           esac
 
       - name: Sign in to Azure with OIDC

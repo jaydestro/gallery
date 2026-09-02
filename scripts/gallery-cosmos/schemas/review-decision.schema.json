@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gallery-cosmos:schema:review-decision:1.0.0",
+  "title": "Gallery review decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "schemaVersion",
+    "runKey",
+    "candidateId",
+    "operationId",
+    "status",
+    "recommendation",
+    "reasonCodes",
+    "decidedAt",
+    "decisionHash",
+    "catalogItemHash",
+    "catalogSnapshotHash",
+    "policyHash",
+    "modelHash",
+    "expectedCatalogEtag",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 1023, "pattern": "^[^/\\\\?#]+$" },
+    "type": { "const": "review-decision" },
+    "schemaVersion": { "const": "1.0.0" },
+    "runKey": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "operationId": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "status": { "enum": ["approved", "rejected"] },
+    "recommendation": {
+      "enum": ["publish", "update", "keep", "reject", "quarantine", "retire", "restore"]
+    },
+    "reasonCodes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+    },
+    "decidedAt": { "type": "string", "format": "date-time" },
+    "decisionHash": { "$ref": "#/$defs/hash" },
+    "catalogItemHash": { "$ref": "#/$defs/hash" },
+    "catalogSnapshotHash": { "$ref": "#/$defs/hash" },
+    "policyHash": { "$ref": "#/$defs/hash" },
+    "modelHash": { "$ref": "#/$defs/hash" },
+    "expectedCatalogEtag": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "workflowPath",
+        "sourceRef",
+        "sourceSha",
+        "runId",
+        "runAttempt",
+        "artifactDigest"
+      ],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._/-]+\\.ya?ml$" },
+        "sourceRef": { "type": "string", "pattern": "^refs/heads/\\S+$" },
+        "sourceSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "runId": { "type": "string", "minLength": 1 },
+        "runAttempt": { "type": "integer", "minimum": 1 },
+        "artifactDigest": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

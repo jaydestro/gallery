@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gallery-cosmos:schema:review-candidate:1.0.0",
+  "title": "Gallery review candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "schemaVersion",
+    "runKey",
+    "candidateId",
+    "status",
+    "collectedAt",
+    "candidateHash",
+    "source",
+    "provenance"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/id" },
+    "type": { "const": "review-candidate" },
+    "schemaVersion": { "const": "1.0.0" },
+    "runKey": { "$ref": "#/$defs/runKey" },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "status": { "const": "pending" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "candidateHash": { "$ref": "#/$defs/hash" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sourceType",
+        "sourceId",
+        "identityKey",
+        "canonicalUrl",
+        "title",
+        "description",
+        "publisher",
+        "publishedAt",
+        "modifiedAt",
+        "discoveredAt",
+        "evidence",
+        "metadata"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "sourceType": {
+          "enum": [
+            "github-repository",
+            "github-path",
+            "learn-document",
+            "blog-post",
+            "video",
+            "tool",
+            "other"
+          ]
+        },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "identityKey": { "type": "string", "minLength": 1 },
+        "canonicalUrl": { "type": "string", "format": "uri" },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "publisher": { "type": "string", "minLength": 1 },
+        "publishedAt": {
+          "oneOf": [
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        },
+        "modifiedAt": {
+          "oneOf": [
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        },
+        "discoveredAt": { "type": "string", "format": "date-time" },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "value"],
+            "properties": {
+              "type": { "type": "string", "minLength": 1 },
+              "value": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "format": "uri" }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sourceRegistryId", "trustTier"],
+          "properties": {
+            "sourceRegistryId": { "type": "string", "minLength": 1 },
+            "trustTier": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "null" }
+              ]
+            },
+            "galleryId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+            "tags": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "launchUrl": { "type": "string", "format": "uri" },
+            "website": { "type": "string", "format": "uri" },
+            "preview": { "type": "string", "minLength": 1 },
+            "author": { "type": "string", "minLength": 1 },
+            "sourceOwner": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "null" }
+              ]
+            },
+            "publishedAt": {
+              "oneOf": [
+                { "type": "string", "format": "date-time" },
+                { "type": "null" }
+              ]
+            },
+            "feedEntryId": { "type": "string", "minLength": 1 },
+            "feedUrl": { "type": "string", "format": "uri" },
+            "repositoryId": { "type": "integer", "minimum": 1 },
+            "fullName": { "type": "string", "minLength": 1 },
+            "defaultBranch": { "type": "string", "minLength": 1 },
+            "archived": { "type": "boolean" },
+            "license": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "null" }
+              ]
+            },
+            "topics": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "latestRelease": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "null" }
+              ]
+            },
+            "strongSignalKinds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "corroboratingSignalKinds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "documentId": { "type": "string", "minLength": 1 },
+            "lastModifiedEvidence": {
+              "oneOf": [
+                { "type": "string", "format": "date-time" },
+                { "type": "null" }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 1023, "pattern": "^[^/\\\\?#]+$" },
+    "runKey": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "workflowPath",
+        "sourceRef",
+        "sourceSha",
+        "runId",
+        "runAttempt",
+        "artifactDigest"
+      ],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._/-]+\\.ya?ml$" },
+        "sourceRef": { "type": "string", "pattern": "^refs/heads/\\S+$" },
+        "sourceSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "runId": { "type": "string", "minLength": 1 },
+        "runAttempt": { "type": "integer", "minimum": 1 },
+        "artifactDigest": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

@@ -1,0 +1,187 @@
+name: Migrate gallery catalog to Cosmos DB
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: migrate-gallery-catalog
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Create-only catalog migration
+    if: >-
+      ${{
+        vars.ENABLE_GALLERY_COSMOS_CATALOG == 'true' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.repository == github.event.repository.full_name &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gallery-publication
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      AZURE_COSMOS_ENDPOINT: ${{ vars.AZURE_COSMOS_ENDPOINT }}
+      AZURE_COSMOS_DATABASE: ${{ vars.AZURE_COSMOS_DATABASE }}
+      AZURE_COSMOS_CATALOG_CONTAINER: ${{ vars.AZURE_COSMOS_CATALOG_CONTAINER }}
+      AZURE_COSMOS_PUBLIC_CONTAINER: ${{ vars.AZURE_COSMOS_PUBLIC_CONTAINER }}
+      AZURE_COSMOS_CREDENTIAL: azure-cli
+    steps:
+      - name: Verify exact default-branch run before OIDC
+        id: trust
+        env:
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ] || \
+             [ "$default_branch" != "$EVENT_DEFAULT_BRANCH" ] || \
+             [ "$EVENT_REF" != "refs/heads/${default_branch}" ]; then
+            echo "The migration is not bound to the exact repository default branch." >&2
+            exit 1
+          fi
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          trusted_sha="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}" --jq '.commit.sha')"
+          if [[ ! "$trusted_sha" =~ ^[a-f0-9]{40}$ ]] || [ "$EVENT_SHA" != "$trusted_sha" ]; then
+            echo "The migration SHA is not the current default-branch SHA." >&2
+            exit 1
+          fi
+          workflow_json="$(gh api "repos/${GH_REPO}/actions/workflows/migrate-gallery-catalog.yml")"
+          workflow_id="$(jq -er '.id | tostring' <<< "$workflow_json")"
+          if [ "$(jq -er '.path' <<< "$workflow_json")" != ".github/workflows/migrate-gallery-catalog.yml" ]; then
+            echo "The migration workflow identity is not trusted." >&2
+            exit 1
+          fi
+          run_json="$(gh api "repos/${GH_REPO}/actions/runs/${WORKFLOW_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" \
+            --argjson attempt "$WORKFLOW_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/migrate-gallery-catalog.yml" and
+              .event == "workflow_dispatch" and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .run_attempt == $attempt
+            ' <<< "$run_json" > /dev/null; then
+            echo "The migration run failed repository, workflow, ref, SHA, or attempt validation." >&2
+            exit 1
+          fi
+          echo "trusted_sha=${trusted_sha}" >> "$GITHUB_OUTPUT"
+          echo "run_started_at=$(jq -er '.run_started_at // .created_at' <<< "$run_json")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Verify source member and create exact provenance
+        env:
+          TRUSTED_SHA: ${{ steps.trust.outputs.trusted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$TRUSTED_SHA" ] || \
+             [ ! -f static/templates.json ] || [ -L static/templates.json ]; then
+            echo "The migration source checkout or member is invalid." >&2
+            exit 1
+          fi
+          source_digest="sha256:$(sha256sum static/templates.json | cut -d ' ' -f 1)"
+          jq -n \
+            --arg repository "$GH_REPO" \
+            --arg workflowPath ".github/workflows/migrate-gallery-catalog.yml" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg sourceSha "$TRUSTED_SHA" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg artifactDigest "$source_digest" '
+              {
+                repository: $repository,
+                workflowPath: $workflowPath,
+                sourceRef: $sourceRef,
+                sourceSha: $sourceSha,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                artifactDigest: $artifactDigest
+              }
+            ' > "$RUNNER_TEMP/gallery-migration-provenance.json"
+          if ! jq -e '
+            keys == ["artifactDigest","repository","runAttempt","runId","sourceRef","sourceSha","workflowPath"] and
+            (.artifactDigest | test("^sha256:[a-f0-9]{64}$"))
+          ' "$RUNNER_TEMP/gallery-migration-provenance.json" > /dev/null; then
+            echo "The migration source provenance or member digest is invalid." >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate configuration and source before OIDC
+        env:
+          PUBLISHED_AT: ${{ steps.trust.outputs.run_started_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/gallery-cosmos/migrate-catalog-cli.mjs \
+            --input static/templates.json \
+            --provenance "$RUNNER_TEMP/gallery-migration-provenance.json" \
+            --published-at "$PUBLISHED_AT" \
+            --dry-run > "$RUNNER_TEMP/gallery-migration-dry-run.json"
+          jq -e '.mode == "dry-run" and .count > 0 and (.hash | test("^sha256:[a-f0-9]{64}$"))' \
+            "$RUNNER_TEMP/gallery-migration-dry-run.json" > /dev/null
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Migrate and verify the catalog
+        env:
+          PUBLISHED_AT: ${{ steps.trust.outputs.run_started_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            --input static/templates.json
+            --provenance "$RUNNER_TEMP/gallery-migration-provenance.json"
+            --published-at "$PUBLISHED_AT"
+          )
+          node scripts/gallery-cosmos/migrate-catalog-cli.mjs "${common[@]}" \
+            | tee "$RUNNER_TEMP/gallery-migration-result.json"
+          node scripts/gallery-cosmos/migrate-catalog-cli.mjs "${common[@]}" --verify \
+            > "$RUNNER_TEMP/gallery-migration-verify.json"
+          jq -e '.mode == "write" and .count > 0 and (.hash | test("^sha256:[a-f0-9]{64}$"))' \
+            "$RUNNER_TEMP/gallery-migration-result.json" > /dev/null
+          jq -e '.mode == "verify" and .count > 0' "$RUNNER_TEMP/gallery-migration-verify.json" > /dev/null
+          if grep -E -q 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.' \
+            "$RUNNER_TEMP/gallery-migration-result.json" "$RUNNER_TEMP/gallery-migration-verify.json"; then
+            echo "Migration output contains token-shaped material." >&2
+            exit 1
+          fi

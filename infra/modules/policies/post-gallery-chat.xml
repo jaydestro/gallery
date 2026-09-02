@@ -1,0 +1,26 @@
+<policies>
+  <inbound>
+    <base />
+    <choose>
+      <when condition="@(!context.Request.Headers.GetValueOrDefault(&quot;Content-Type&quot;, &quot;&quot;).StartsWith(&quot;application/json&quot;, StringComparison.OrdinalIgnoreCase))">
+        <return-response>
+          <set-status code="415" reason="Unsupported Media Type" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>{"error":"content_type_must_be_application_json"}</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <validate-content unspecified-content-type-action="ignore" max-size="8192" size-exceeded-action="prevent" errors-variable-name="requestBodyValidation" />
+  </inbound>
+  <backend>
+    <forward-request timeout="30" buffer-request-body="true" buffer-response="true" fail-on-error-status-code="false" />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

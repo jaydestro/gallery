@@ -1,0 +1,50 @@
+<policies>
+  <inbound>
+    <base />
+    <cors allow-credentials="false" terminate-unmatched-request="true">
+      <allowed-origins>
+        <origin>__ALLOWED_ORIGIN__</origin>
+      </allowed-origins>
+      <allowed-methods preflight-result-max-age="300">
+        <method>GET</method>
+        <method>POST</method>
+        <method>OPTIONS</method>
+      </allowed-methods>
+      <allowed-headers>
+        <header>Accept</header>
+        <header>Content-Type</header>
+        <header>If-None-Match</header>
+      </allowed-headers>
+      <expose-headers>
+        <header>Cache-Control</header>
+        <header>ETag</header>
+      </expose-headers>
+    </cors>
+    <set-backend-service backend-id="__BACKEND_ID__" />
+    <authentication-managed-identity resource="__API_AUDIENCE__" ignore-error="false" />
+    <set-header name="X-Gallery-Required-Role" exists-action="override">
+      <value>Chat.Invoke</value>
+    </set-header>
+    <set-header name="X-Gallery-Client-IP" exists-action="override">
+      <value>@(context.Request.IpAddress)</value>
+    </set-header>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <set-header name="Strict-Transport-Security" exists-action="override">
+      <value>max-age=31536000; includeSubDomains</value>
+    </set-header>
+    <set-header name="X-Content-Type-Options" exists-action="override">
+      <value>nosniff</value>
+    </set-header>
+    <set-header name="Referrer-Policy" exists-action="override">
+      <value>no-referrer</value>
+    </set-header>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

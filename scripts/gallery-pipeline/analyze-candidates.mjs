@@ -23,6 +23,7 @@ const WORKFLOW_PATH = ".github/workflows/analyze-gallery-candidates.yml";
 const DISCOVERY_WORKFLOW_PATH = ".github/workflows/discover-content.yml";
 const RESPONSES_API_VERSION = "v1";
 const CHAT_API_VERSION = "2024-10-21";
+const MAI_CHAT_API_VERSION = "v1";
 const SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const GIT_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const POSITIVE_ID_PATTERN = /^[1-9][0-9]*$/;
@@ -325,12 +326,18 @@ function validateProvenance(value) {
 }
 
 function apiConfiguration(environment, mode) {
-  if (!["responses", "chat"].includes(mode)) throw inputError("API mode must be responses or chat.");
+  if (!["responses", "chat", "mai-chat"].includes(mode)) {
+    throw inputError("API mode must be responses, chat, or mai-chat.");
+  }
   return {
     endpointOriginHash: sha256(azureEndpointOrigin(environment)),
     deploymentId: requireString(environment.AZURE_OPENAI_DEPLOYMENT, "AZURE_OPENAI_DEPLOYMENT"),
     apiMode: mode,
-    apiVersion: mode === "responses" ? RESPONSES_API_VERSION : CHAT_API_VERSION,
+    apiVersion: mode === "responses"
+      ? RESPONSES_API_VERSION
+      : mode === "chat"
+        ? CHAT_API_VERSION
+        : MAI_CHAT_API_VERSION,
   };
 }
 

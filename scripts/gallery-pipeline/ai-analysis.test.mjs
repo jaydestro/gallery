@@ -118,6 +118,92 @@ test("builds an Azure chat-compatible request with the same bearer-only constrai
   assert.equal(body.response_format.json_schema.strict, true);
 });
 
+test("builds an MAI chat request with only documented fields and bearer auth", async () => {
+  const calls = [];
+  const client = createAzureOpenAIClient({
+    environment: azureEnvironment,
+    fetchImpl: successfulFetch({
+      choices: [{
+        finish_reason: "stop",
+        message: { content: "{\"ok\":true}", refusal: null },
+      }],
+    }, calls),
+    mode: "mai-chat",
+  });
+
+  const response = await client.invoke(providerRequest);
+  const request = calls[0];
+  const body = JSON.parse(request.options.body);
+
+  assert.deepEqual(response, { outputText: "{\"ok\":true}" });
+  assert.equal(request.url, "https://fixture.openai.azure.com/mai/v1/chat/completions");
+  assert.deepEqual(request.options.headers, {
+    authorization: "Bearer fixture-bearer-token",
+    "content-type": "application/json",
+  });
+  assert.equal(JSON.stringify(request).includes("must-not-be-used"), false);
+  assert.deepEqual(body, {
+    model: "gallery-evaluator",
+    messages: [
+      { role: "system", content: providerRequest.systemInstructions },
+      { role: "user", content: providerRequest.input },
+    ],
+    max_completion_tokens: providerRequest.maxOutputTokens,
+  });
+  for (const unsupportedField of ["response_format", "store", "tools", "api-version"]) {
+    assert.equal(JSON.stringify({ url: request.url, body }).includes(unsupportedField), false);
+  }
+});
+
+test("MAI chat fails closed on every non-exact response envelope", async (context) => {
+  const validChoice = {
+    finish_reason: "stop",
+    message: { content: "{\"ok\":true}", refusal: null },
+  };
+  const cases = [
+    ["no choices", { choices: [] }, "MALFORMED_MODEL_OUTPUT"],
+    ["multiple choices", { choices: [validChoice, validChoice] }, "MALFORMED_MODEL_OUTPUT"],
+    ["non-string content", {
+      choices: [{ ...validChoice, message: { content: [{ text: "{\"ok\":true}" }] } }],
+    }, "MALFORMED_MODEL_OUTPUT"],
+    ["tool calls", {
+      choices: [{
+        ...validChoice,
+        message: { content: "{\"ok\":true}", tool_calls: [{ id: "call-one" }] },
+      }],
+    }, "MALFORMED_MODEL_OUTPUT"],
+    ["refusal", {
+      choices: [{
+        ...validChoice,
+        message: { content: "{\"ok\":true}", refusal: "Request refused." },
+      }],
+    }, "MODEL_REFUSAL"],
+    ["non-stop finish reason", {
+      choices: [{ ...validChoice, finish_reason: "length" }],
+    }, "MALFORMED_MODEL_OUTPUT"],
+    ["empty content", {
+      choices: [{ ...validChoice, message: { content: "   " } }],
+    }, "MALFORMED_MODEL_OUTPUT"],
+    ["markdown fences", {
+      choices: [{ ...validChoice, message: { content: "```json\n{\"ok\":true}\n```" } }],
+    }, "MALFORMED_MODEL_OUTPUT"],
+  ];
+
+  for (const [name, responseBody, expectedCode] of cases) {
+    await context.test(name, async () => {
+      const client = createAzureOpenAIClient({
+        environment: azureEnvironment,
+        fetchImpl: successfulFetch(responseBody, []),
+        mode: "mai-chat",
+      });
+      await assert.rejects(
+        client.invoke(providerRequest),
+        (error) => error instanceof AiAnalysisError && error.code === expectedCode,
+      );
+    });
+  }
+});
+
 test("requires an HTTPS endpoint, deployment, and bearer token from environment", () => {
   assert.throws(
     () => createAzureOpenAIClient({ environment: {}, fetchImpl: async () => {} }),

@@ -3,11 +3,11 @@
  * Licensed under the MIT License.
  */
 
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useHistory, useLocation } from "@docusaurus/router";
 import { Tags, type User, type TagType } from "../data/tags";
-import { sortedUsers, unsortedUsers } from "../data/users";
-import { Text, Option, Spinner, Badge, Body1, Dropdown } from "@fluentui/react-components";
+import { GALLERY_SORT_OPTIONS, sortGalleryUsers } from "../data/galleryClient";
+import { Text, Option, Badge, Body1, Dropdown } from "@fluentui/react-components";
 import { SearchBox } from '@fluentui/react-search';
 import ShowcaseCards from "./ShowcaseCards";
 import styles from "./styles.module.css";
@@ -20,8 +20,9 @@ function restoreUserState(userState: UserState | null) {
     scrollTopPosition: 0,
     focusedElementId: undefined,
   };
-  // @ts-expect-error: if focusedElementId is undefined it returns null
-  document.getElementById(focusedElementId)?.focus();
+  if (focusedElementId) {
+    document.getElementById(focusedElementId)?.focus();
+  }
   window.scrollTo({ top: scrollTopPosition });
 }
 
@@ -34,33 +35,11 @@ function replaceSearchTags(search: string, newTags: TagType[]) {
   return searchParams.toString();
 }
 
-const SORT_BY_OPTIONS = [
-  "New to old",
-  "Old to new",
-  "Alphabetical (A - Z)",
-  "Alphabetical (Z - A)",
-];
-
 export var InputValue: string | null = null;
 export type UserState = {
   scrollTopPosition: number;
   focusedElementId: string | undefined;
 };
-
-function readSortChoice(rule: string): User[] {
-  if (rule == SORT_BY_OPTIONS[0]) {
-    const copyUnsortedUser = unsortedUsers.slice();
-    return copyUnsortedUser.reverse();
-  } else if (rule == SORT_BY_OPTIONS[1]) {
-    return unsortedUsers;
-  } else if (rule == SORT_BY_OPTIONS[2]) {
-    return sortedUsers;
-  } else if (rule == SORT_BY_OPTIONS[3]) {
-    const copySortedUser = sortedUsers.slice();
-    return copySortedUser.reverse();
-  }
-  return sortedUsers;
-}
 
 const SearchNameQueryKey = "name";
 
@@ -84,7 +63,7 @@ function FilterAppliedBar({
     const tags = readSearchTags(location.search);
     const newTags = toggleListItem(tags, tag);
     const newSearch = replaceSearchTags(location.search, newTags);
-    window.gtag('set', 'user_properties', {
+    (window as Window & { gtag?: (...args: unknown[]) => void }).gtag?.('set', 'user_properties', {
       page_location: window.location.href,
       page_path:  newTags
     });
@@ -150,26 +129,13 @@ function FilterBar(): React.JSX.Element {
         size="large"
         value={readSearchName(location.search) != null ? value : ""}
         placeholder="Search content"
-        onClear={(e) => {
-          setValue(null);
+        onChange={(_event, data) => {
+          const nextValue = data.value || null;
+          setValue(nextValue);
           const newSearch = new URLSearchParams(location.search);
           newSearch.delete(SearchNameQueryKey);
-
-          history.push({
-            ...location,
-            search: newSearch.toString(),
-            state: prepareUserState(),
-          });
-        }}
-        onChange={(e) => {
-          if (!e) {
-            return;
-          }
-          setValue(e.currentTarget.value);
-          const newSearch = new URLSearchParams(location.search);
-          newSearch.delete(SearchNameQueryKey);
-          if (e.currentTarget.value) {
-            newSearch.set(SearchNameQueryKey, e.currentTarget.value);
+          if (nextValue) {
+            newSearch.set(SearchNameQueryKey, nextValue);
           }
           history.push({
             ...location,
@@ -208,6 +174,7 @@ function filterUsers(
 }
 
 export default function ShowcaseCardPage({
+  users = [],
   setActiveTags,
   selectedTags,
   location,
@@ -216,6 +183,7 @@ export default function ShowcaseCardPage({
   readSearchTags,
   replaceSearchTags,
 }: {
+  users?: User[];
   setActiveTags: React.Dispatch<React.SetStateAction<TagType[]>>;
   selectedTags: TagType[];
   location;
@@ -225,9 +193,7 @@ export default function ShowcaseCardPage({
   replaceSearchTags: (search: string, newTags: TagType[]) => string;
 }) {
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchName, setSearchName] = useState<string | null>(null);
-  const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
   const history = useHistory();
   const searchParams = new URLSearchParams(location.search);
   const clearAll = () => {
@@ -243,11 +209,14 @@ export default function ShowcaseCardPage({
 
   useEffect(() => {
     setSelectedTags(readSearchTags(location.search));
-    setSelectedUsers(readSortChoice(selectedOptions[0]));
     setSearchName(readSearchName(location.search));
     restoreUserState(location.state);
-    setLoading(false);
-  }, [location, selectedOptions]);
+  }, [location]);
+
+  const selectedUsers = useMemo(
+    () => sortGalleryUsers(users, selectedOptions[0]),
+    [selectedOptions, users],
+  );
 
   var cards = useMemo(
     () => filterUsers(selectedUsers, selectedTags, searchName),
@@ -261,7 +230,6 @@ export default function ShowcaseCardPage({
   }, [cards]);
 
   const sortByOnSelect = (event, data) => {
-    setLoading(true);
     setSelectedOptions(data.selectedOptions);
     console.log("@@selected drop" , data);
   };
@@ -277,14 +245,14 @@ export default function ShowcaseCardPage({
           <FilterBar data-m={contentForAdobeAnalytics} />
           <Dropdown
             className={styles.sortBar}
-            defaultValue={SORT_BY_OPTIONS[0]}
+            defaultValue={GALLERY_SORT_OPTIONS[0]}
             aria-labelledby="dropdown-default"
             appearance="outline"
             size="large"
-            placeholder={SORT_BY_OPTIONS[2]}
+            placeholder={GALLERY_SORT_OPTIONS[2]}
             onOptionSelect={sortByOnSelect}
           >
-            {SORT_BY_OPTIONS.map((option) => (
+            {GALLERY_SORT_OPTIONS.map((option) => (
               <Option key={option}>{option}</Option>
             ))}
           </Dropdown>
@@ -312,15 +280,10 @@ export default function ShowcaseCardPage({
       <FilterAppliedBar
         clearAll={clearAll}
         selectedTags={selectedTags}
-        setSelectedTags={setSelectedTags}
         readSearchTags={readSearchTags}
         replaceSearchTags={replaceSearchTags}
       />
-      {loading ? (
-        <Spinner labelPosition="below" label="Loading..." />
-      ) : (
-        <ShowcaseCards filteredUsers={cards} coverPage={false} />
-      )}
+      <ShowcaseCards filteredUsers={cards} coverPage={false} />
     </>
   );
 }

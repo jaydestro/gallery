@@ -4,7 +4,7 @@
  */
 import React, { useMemo } from "react";
 import styles from "./styles.module.css";
-import { Tags, type TagType } from "../../../data/tags";
+import { Tags, openai, meta, microsoft, mistralai, type TagType } from "../../../data/tags";
 import { TagList } from "../../../data/users";
 import { sortBy } from "@site/src/utils/jsUtils";
 import { Tooltip, Button } from "@fluentui/react-components";
@@ -18,7 +18,7 @@ export default function ShowcaseCardIcon({ tags }: { tags: TagType[] }) {
     return sortBy(tagObjects, (tagObject) => TagList.indexOf(tagObject.tag));
   }, [tags]);
 
-  const uniqueModelTags = ["openai", "meta", "microsoft", "mistralai"].flatMap(
+  const uniqueModelTags = [openai, meta, microsoft, mistralai].flatMap(
     (subType) =>
       tagObjectsSorted
         .filter((tag) => tag.type === "Model" && tag.subType === subType)

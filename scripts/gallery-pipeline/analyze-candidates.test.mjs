@@ -145,6 +145,18 @@ test("analyzes every eligible candidate in sorted order and emits token-free bou
   assert.doesNotMatch(JSON.stringify({ report, receipt }), /fixture-token-must-not-escape/);
 });
 
+test("accepts mai-chat mode and records its MAI v1 configuration", async () => {
+  const input = makeCandidateAnalysisFixture(1);
+  const report = await analyzeCandidates({
+    ...input,
+    mode: "mai-chat",
+    clientFactory: (entry) => makeSuccessfulClient(entry.candidate),
+  });
+
+  assert.equal(report.configuration.apiMode, "mai-chat");
+  assert.equal(report.configuration.apiVersion, "v1");
+});
+
 test("analyzes only the healthy eligible subset and binds the exact rejected ledger", async () => {
   const input = makeCandidateAnalysisFixture(3);
   rejectCandidateAsIndeterminate(input, 1);

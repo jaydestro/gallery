@@ -446,6 +446,17 @@ function chatRequest(request) {
   };
 }
 
+function maiChatRequest(request, deployment) {
+  return {
+    model: deployment,
+    messages: [
+      { role: "system", content: request.systemInstructions },
+      { role: "user", content: request.input },
+    ],
+    max_completion_tokens: request.maxOutputTokens,
+  };
+}
+
 function responsesOutput(data) {
   const refusal = data?.refusal ?? data?.output
     ?.flatMap((item) => item?.content ?? [])
@@ -470,13 +481,54 @@ function chatOutput(data) {
   return { outputText };
 }
 
+function malformedMaiChatOutput(message) {
+  throw new AiAnalysisError("MALFORMED_MODEL_OUTPUT", message);
+}
+
+function maiChatOutput(data) {
+  if (!Array.isArray(data?.choices) || data.choices.length !== 1) {
+    malformedMaiChatOutput("MAI chat must return exactly one choice.");
+  }
+  const [choice] = data.choices;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+    malformedMaiChatOutput("MAI chat returned an invalid choice.");
+  }
+  if (choice.finish_reason !== "stop") {
+    malformedMaiChatOutput("MAI chat did not finish with stop.");
+  }
+  const message = choice.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    malformedMaiChatOutput("MAI chat returned an invalid message.");
+  }
+  if (message.refusal !== undefined && message.refusal !== null) {
+    throw new AiAnalysisError("MODEL_REFUSAL", "The model refused the analysis request.");
+  }
+  if (
+    message.tool_calls !== undefined &&
+    message.tool_calls !== null &&
+    (!Array.isArray(message.tool_calls) || message.tool_calls.length > 0)
+  ) {
+    malformedMaiChatOutput("MAI chat returned tool calls.");
+  }
+  if (typeof message.content !== "string" || message.content.trim() === "") {
+    malformedMaiChatOutput("MAI chat returned no JSON output.");
+  }
+  if (message.content.includes("```")) {
+    malformedMaiChatOutput("MAI chat returned markdown-fenced output.");
+  }
+  return { outputText: message.content };
+}
+
 export function createAzureOpenAIClient({
   environment = process.env,
   fetchImpl = globalThis.fetch,
   mode = "responses",
 } = {}) {
-  if (!["responses", "chat"].includes(mode)) {
-    throw new AiAnalysisError("AZURE_CONFIG_INVALID", "Azure client mode must be responses or chat.");
+  if (!["responses", "chat", "mai-chat"].includes(mode)) {
+    throw new AiAnalysisError(
+      "AZURE_CONFIG_INVALID",
+      "Azure client mode must be responses, chat, or mai-chat.",
+    );
   }
   if (typeof fetchImpl !== "function") {
     throw new AiAnalysisError("AZURE_CONFIG_INVALID", "A fetch implementation is required.");
@@ -489,10 +541,14 @@ export function createAzureOpenAIClient({
     async invoke(request) {
       const url = mode === "responses"
         ? `${endpoint}/openai/v1/responses`
-        : `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${AZURE_CHAT_API_VERSION}`;
+        : mode === "chat"
+          ? `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${AZURE_CHAT_API_VERSION}`
+          : `${endpoint}/mai/v1/chat/completions`;
       const body = mode === "responses"
         ? responsesRequest(request, deployment)
-        : chatRequest(request);
+        : mode === "chat"
+          ? chatRequest(request)
+          : maiChatRequest(request, deployment);
       const response = await fetchImpl(url, {
         method: "POST",
         headers: {
@@ -516,7 +572,9 @@ export function createAzureOpenAIClient({
           cause: error.message,
         });
       }
-      return mode === "responses" ? responsesOutput(data) : chatOutput(data);
+      if (mode === "responses") return responsesOutput(data);
+      if (mode === "chat") return chatOutput(data);
+      return maiChatOutput(data);
     },
   });
 }

@@ -24,6 +24,7 @@ const EXACT_DUPLICATE_CATEGORIES = new Set(["exact-duplicate", "canonical-duplic
 const DUPLICATE_CLASSIFICATIONS = new Set(["unique", "duplicate", "indeterminate"]);
 const RECOMMENDATIONS = new Set(["publish", "update", "keep", "reject", "quarantine", "retire"]);
 const GROUNDING_STATUSES = new Set(["evaluated", "not-evaluated"]);
+const API_MODES = new Set(["responses", "chat", "mai-chat"]);
 
 const DEFAULT_PATHS = Object.freeze({
   candidates: path.join("scripts", "gallery-pipeline", "fixtures", "model-evaluation", "candidates.json"),
@@ -413,6 +414,9 @@ function resolvePath(rootDir, configuredPath, defaultPath) {
 }
 
 function deploymentProvenance(environment, mode) {
+  if (!API_MODES.has(mode)) {
+    throw evaluationInputError("API mode must be responses, chat, or mai-chat.");
+  }
   const deploymentId = requireString(environment.AZURE_OPENAI_DEPLOYMENT, "AZURE_OPENAI_DEPLOYMENT");
   const endpoint = requireString(environment.AZURE_OPENAI_ENDPOINT, "AZURE_OPENAI_ENDPOINT");
   let endpointOrigin;

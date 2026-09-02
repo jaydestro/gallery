@@ -11,16 +11,18 @@ import {
 } from "@fluentui/react-components";
 import styles from "./styles.module.css";
 import useBaseUrl from "@docusaurus/useBaseUrl";
-import { featuredUsers } from "../../../data/users";
 import ShowcaseCards from "../../../pages/ShowcaseCards";
 import { useColorMode } from "@docusaurus/theme-common";
+import { sortGalleryUsers } from "../../../data/galleryClient";
+import type { User } from "../../../data/tags";
 
 const title = "Azure Cosmos DB Samples Gallery";
 const description = "Your best source for patterns and content for Azure Cosmos DB";
 const subtitle = "Featured Resources";
 
-export default function ShowcaseCoverPage() {
+export default function ShowcaseCoverPage({ users }: { users: User[] }) {
   const { colorMode } = useColorMode();
+  const featuredUsers = sortGalleryUsers(users).filter((user) => user.tags.includes("featured"));
   return (
     <div className={styles.coverPageContainer}>
       <img

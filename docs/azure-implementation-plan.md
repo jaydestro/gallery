@@ -1,24 +1,35 @@
-# Azure implementation plan
+# Microsoft Foundry and Cosmos DB implementation plan
 
 ## Purpose
 
 This plan adds only the Azure resources needed by the gallery automation that
 already runs in GitHub Actions. The gallery remains a static Docusaurus site on
-GitHub Pages. Azure provides model inference, workload identity, telemetry, and,
-in a later optional phase, a chatbot API.
+GitHub Pages. Microsoft Foundry reviews collected candidates and powers the
+chatbot. Cosmos DB owns the canonical gallery catalog, review queue, and pipeline
+audit records. Azure provides workload identity, a bounded chatbot API, and
+telemetry.
 
-No existing Azure AI resource should be reused. The gallery receives a dedicated
-resource group, identities, model deployment, telemetry boundary, budget, and
-rollback path.
+No existing Foundry or Cosmos DB resource should be reused. The gallery receives
+a dedicated resource group, workload identities, Foundry model deployment,
+serverless Cosmos DB account, telemetry boundary, budget, and rollback path.
+There is no separate Azure OpenAI account. GitHub Pages loads gallery records
+through the managed API; `static/templates.json` remains migration input and an
+offline development fixture only.
 
 ## Current readiness
 
 - Target subscription: `CosmosDB-Demos-GeneralUse`.
-- Required resource providers are registered: `Microsoft.CognitiveServices`,
-  `Microsoft.Web`, and `Microsoft.Insights`.
+- Required resource providers are registered or checked before deployment:
+   `Microsoft.CognitiveServices`, `Microsoft.DocumentDB`,
+   `Microsoft.ManagedIdentity`, `Microsoft.OperationalInsights`, and
+   `Microsoft.Insights`.
 - The provisioning operator currently has subscription-level Owner and
   Contributor access.
-- East US 2 currently advertises `gpt-4.1-mini`, `gpt-4.1`, and `gpt-4o-mini`.
+- Central US passed the complete-stack availability check and now hosts
+   `MAI-Thinking-1` version `2026-06-01` with Global Standard capacity `10`.
+   It is a public-preview,
+   chat-completions-only model, so activation remains conditional on the existing
+   fail-closed benchmark.
 - The repository already exchanges GitHub OIDC tokens for short-lived Azure
   tokens and does not require an Azure client secret.
 - AI evaluation, candidate analysis, catalog mutation, and publication remain
@@ -32,20 +43,24 @@ bypass a failed preflight.
 
 ```mermaid
 flowchart LR
-    GH[GitHub Actions] --> ENV1[gallery-model-evaluation]
-    GH --> ENV2[gallery-candidate-analysis]
-    ENV1 -->|OIDC| ID1[Evaluation identity]
-    ENV2 -->|OIDC| ID2[Candidate identity]
-    ID1 -->|Inference only| AOAI[Dedicated Azure AI account]
-    ID2 -->|Inference only| AOAI
-    AOAI --> MODEL[Model deployment]
-    AOAI --> LAW[Log Analytics]
-    BUDGET[Cost budget and alerts] --> OWNER[Owner notification]
-
-    PAGES[GitHub Pages] -. optional .-> APIM[API Management Consumption]
-    APIM -. optional .-> FUNC[Functions Flex Consumption]
-    FUNC -. managed identity .-> AOAI
-    FUNC -. telemetry .-> APPINSIGHTS[Application Insights]
+   SOURCES[Trusted endpoints] --> DISCOVERY[Discovery workflow]
+   DISCOVERY --> CANDIDATES[(review-candidates)]
+   REVIEWER[Foundry review workflow] --> CANDIDATES
+   REVIEWER --> DECISIONS[(review-decisions)]
+   REVIEWER --> FOUNDRY[Microsoft Foundry]
+   FOUNDRY --> MODEL[MAI-Thinking-1]
+   PUBLISHER[Authorized publisher] --> CATALOG[(catalog-items)]
+   PUBLISHER --> PUBLIC[(public-catalog)]
+   DISCOVERY --> AUDIT[(pipeline-records)]
+   REVIEWER --> AUDIT
+   PUBLISHER --> AUDIT
+   PUBLIC --> API[Managed gallery API]
+   API --> PAGES[GitHub Pages]
+   PAGES --> CHATAPI[Managed chatbot API]
+   CHATAPI --> PUBLIC
+   CHATAPI --> FOUNDRY
+   CATALOG --> LAW[Log Analytics]
+   FOUNDRY --> LAW
 ```
 
 ## Decisions
@@ -53,15 +68,24 @@ flowchart LR
 | Area | Decision |
 | --- | --- |
 | Hosting | Keep the public gallery on GitHub Pages. |
-| Azure isolation | Create a dedicated resource group and AI account. |
-| Region | Use East US 2; use Sweden Central only after a fresh capacity and data-residency review. |
-| Initial model | Prefer `gpt-4.1-mini` version `2025-04-14`, Global Standard. |
-| Capacity fallback | Use `gpt-4o-mini` version `2024-07-18`, Global Standard if the preferred deployment has no available quota or fails the benchmark. |
-| API mode | Set `AZURE_OPENAI_API_MODE=responses`; retain `chat` only as a tested compatibility fallback. |
-| Authentication | GitHub OIDC to two user-assigned managed identities; no client secrets or API keys. |
-| Authorization | Assign `Cognitive Services OpenAI User` at the dedicated AI account scope only. |
+| Azure isolation | Create a dedicated resource group, Foundry resource, and Cosmos DB account. |
+| Region | Central US, selected from the current common availability set for Foundry, Functions, Cosmos DB, Storage, and API Management. |
+| Foundry resource | Use `kind: AIServices`. `Microsoft.CognitiveServices/accounts` is its ARM provider type, not a separate Azure OpenAI service in this design. |
+| Initial model | Deploy `MAI-Thinking-1` version `2026-06-01`, ARM SKU `GlobalStandard`, capacity `10`, as the evaluation candidate. |
+| Model fallback | Use `gpt-4o-mini` version `2024-07-18`, ARM SKU `GlobalStandard`, capacity `10` only after a reviewed MAI benchmark failure. |
+| API mode | Add `mai-chat` for `/mai/v1/chat/completions`. MAI does not document JSON-schema structured output, so strict local schema validation remains mandatory and any malformed output fails closed. |
+| Canonical store | Use Cosmos DB for NoSQL serverless with pre-created `catalog-items`, `public-catalog`, `review-candidates`, `review-decisions`, and `pipeline-records` containers; no provisioned throughput. |
+| Catalog model | Published gallery items live in `catalog-items`, partitioned by `/catalogPartition` with value `gallery`; records use a `type` discriminator and omit TTL. |
+| Review model | Candidates live in `review-candidates`; append-only Foundry decisions live in `review-decisions`; both partition by `/runKey` and omit TTL. |
+| Public projection | `public-catalog` stores versioned approved projections plus an active-snapshot marker; the API identity cannot read canonical or review containers. |
+| Audit model | Compact workflow provenance, hashes, and receipts live in `pipeline-records`, partitioned by `/runKey`, without TTL. GitHub artifacts are corroborating raw evidence under GitHub retention. |
+| Data authority | Cosmos DB is authoritative. GitHub Pages queries it through the managed API; static JSON is migration input and an offline fixture only. |
+| Authentication | GitHub OIDC and Azure managed identities only; no client secrets, account keys, or connection strings. |
+| Authorization | Collection, review decisions, publication, and API access use separate containers and roles. Only publication can create or replace canonical/public catalog items. |
 | Network posture | Public model endpoint with Entra authentication and local/key authentication disabled. Add private networking only if runners move into Azure. |
-| Audit | Keep immutable GitHub artifact receipts and send Azure resource logs and metrics to Log Analytics. |
+| Foundry data access | Reviewer and chatbot code query Cosmos with their own identities and pass bounded records to Foundry. The model receives no Cosmos credentials. |
+| Public predicate | Publisher projects only `type = catalog-item`, `publicationStatus = published`, and `lifecycleStatus IN (active, needs-review)`; Pages/chatbot read one committed projection version. |
+| Audit | Keep immutable GitHub artifact receipts and send Foundry and Cosmos DB resource logs and metrics to Log Analytics. |
 | Mutation | Keep all mutation and publisher flags disabled during Azure activation. |
 
 The initial deployment is pay-as-you-go. Provisioned throughput is unnecessary
@@ -73,16 +97,23 @@ Resolve `<suffix>` once using a short, stable, globally unique value.
 
 | Resource | Proposed name |
 | --- | --- |
-| Resource group | `rg-gallery-ai-dev-eus2` |
-| Azure AI account | `aoai-gallery-dev-<suffix>` |
-| Model deployment | `gallery-gpt-4-1-mini` |
+| Resource group | `rg-cosmos-gallery-dev` |
+| Microsoft Foundry resource | `aif-gallery-dev-<suffix>` |
+| Model deployment | `gallery-mai-thinking-1` |
+| Cosmos DB account | `cosmos-gallery-dev-<suffix>` |
+| Cosmos DB database | `gallery` |
+| Catalog container | `catalog-items` |
+| Public projection | `public-catalog` |
+| Candidate container | `review-candidates` |
+| Decision container | `review-decisions` |
+| Audit container | `pipeline-records` |
 | Evaluation identity | `id-gallery-model-eval-dev` |
 | Candidate identity | `id-gallery-candidate-analysis-dev` |
-| Log Analytics workspace | `log-gallery-ai-dev-eus2` |
-| Action group | `ag-gallery-ai-dev` |
-| Optional Function App | `func-gallery-chat-dev-<suffix>` |
-| Optional managed identity | `id-gallery-chat-dev` |
-| Optional API Management | `apim-gallery-chat-dev-<suffix>` |
+| Storage identity | `id-gallery-pipeline-writer-dev` |
+| Publication identity | `id-gallery-catalog-publisher-dev` |
+| Chatbot identity | `id-gallery-chat-dev` |
+| Log Analytics workspace | `log-gallery-platform-dev-eus2` |
+| Action group | `ag-gallery-platform-dev` |
 
 Use tags on every resource:
 
@@ -94,17 +125,18 @@ repository=https://github.com/jaydestro/gallery
 managed-by=bicep
 ```
 
-## Phase 1: AI pipeline foundation
+## Phase 1: Foundry and Cosmos DB foundation
 
 ### 1. Preflight
 
 1. Confirm the active subscription and tenant.
-2. Confirm East US 2 model availability and quota for the exact model, version,
-   and Global Standard SKU.
-3. Select a conservative starting capacity based on the current quota and
-   evaluation corpus size. Do not consume shared quota needed by another app.
-4. Record current retail pricing and set a monthly budget before enabling calls.
-5. Verify that both GitHub environments remain restricted to the protected
+2. Confirm Central US model availability and quota for `MAI-Thinking-1`, version
+   `2026-06-01`, and Global Standard SKU.
+3. Confirm Cosmos DB serverless account support and account capacity.
+4. Confirm the locked MAI deployment capacity is `10`; do not auto-substitute a
+   model, SKU, capacity, or region.
+5. Record current retail pricing and set a monthly budget before enabling calls.
+6. Verify that all GitHub write/review environments remain restricted to the protected
    default branch.
 
 Stop if any exact model/SKU check fails. A fallback is a new reviewed decision,
@@ -115,14 +147,22 @@ not an automatic deployment substitution.
 Create Bicep in a follow-up implementation change. It should deploy:
 
 1. The dedicated resource group.
-2. One Azure AI Services or Azure OpenAI account with local authentication
-   disabled.
+2. One Microsoft Foundry resource (`kind: AIServices`) with local authentication
+   disabled; do not create a separate Azure OpenAI account.
 3. One Global Standard model deployment.
-4. Two user-assigned managed identities.
-5. One federated identity credential on each identity.
-6. Account-scoped `Cognitive Services OpenAI User` role assignments.
-7. A Log Analytics workspace and diagnostic settings for the AI account.
-8. An action group and resource-group-scoped monthly budget alerts.
+4. One serverless Cosmos DB for NoSQL account with local authentication disabled.
+5. Database `gallery` and containers `catalog-items`, `public-catalog`,
+   `review-candidates`, `review-decisions`, and `pipeline-records`, created
+   without throughput settings.
+6. Workload identities for model evaluation, candidate review, collection/audit,
+   catalog publication, and managed API access.
+7. Exact federated identity credentials for GitHub-hosted workloads.
+8. Account-scoped inference roles plus custom container-scoped Cosmos DB roles:
+   collection creates candidates/audits; review reads catalog/candidates and
+   creates decisions; publication alone mutates catalog; the API reads the
+   committed public projection only.
+9. A Log Analytics workspace and diagnostic settings for Foundry and Cosmos DB.
+10. An action group and resource-group-scoped monthly budget alerts.
 
 The Bicep deployment identity needs resource creation and role-assignment
 permissions. Runtime identities do not receive Contributor, Reader, User Access
@@ -137,6 +177,8 @@ Use issuer `https://token.actions.githubusercontent.com` and audience
 | --- | --- |
 | Evaluation | `repo:jaydestro/gallery:environment:gallery-model-evaluation` |
 | Candidate analysis | `repo:jaydestro/gallery:environment:gallery-candidate-analysis` |
+| Pipeline storage | `repo:jaydestro/gallery:environment:gallery-pipeline-storage` |
+| Catalog publication | `repo:jaydestro/gallery:environment:gallery-publication` |
 
 Environment subjects intentionally bind trust to GitHub environments rather
 than a branch subject. GitHub environment deployment policies provide the branch
@@ -145,17 +187,35 @@ ref, SHA, run, and artifact provenance.
 
 ### 4. GitHub environment configuration
 
-Set these non-secret variables in both `gallery-model-evaluation` and
-`gallery-candidate-analysis`:
+Set the existing model variables in `gallery-model-evaluation` and
+`gallery-candidate-analysis`. Their legacy `AZURE_OPENAI_*` names are retained as
+an application compatibility contract, but the endpoint and deployment belong
+to the Microsoft Foundry resource:
 
 | Variable | Value |
 | --- | --- |
 | `AZURE_CLIENT_ID` | Client ID of that environment's managed identity |
 | `AZURE_TENANT_ID` | Deployment tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Target subscription ID |
-| `AZURE_OPENAI_ENDPOINT` | Root HTTPS endpoint of the dedicated AI account |
-| `AZURE_OPENAI_DEPLOYMENT` | `gallery-gpt-4-1-mini` |
-| `AZURE_OPENAI_API_MODE` | `responses` |
+| `AZURE_OPENAI_ENDPOINT` | Root HTTPS `.services.ai.azure.com` endpoint of the Foundry resource |
+| `AZURE_OPENAI_DEPLOYMENT` | `gallery-mai-thinking-1` |
+| `AZURE_OPENAI_API_MODE` | `mai-chat` |
+
+Set these non-secret variables in `gallery-pipeline-storage`:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the pipeline storage identity |
+| `AZURE_TENANT_ID` | Target tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Target subscription ID |
+| `AZURE_COSMOS_ENDPOINT` | Root HTTPS Cosmos DB account endpoint |
+| `AZURE_COSMOS_DATABASE` | `gallery` |
+| `AZURE_COSMOS_CANDIDATE_CONTAINER` | `review-candidates` |
+| `AZURE_COSMOS_DECISION_CONTAINER` | `review-decisions` |
+| `AZURE_COSMOS_AUDIT_CONTAINER` | `pipeline-records` |
+
+Publication and API workloads use the same endpoint/database with their own
+client IDs and only the container names their roles permit.
 
 Do not add an API key, client secret, bearer token, connection string, or endpoint
 path as a GitHub secret. Tokens remain ephemeral and are masked by the workflows.
@@ -176,77 +236,84 @@ then-current token prices and expected corpus token count in the deployment PR.
 The retail pricing feed did not return a reliable model-specific estimate during
 planning, so no static token price is embedded here.
 
-Retain GitHub model receipts for decision auditability. Use Azure Monitor for
-service health, request, latency, throttling, and consumption signals; do not log
-candidate payloads or model prompts.
+Cosmos `pipeline-records` is the durable audit authority for compact provenance,
+hashes, and receipts; GitHub artifacts are corroborating raw evidence subject to
+repository retention. Catalog, review, and audit records do not expire
+automatically. Use Azure Monitor for service health, request, latency,
+throttling, RU consumption, and consumption signals; do not place credentials in
+records or resource logs.
 
 ## Phase 2: Validation and staged activation
 
 Run each gate independently and stop at the first failure.
 
-1. Validate and preview the Bicep deployment.
-2. Deploy the resource group, model, identities, role assignments, diagnostics,
-   and budget.
-3. Verify local/key authentication is disabled.
-4. Verify each identity can invoke inference but cannot create deployments,
-   change RBAC, or access the other GitHub environment.
-5. Run `Evaluate gallery pipeline policy` manually on the protected default
-   branch with `ENABLE_GALLERY_MODEL_EVALUATION=false` still set.
-6. Review the model receipt against every configured threshold and prompt
-   injection fixture.
-7. Set `ENABLE_GALLERY_MODEL_EVALUATION=true` only after the benchmark passes.
-8. Run a fresh discovery workflow, then manually run trusted candidate analysis
-   against that exact run ID.
-9. Verify the candidate artifact's repository, ref, SHA, run attempt, digest,
-   schema, grounding excerpts, and complete-catalog duplicate analysis.
-10. Set `ENABLE_GALLERY_CANDIDATE_ANALYSIS=true` only after the live-candidate
-    run passes.
-11. Run discovery, health, freshness, model analysis, and proposal end to end.
-12. Confirm the proposal remains non-mutating and bounded before considering any
-    publisher activation.
+1. Build, lint, security-scan, and contract-test the Bicep locally.
+2. Do not run online validation, what-if, deployment, or GitHub environment
+   configuration until the user gives a post-risk deployment acknowledgement.
+3. Verify through contract tests that local/key authentication is disabled.
+4. Verify through contract tests that review can read catalog/candidates and
+   write decisions but cannot publish; publication alone can mutate catalog;
+   API identity can read `public-catalog` only.
+5. Run offline MAI adapter tests covering the exact endpoint, bearer auth,
+   malformed output, fenced prose, multiple choices, tool calls, truncation,
+   refusal, and schema mismatch.
+6. Run workflow security tests proving model evaluation, candidate analysis, and
+   Cosmos persistence remain disabled and cannot run from pull requests.
+7. Validate persistence against fixtures for the exact producer paths
+   `.github/workflows/discover-content.yml`,
+   `.github/workflows/scan-gallery-health.yml`,
+   `.github/workflows/evaluate-repository-freshness.yml`,
+   `.github/workflows/evaluate-pipeline-policy.yml`,
+   `.github/workflows/analyze-gallery-candidates.yml`, and
+   `.github/workflows/propose-gallery-changes.yml`. Every producer must bind the
+   repository, ref, SHA, run ID, run attempt, artifact digest, and member hashes.
+8. Verify deterministic IDs, partition keys, ETag concurrency, source
+   repository/ref/SHA/run/attempt, artifact/member hashes, TTL absence on all
+   five containers, create-not-upsert behavior, and an item-size ceiling below 2 MB.
+9. Verify `GET /gallery/items` is ordered, paginated, schema-valid, supports
+   ETag/conditional GET, and never exposes Cosmos system or internal fields.
+10. Seed all current records with create-only writes and prove source count,
+   Cosmos count, API count, and canonical SHA-256 parity before cutover.
+11. Verify publication binds decision, policy/model receipt, catalog snapshot,
+   operation ID, and ETag; matching 409 is idempotent and 412 fails stale.
+12. Verify APIM/Function authentication and enforce an 8 KiB body limit, 20
+   requests/minute and 200/day per client IP, 30-second backend timeout, at most
+   20 catalog context items, and at most 800 output tokens.
+13. Run the complete existing CI suite and confirm live mutation remains disabled.
 
 Keep these controls false throughout Azure activation:
 
 ```text
 GALLERY_AUTOMATION_ENABLED=false
-policy.aiAutomation.enabled=false
-policy.mutation.enabled=false
-policy.emergency.enabled=false
+ENABLE_GALLERY_COSMOS_PERSISTENCE=false
+ENABLE_GALLERY_COSMOS_CATALOG=false
+automation.ai.*=false
+automation.mutation.*=false
+automation.emergencyDisable=true
 ```
 
-AI enablement and mutation enablement are separate approvals. Passing model
-evaluation does not authorize catalog publication or retirement.
+Model review, Cosmos-backed catalog publication, persistence, and mutation are
+separate future approvals. This implementation leaves all of them disabled.
 
-## Phase 3: Optional chatbot
+## Chatbot access
 
-Do not deploy chatbot resources as part of the pipeline foundation. Start this
-phase only after the maintenance pipeline has stable usage and the chatbot has a
-defined user experience and abuse policy.
+GitHub Pages must never call Cosmos DB or Foundry directly. A small Azure API
+uses a managed identity to read only the committed projection from
+`public-catalog`. `GET /gallery/items` returns paginated gallery records;
+`POST /gallery/chat` selects bounded context and sends it to Foundry.
+The API returns the answer plus catalog item IDs and URLs used as evidence. It
+stores no chat history by default.
 
-Deploy:
-
-1. Azure Functions Flex Consumption running Node.js.
-2. A separate user-assigned managed identity with inference-only access to the
-   dedicated AI account.
-3. Application Insights linked to the Function App.
-4. API Management Consumption in front of the function for CORS, quotas, rate
-   limits, request-size limits, and response caching where safe.
-
-The browser calls API Management, never the model endpoint. Allow only
-`https://jaydestro.github.io` as a production origin. Enforce a small request
-body, bounded output tokens, per-client throttling, and a hard upstream timeout.
-Do not expose model credentials or Azure tokens to JavaScript.
-
-Start without Azure AI Search, Cosmos DB, or conversation persistence. The
-chatbot should answer from the published catalog payload supplied by the backend.
-Add retrieval infrastructure only after measured catalog size or answer quality
-shows it is necessary.
+Start with indexed metadata and tag filtering. Add Cosmos full-text or vector
+search only after measured chatbot quality shows a need; do not add AI Search by
+default.
 
 ## Rollback
 
 Rollback is configuration-first:
 
-1. Set both AI enable variables to `false`.
+1. Set model evaluation, candidate analysis, Cosmos persistence, and
+   Cosmos-backed catalog variables to `false`.
 2. Leave all mutation flags `false`.
 3. Remove or disable the federated identity credentials if calls must stop
    immediately.
@@ -263,11 +330,15 @@ weaken deterministic gates or trigger publication.
 - Dedicated resources are reproducibly deployed from reviewed Bicep.
 - No long-lived Azure credential exists in GitHub.
 - Each protected environment has its own identity and exact federated subject.
-- Runtime identities have inference-only access at account scope.
-- Model benchmark and prompt-injection fixtures pass on the deployed model.
-- A live candidate run passes provenance, schema, duplicate, and grounding gates.
-- Azure Monitor and budget alerts are tested.
-- The full proposal chain completes with zero mutation.
-- Rollback is exercised by disabling AI and confirming deterministic workflows
-  still pass.
-- Chatbot resources remain absent unless Phase 3 is separately approved.
+- Runtime model identities have inference-only access at Foundry account scope.
+- Cosmos DB is the canonical catalog and review store; Pages queries it through the API.
+- Collector, reviewer, publisher, and API roles are independently scoped.
+- A trusted candidate is reviewed against current catalog data before publication.
+- Catalog, review, and compact audit records do not expire automatically.
+- The chatbot accesses public catalog items through a managed backend only.
+- MAI adapter and prompt-injection fixtures pass offline; live activation remains disabled.
+- Persistence fixtures cover all trusted producer workflows and reject unknown producers.
+- Bicep validation and what-if show only planned creates in the dedicated resource group.
+- Azure Monitor and budget definitions pass deployment validation.
+- The full existing CI suite passes with zero catalog mutation.
+- Chatbot API access is bounded, evidence-returning, and stores no conversation history by default.

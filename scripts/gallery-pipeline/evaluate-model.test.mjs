@@ -391,7 +391,7 @@ async function writeJson(filePath, value) {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-test("writes token-free provenance hashes and identifiers", async () => {
+test("accepts mai-chat mode and writes token-free provenance hashes and identifiers", async () => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "gallery-model-evaluation-"));
   const fixtureCase = candidateCase("provenance-case");
   const documents = evaluationDocuments([fixtureCase], [labelFor(fixtureCase.candidateId)]);
@@ -419,6 +419,7 @@ test("writes token-free provenance hashes and identifiers", async () => {
     policyPath: "policy.json",
     outputPath,
     environment,
+    mode: "mai-chat",
     commitId: "0123456789abcdef",
     client: staticDecisionClient(),
     generatedAt: "2026-08-28T00:00:00.000Z",
@@ -428,6 +429,7 @@ test("writes token-free provenance hashes and identifiers", async () => {
   assert.equal(reportText.includes(token), false);
   assert.equal(report.provenance.commitId, "0123456789abcdef");
   assert.equal(report.provenance.deployment.deploymentId, "gallery-evaluator");
+  assert.equal(report.provenance.deployment.mode, "mai-chat");
   assert.equal(report.provenance.workflowRunId, "12345");
   assert.match(report.provenance.input.sha256, /^sha256:[a-f0-9]{64}$/);
   assert.match(report.provenance.labels.sha256, /^sha256:[a-f0-9]{64}$/);

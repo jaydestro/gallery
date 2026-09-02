@@ -1,0 +1,470 @@
+name: Persist review decisions and publish Cosmos catalog
+
+on:
+  workflow_run:
+    workflows:
+      - Propose gallery changes (report only)
+    types:
+      - completed
+
+permissions: {}
+
+concurrency:
+  group: publish-gallery-cosmos-catalog
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify exact proposal artifact without Azure access
+    if: >-
+      ${{
+        vars.ENABLE_GALLERY_COSMOS_PERSISTENCE == 'true' &&
+        github.event.workflow_run.conclusion == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      payload_digest: ${{ steps.seal.outputs.payload_digest }}
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+      TRIGGER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+    steps:
+      - name: Verify repository, workflows, runs, artifact digest, and member allowlist
+        id: trust
+        env:
+          CONSUMER_RUN_ID: ${{ github.run_id }}
+          CONSUMER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository_json="$(gh api "repos/${GH_REPO}")"
+          default_branch="$(jq -er '.default_branch' <<< "$repository_json")"
+          encoded_branch="$(jq -rn --arg value "$default_branch" '$value | @uri')"
+          trusted_sha="$(gh api "repos/${GH_REPO}/branches/${encoded_branch}" --jq '.commit.sha')"
+          if [ "$(jq -er '.full_name' <<< "$repository_json")" != "$GH_REPO" ] || \
+             [[ ! "$trusted_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "The repository or current default-branch SHA is invalid." >&2
+            exit 1
+          fi
+
+          producer_workflow="$(gh api "repos/${GH_REPO}/actions/workflows/propose-gallery-changes.yml")"
+          producer_workflow_id="$(jq -er '.id | tostring' <<< "$producer_workflow")"
+          if [ "$(jq -er '.name' <<< "$producer_workflow")" != "Propose gallery changes (report only)" ] || \
+             [ "$(jq -er '.path' <<< "$producer_workflow")" != ".github/workflows/propose-gallery-changes.yml" ]; then
+            echo "The proposal producer workflow identity is not trusted." >&2
+            exit 1
+          fi
+          producer_run="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}")"
+          if ! jq -e \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$producer_workflow_id" \
+            --arg branch "$default_branch" \
+            --arg sha "$trusted_sha" \
+            --argjson attempt "$TRIGGER_RUN_ATTEMPT" '
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.workflow_id | tostring) == $workflowId and
+              .path == ".github/workflows/propose-gallery-changes.yml" and
+              (.event == "schedule" or .event == "workflow_dispatch") and
+              .head_branch == $branch and
+              .head_sha == $sha and
+              .run_attempt == $attempt and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$producer_run" > /dev/null; then
+            echo "The proposal run failed repository, workflow, ref, SHA, attempt, or success validation." >&2
+            exit 1
+          fi
+
+          consumer_workflow="$(gh api "repos/${GH_REPO}/actions/workflows/publish-gallery-catalog.yml")"
+          consumer_workflow_id="$(jq -er '.id | tostring' <<< "$consumer_workflow")"
+          consumer_run="$(gh api "repos/${GH_REPO}/actions/runs/${CONSUMER_RUN_ID}")"
+          if [ "$(jq -er '.path' <<< "$consumer_workflow")" != ".github/workflows/publish-gallery-catalog.yml" ] || \
+             ! jq -e \
+               --arg repository "$GH_REPO" \
+               --arg workflowId "$consumer_workflow_id" \
+               --arg branch "$default_branch" \
+               --arg sha "$trusted_sha" \
+               --argjson attempt "$CONSUMER_RUN_ATTEMPT" '
+                 .repository.full_name == $repository and
+                 .head_repository.full_name == $repository and
+                 (.workflow_id | tostring) == $workflowId and
+                 .path == ".github/workflows/publish-gallery-catalog.yml" and
+                 .event == "workflow_run" and
+                 .head_branch == $branch and
+                 .head_sha == $sha and
+                 .run_attempt == $attempt
+               ' <<< "$consumer_run" > /dev/null; then
+            echo "The Cosmos publication run failed repository, workflow, ref, SHA, or attempt validation." >&2
+            exit 1
+          fi
+
+          expected_name="gallery-proposal-${TRIGGER_RUN_ID}-${TRIGGER_RUN_ATTEMPT}"
+          artifacts_json="$(gh api "repos/${GH_REPO}/actions/runs/${TRIGGER_RUN_ID}/artifacts?per_page=100")"
+          if [ "$(jq --arg name "$expected_name" '[.artifacts[] | select(.name == $name)] | length' <<< "$artifacts_json")" -ne 1 ]; then
+            echo "The proposal run must contain one exact attempt-bound artifact." >&2
+            exit 1
+          fi
+          artifact="$(jq -c --arg name "$expected_name" '.artifacts[] | select(.name == $name)' <<< "$artifacts_json")"
+          if ! jq -e '
+            .expired == false and
+            ((.id | tostring) | test("^[1-9][0-9]*$")) and
+            (.digest | type == "string") and
+            (.digest | test("^sha256:[a-f0-9]{64}$"))
+          ' <<< "$artifact" > /dev/null; then
+            echo "The proposal artifact identity or digest is invalid." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -er '.id | tostring' <<< "$artifact")"
+          artifact_digest="$(jq -er '.digest' <<< "$artifact")"
+          input_directory="$RUNNER_TEMP/gallery-cosmos-proposal-input"
+          rm -rf "$input_directory"
+          mkdir -p "$input_directory"
+          zip_path="$RUNNER_TEMP/gallery-proposal-${artifact_id}.zip"
+          gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > "$zip_path"
+          actual_digest="sha256:$(sha256sum "$zip_path" | cut -d ' ' -f 1)"
+          if [ "$actual_digest" != "$artifact_digest" ]; then
+            echo "The downloaded proposal artifact digest does not match GitHub metadata." >&2
+            exit 1
+          fi
+          mapfile -t entries < <(zipinfo -1 "$zip_path")
+          if [ "${#entries[@]}" -lt 8 ] || [ "${#entries[@]}" -gt 40 ]; then
+            echo "The proposal artifact has an invalid member count." >&2
+            exit 1
+          fi
+          declare -A seen=()
+          for entry in "${entries[@]}"; do
+            if [ -z "$entry" ] || [[ "$entry" == /* ]] || [[ "$entry" == *\\* ]] || \
+               [[ "/$entry/" == *"/../"* ]] || [[ "/$entry/" == *"/./"* ]] || \
+               [ -n "${seen[$entry]:-}" ]; then
+              echo "The proposal artifact contains an unsafe or duplicate member." >&2
+              exit 1
+            fi
+            seen[$entry]=1
+            if [[ "$entry" == */ ]]; then
+              [[ "$entry" =~ ^(plans|proposed)/$ ]] || { echo "Unexpected proposal directory." >&2; exit 1; }
+            elif [[ ! "$entry" =~ ^(proposal-report\.json|proposal-receipt\.json|upstream-artifact-diagnostics\.json|proposed/(templates|gallery-health|retired-templates|catalog-audit)\.json|plans/catalog-change-plan-[0-9]{3}\.json)$ ]]; then
+              echo "The proposal artifact member allowlist is not exact." >&2
+              exit 1
+            fi
+          done
+          for required in \
+            proposal-report.json \
+            proposal-receipt.json \
+            upstream-artifact-diagnostics.json \
+            proposed/templates.json \
+            proposed/gallery-health.json \
+            proposed/retired-templates.json \
+            proposed/catalog-audit.json \
+            plans/catalog-change-plan-001.json; do
+            [ -n "${seen[$required]:-}" ] || { echo "Missing required proposal member ${required}." >&2; exit 1; }
+          done
+          if zipinfo -l "$zip_path" | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The proposal artifact contains a symbolic link." >&2
+            exit 1
+          fi
+          uncompressed_bytes="$(unzip -l "$zip_path" | tail -n 1 | awk '{print $1}')"
+          if [[ ! "$uncompressed_bytes" =~ ^[0-9]+$ ]] || [ "$uncompressed_bytes" -gt 104857600 ]; then
+            echo "The proposal artifact exceeds the uncompressed size limit." >&2
+            exit 1
+          fi
+          unzip -q "$zip_path" -d "$input_directory"
+          rm -f "$zip_path"
+          members="$(
+            while IFS= read -r member; do
+              if [ -L "$input_directory/$member" ] || [ ! -f "$input_directory/$member" ]; then
+                echo "Unsafe extracted proposal member ${member}." >&2
+                exit 1
+              fi
+              member_hash="sha256:$(sha256sum "$input_directory/$member" | cut -d ' ' -f 1)"
+              jq -nc --arg path "$member" --arg sha256 "$member_hash" '{path: $path, sha256: $sha256}'
+            done < <(find "$input_directory" -type f -printf '%P\n' | LC_ALL=C sort)
+          )"
+          members="$(jq -s 'sort_by(.path)' <<< "$members")"
+          jq -n \
+            --arg repository "$GH_REPO" \
+            --arg workflowId "$producer_workflow_id" \
+            --arg workflowPath ".github/workflows/propose-gallery-changes.yml" \
+            --arg runId "$TRIGGER_RUN_ID" \
+            --argjson runAttempt "$TRIGGER_RUN_ATTEMPT" \
+            --arg sourceRef "refs/heads/${default_branch}" \
+            --arg sourceSha "$trusted_sha" \
+            --arg artifactId "$artifact_id" \
+            --arg artifactName "$expected_name" \
+            --arg digest "$artifact_digest" \
+            --argjson members "$members" '
+              {
+                repository: $repository,
+                workflowId: $workflowId,
+                workflowPath: $workflowPath,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                sourceRef: $sourceRef,
+                sourceSha: $sourceSha,
+                artifactId: $artifactId,
+                artifactName: $artifactName,
+                digest: $digest,
+                members: $members
+              }
+            ' > "$input_directory/artifact.json"
+          echo "input_directory=${input_directory}" >> "$GITHUB_OUTPUT"
+          echo "trusted_sha=${trusted_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Seal verified proposal payload
+        id: seal
+        env:
+          INPUT_DIRECTORY: ${{ steps.trust.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf "$RUNNER_TEMP/verified-gallery-cosmos-proposal.tar" -C "$INPUT_DIRECTORY" .
+          payload_digest="sha256:$(sha256sum "$RUNNER_TEMP/verified-gallery-cosmos-proposal.tar" | cut -d ' ' -f 1)"
+          echo "payload_digest=${payload_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed proposal payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-gallery-cosmos-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified-gallery-cosmos-proposal.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  persist-review:
+    name: Persist exact proposal review decisions
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gallery-pipeline-storage
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AZURE_COSMOS_ENDPOINT: ${{ vars.AZURE_COSMOS_ENDPOINT }}
+      AZURE_COSMOS_DATABASE: ${{ vars.AZURE_COSMOS_DATABASE }}
+      AZURE_COSMOS_CATALOG_CONTAINER: ${{ vars.AZURE_COSMOS_CATALOG_CONTAINER }}
+      AZURE_COSMOS_DECISION_CONTAINER: ${{ vars.AZURE_COSMOS_DECISION_CONTAINER }}
+      AZURE_COSMOS_AUDIT_CONTAINER: ${{ vars.AZURE_COSMOS_AUDIT_CONTAINER }}
+      AZURE_COSMOS_CREDENTIAL: azure-cli
+      EXPECTED_PAYLOAD_DIGEST: ${{ needs.verify.outputs.payload_digest }}
+      TRUSTED_SHA: ${{ needs.verify.outputs.trusted_sha }}
+    steps:
+      - name: Download sealed proposal payload
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: verified-gallery-cosmos-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-transfer
+
+      - name: Reverify sealed proposal and member allowlist before OIDC
+        id: transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="verified-transfer/verified-gallery-cosmos-proposal.tar"
+          if [ ! -f "$payload" ] || [ -L "$payload" ] || \
+             [ "sha256:$(sha256sum "$payload" | cut -d ' ' -f 1)" != "$EXPECTED_PAYLOAD_DIGEST" ]; then
+            echo "The sealed proposal payload digest is invalid." >&2
+            exit 1
+          fi
+          if tar -tvf "$payload" | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The sealed proposal payload contains a symbolic link." >&2
+            exit 1
+          fi
+          input_directory="$RUNNER_TEMP/gallery-cosmos-review-input"
+          rm -rf "$input_directory"
+          mkdir -p "$input_directory"
+          tar -xf "$payload" -C "$input_directory"
+          for required in artifact.json proposal-report.json proposal-receipt.json \
+            proposed/templates.json plans/catalog-change-plan-001.json; do
+            [ -f "$input_directory/$required" ] && [ ! -L "$input_directory/$required" ] || exit 1
+          done
+          echo "input_directory=${input_directory}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate exact review payload and configuration before OIDC
+        env:
+          INPUT_DIRECTORY: ${{ steps.transfer.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$TRUSTED_SHA" ] || exit 1
+          node scripts/gallery-cosmos/persist-review-decisions-cli.mjs \
+            --artifact "$INPUT_DIRECTORY/artifact.json" \
+            --proposal-report "$INPUT_DIRECTORY/proposal-report.json" \
+            --proposal-receipt "$INPUT_DIRECTORY/proposal-receipt.json" \
+            --plan "$INPUT_DIRECTORY/plans/catalog-change-plan-001.json" \
+            --proposed-catalog "$INPUT_DIRECTORY/proposed/templates.json" \
+            --dry-run > "$RUNNER_TEMP/gallery-review-dry-run.json"
+          jq -e '.mode == "dry-run" and .operationCount > 0' "$RUNNER_TEMP/gallery-review-dry-run.json" > /dev/null
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Persist and verify review decisions
+        env:
+          INPUT_DIRECTORY: ${{ steps.transfer.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            --artifact "$INPUT_DIRECTORY/artifact.json"
+            --proposal-report "$INPUT_DIRECTORY/proposal-report.json"
+            --proposal-receipt "$INPUT_DIRECTORY/proposal-receipt.json"
+            --plan "$INPUT_DIRECTORY/plans/catalog-change-plan-001.json"
+            --proposed-catalog "$INPUT_DIRECTORY/proposed/templates.json"
+          )
+          node scripts/gallery-cosmos/persist-review-decisions-cli.mjs "${common[@]}" \
+            | tee "$RUNNER_TEMP/gallery-review-result.json"
+          node scripts/gallery-cosmos/persist-review-decisions-cli.mjs "${common[@]}" --verify \
+            > "$RUNNER_TEMP/gallery-review-verify.json"
+          jq -e '.mode == "write" and .decisionCount > 0' "$RUNNER_TEMP/gallery-review-result.json" > /dev/null
+          jq -e '.mode == "verify" and .decisionCount > 0' "$RUNNER_TEMP/gallery-review-verify.json" > /dev/null
+          if grep -E -q 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.' \
+            "$RUNNER_TEMP/gallery-review-result.json" "$RUNNER_TEMP/gallery-review-verify.json"; then
+            echo "Review persistence output contains token-shaped material." >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish approved catalog to Cosmos DB
+    needs:
+      - verify
+      - persist-review
+    if: vars.ENABLE_GALLERY_COSMOS_CATALOG == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gallery-publication
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AZURE_COSMOS_ENDPOINT: ${{ vars.AZURE_COSMOS_ENDPOINT }}
+      AZURE_COSMOS_DATABASE: ${{ vars.AZURE_COSMOS_DATABASE }}
+      AZURE_COSMOS_CATALOG_CONTAINER: ${{ vars.AZURE_COSMOS_CATALOG_CONTAINER }}
+      AZURE_COSMOS_PUBLIC_CONTAINER: ${{ vars.AZURE_COSMOS_PUBLIC_CONTAINER }}
+      AZURE_COSMOS_DECISION_CONTAINER: ${{ vars.AZURE_COSMOS_DECISION_CONTAINER }}
+      AZURE_COSMOS_AUDIT_CONTAINER: ${{ vars.AZURE_COSMOS_AUDIT_CONTAINER }}
+      AZURE_COSMOS_CREDENTIAL: azure-cli
+      EXPECTED_PAYLOAD_DIGEST: ${{ needs.verify.outputs.payload_digest }}
+      TRUSTED_SHA: ${{ needs.verify.outputs.trusted_sha }}
+    steps:
+      - name: Download sealed proposal payload
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: verified-gallery-cosmos-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-transfer
+
+      - name: Reverify sealed proposal and member allowlist before OIDC
+        id: transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="verified-transfer/verified-gallery-cosmos-proposal.tar"
+          if [ ! -f "$payload" ] || [ -L "$payload" ] || \
+             [ "sha256:$(sha256sum "$payload" | cut -d ' ' -f 1)" != "$EXPECTED_PAYLOAD_DIGEST" ]; then
+            echo "The sealed proposal payload digest is invalid." >&2
+            exit 1
+          fi
+          if tar -tvf "$payload" | awk '$1 ~ /^l/ { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "The sealed proposal payload contains a symbolic link." >&2
+            exit 1
+          fi
+          input_directory="$RUNNER_TEMP/gallery-cosmos-publication-input"
+          rm -rf "$input_directory"
+          mkdir -p "$input_directory"
+          tar -xf "$payload" -C "$input_directory"
+          for required in artifact.json proposal-report.json proposal-receipt.json \
+            proposed/templates.json plans/catalog-change-plan-001.json; do
+            [ -f "$input_directory/$required" ] && [ ! -L "$input_directory/$required" ] || exit 1
+          done
+          echo "input_directory=${input_directory}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.5
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate exact publication payload and configuration before OIDC
+        env:
+          INPUT_DIRECTORY: ${{ steps.transfer.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$TRUSTED_SHA" ] || exit 1
+          node scripts/gallery-cosmos/publish-catalog-cli.mjs \
+            --artifact "$INPUT_DIRECTORY/artifact.json" \
+            --proposal-report "$INPUT_DIRECTORY/proposal-report.json" \
+            --proposal-receipt "$INPUT_DIRECTORY/proposal-receipt.json" \
+            --plan "$INPUT_DIRECTORY/plans/catalog-change-plan-001.json" \
+            --proposed-catalog "$INPUT_DIRECTORY/proposed/templates.json" \
+            --dry-run > "$RUNNER_TEMP/gallery-publication-dry-run.json"
+          jq -e '.mode == "dry-run" and .operationCount > 0' "$RUNNER_TEMP/gallery-publication-dry-run.json" > /dev/null
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish and verify approved catalog
+        env:
+          INPUT_DIRECTORY: ${{ steps.transfer.outputs.input_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            --artifact "$INPUT_DIRECTORY/artifact.json"
+            --proposal-report "$INPUT_DIRECTORY/proposal-report.json"
+            --proposal-receipt "$INPUT_DIRECTORY/proposal-receipt.json"
+            --plan "$INPUT_DIRECTORY/plans/catalog-change-plan-001.json"
+            --proposed-catalog "$INPUT_DIRECTORY/proposed/templates.json"
+          )
+          node scripts/gallery-cosmos/publish-catalog-cli.mjs "${common[@]}" \
+            | tee "$RUNNER_TEMP/gallery-publication-result.json"
+          node scripts/gallery-cosmos/publish-catalog-cli.mjs "${common[@]}" --verify \
+            > "$RUNNER_TEMP/gallery-publication-verify.json"
+          jq -e '.mode == "write" and .count > 0 and (.hash | test("^sha256:[a-f0-9]{64}$"))' \
+            "$RUNNER_TEMP/gallery-publication-result.json" > /dev/null
+          jq -e '.mode == "verify" and .replayed == true' "$RUNNER_TEMP/gallery-publication-verify.json" > /dev/null
+          if grep -E -q 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.' \
+            "$RUNNER_TEMP/gallery-publication-result.json" "$RUNNER_TEMP/gallery-publication-verify.json"; then
+            echo "Catalog publication output contains token-shaped material." >&2
+            exit 1
+          fi

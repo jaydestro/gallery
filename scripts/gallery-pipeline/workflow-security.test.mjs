@@ -18,7 +18,10 @@ const WORKFLOW_FILES = [
   "discover-content.yml",
   "evaluate-pipeline-policy.yml",
   "generate-portfolio-report.yml",
+  "migrate-gallery-catalog.yml",
+  "persist-gallery-candidates.yml",
   "publish-gallery-changes.yml",
+  "publish-gallery-catalog.yml",
   "propose-gallery-changes.yml",
   "validate-gallery-change.yml",
 ];
@@ -428,6 +431,9 @@ test("policy pull requests run only the secretless deterministic evaluation", as
   const pullRequest = yamlSection(triggers, "pull_request", 2);
   const deterministicJob = yamlSection(workflow, "deterministic-evaluation", 2);
   const trustedJob = yamlSection(workflow, "trusted-model-evaluation", 2);
+  const validationIndex = trustedJob.indexOf("      - name: Validate live evaluation configuration");
+  const oidcIndex = trustedJob.indexOf("      - name: Sign in to Azure with OIDC");
+  const evaluationIndex = trustedJob.indexOf("      - name: Evaluate configured Azure model");
 
   assert.match(triggers, /^  workflow_dispatch:\s*$/m);
   assert.doesNotMatch(triggers, /^  (?:push|pull_request_target):/m);
@@ -445,7 +451,7 @@ test("policy pull requests run only the secretless deterministic evaluation", as
   assert.match(deterministicJob, /^    name:\s*Run deterministic policy fixtures\s*$/m);
   assert.doesNotMatch(
     deterministicJob,
-    /\$\{\{\s*secrets\.|id-token:\s*write|azure\/login@|environment:|AZURE_CLIENT_ID/,
+    /\$\{\{\s*secrets\.|id-token:\s*write|azure\/login@|environment:|AZURE_OPENAI_|gallery:evaluate:model/,
   );
   assert.match(trustedJob, /github\.event_name == 'workflow_dispatch'/);
   assert.match(
@@ -456,7 +462,28 @@ test("policy pull requests run only the secretless deterministic evaluation", as
   assert.match(trustedJob, /^\s+environment:\s*gallery-model-evaluation\s*$/m);
   assert.match(trustedJob, /^\s+id-token:\s*write\s*$/m);
   assert.equal(workflow.match(/^\s+id-token:\s*write\s*$/gm)?.length, 1);
+  assert.equal(workflow.match(/azure\/login@/g)?.length, 1);
+  assert.equal(workflow.match(/npm run gallery:evaluate:model/g)?.length, 1);
   assert.doesNotMatch(workflow, /\$\{\{\s*secrets\./);
+  assert.notEqual(validationIndex, -1);
+  assert.notEqual(oidcIndex, -1);
+  assert.notEqual(evaluationIndex, -1);
+  assert.ok(validationIndex < oidcIndex);
+  assert.ok(oidcIndex < evaluationIndex);
+  assert.equal(
+    workflow.match(
+      /AZURE_OPENAI_API_MODE:\s*\$\{\{\s*vars\.AZURE_OPENAI_API_MODE\s*\|\|\s*'responses'\s*\}\}/g,
+    )?.length,
+    2,
+  );
+  assert.doesNotMatch(workflow, /\bAZURE_OPENAI_MODE\b/);
+  assert.match(trustedJob, /case "\$AZURE_OPENAI_API_MODE" in/);
+  assert.match(trustedJob, /responses\|chat\|mai-chat\)\s*;;/);
+  assert.match(trustedJob, /--mode "\$AZURE_OPENAI_API_MODE"/);
+  assert.match(
+    trustedJob,
+    /name:\s*gallery-model-evaluation-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
 });
 
 test("live candidate analysis is trusted, protected, least-privilege, and token-safe", async () => {
@@ -466,6 +493,9 @@ test("live candidate analysis is trusted, protected, least-privilege, and token-
   const input = yamlSection(dispatch, "discovery_run_id", 6);
   const analyzeJob = yamlSection(workflow, "analyze", 2);
   const permissions = yamlSection(analyzeJob, "permissions", 4);
+  const validationIndex = analyzeJob.indexOf("      - name: Validate enabled policy and live configuration");
+  const oidcIndex = analyzeJob.indexOf("      - name: Sign in to Azure with OIDC");
+  const analysisIndex = analyzeJob.indexOf("      - name: Analyze every eligible candidate");
 
   assert.doesNotMatch(triggers, /schedule:|push:|pull_request|workflow_run:/);
   assert.match(input, /^        required:\s*true\s*$/m);
@@ -508,12 +538,171 @@ test("live candidate analysis is trusted, protected, least-privilege, and token-
   assert.match(workflow, /echo "::add-mask::\$token"/);
   assert.match(workflow, /AZURE_OPENAI_BEARER_TOKEN="\$token" npm run gallery:analyze:candidates/);
   assert.doesNotMatch(workflow, /AZURE_OPENAI_BEARER_TOKEN:\s*\$\{\{/);
+  assert.notEqual(validationIndex, -1);
+  assert.notEqual(oidcIndex, -1);
+  assert.notEqual(analysisIndex, -1);
+  assert.ok(validationIndex < oidcIndex);
+  assert.ok(oidcIndex < analysisIndex);
+  assert.equal(
+    workflow.match(
+      /AZURE_OPENAI_API_MODE:\s*\$\{\{\s*vars\.AZURE_OPENAI_API_MODE\s*\|\|\s*'responses'\s*\}\}/g,
+    )?.length,
+    2,
+  );
+  assert.doesNotMatch(workflow, /\bAZURE_OPENAI_MODE\b/);
+  assert.match(analyzeJob, /case "\$AZURE_OPENAI_API_MODE" in/);
+  assert.match(analyzeJob, /responses\|chat\|mai-chat\)\s*;;/);
+  assert.match(analyzeJob, /--mode "\$AZURE_OPENAI_API_MODE"/);
+  assert.match(
+    analyzeJob,
+    /name:\s*gallery-candidate-analysis-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
   assert.match(workflow, /model-analysis\.json/);
   assert.match(workflow, /model-analysis-receipt\.json/);
   assert.doesNotMatch(
     workflow,
     /gallery:evaluate:model|labels\.json|evaluation-set|fixtures\/model-evaluation/,
   );
+});
+
+test("model workflow activation remains fail-closed in tracked configuration", async () => {
+  const [evaluationWorkflow, analysisWorkflow, migrationWorkflow, candidateWorkflow, catalogWorkflow, policyText] = await Promise.all([
+    readWorkflow("evaluate-pipeline-policy.yml"),
+    readWorkflow("analyze-gallery-candidates.yml"),
+    readWorkflow("migrate-gallery-catalog.yml"),
+    readWorkflow("persist-gallery-candidates.yml"),
+    readWorkflow("publish-gallery-catalog.yml"),
+    readFile(path.join(ROOT_DIRECTORY, ".github", "gallery-pipeline", "policy.json"), "utf8"),
+  ]);
+  const policy = JSON.parse(policyText);
+  const workflows = [
+    evaluationWorkflow,
+    analysisWorkflow,
+    migrationWorkflow,
+    candidateWorkflow,
+    catalogWorkflow,
+  ].join("\n");
+
+  assert.match(evaluationWorkflow, /vars\.ENABLE_GALLERY_MODEL_EVALUATION == 'true'/);
+  assert.doesNotMatch(
+    evaluationWorkflow,
+    /vars\.ENABLE_GALLERY_MODEL_EVALUATION\s*\|\||ENABLE_GALLERY_MODEL_EVALUATION:\s*true/,
+  );
+  for (const variable of [
+    "GALLERY_AUTOMATION_ENABLED",
+    "ENABLE_GALLERY_MODEL_EVALUATION",
+    "ENABLE_GALLERY_COSMOS_PERSISTENCE",
+    "ENABLE_GALLERY_COSMOS_CATALOG",
+  ]) {
+    assert.doesNotMatch(
+      workflows,
+      new RegExp(`^\\s*${variable}\\s*[:=]\\s*(?:true|'true'|"true")\\s*$`, "m"),
+    );
+  }
+  assert.equal(policy.automation.emergencyDisable, true);
+  assert.equal(policy.automation.mutationMode, "dry-run");
+  assert.ok(Object.values(policy.automation.ai).every((enabled) => enabled === false));
+  assert.ok(Object.values(policy.automation.mutation).every((enabled) => enabled === false));
+});
+
+test("Cosmos workflows are disabled, default-branch-bound, protected, and never expose PR OIDC", async () => {
+  const [migration, candidates, catalog] = await Promise.all([
+    readWorkflow("migrate-gallery-catalog.yml"),
+    readWorkflow("persist-gallery-candidates.yml"),
+    readWorkflow("publish-gallery-catalog.yml"),
+  ]);
+  const migrationTriggers = yamlSection(migration, "on");
+  const candidateTriggers = yamlSection(candidates, "on");
+  const catalogTriggers = yamlSection(catalog, "on");
+  const migrationJob = yamlSection(migration, "migrate", 2);
+  const candidateJob = yamlSection(candidates, "persist", 2);
+  const verifyJob = yamlSection(catalog, "verify", 2);
+  const reviewJob = yamlSection(catalog, "persist-review", 2);
+  const publishJob = yamlSection(catalog, "publish", 2);
+
+  assert.match(migrationTriggers, /^  workflow_dispatch:\s*$/m);
+  assert.doesNotMatch(migrationTriggers, /workflow_run|schedule:|push:|pull_request/);
+  assert.match(candidateTriggers, /workflow_run:/);
+  assert.match(candidateTriggers, /Discover gallery content \(dry run\)/);
+  assert.match(catalogTriggers, /workflow_run:/);
+  assert.match(catalogTriggers, /Propose gallery changes \(report only\)/);
+  assert.doesNotMatch(`${candidateTriggers}\n${catalogTriggers}`, /pull_request|pull_request_target|push:/);
+
+  assert.match(migrationJob, /vars\.ENABLE_GALLERY_COSMOS_CATALOG == 'true'/);
+  assert.match(candidateJob, /vars\.ENABLE_GALLERY_COSMOS_PERSISTENCE == 'true'/);
+  assert.match(verifyJob, /vars\.ENABLE_GALLERY_COSMOS_PERSISTENCE == 'true'/);
+  assert.match(publishJob, /vars\.ENABLE_GALLERY_COSMOS_CATALOG == 'true'/);
+  assert.doesNotMatch(
+    `${migration}\n${candidates}\n${catalog}`,
+    /ENABLE_GALLERY_COSMOS_(?:PERSISTENCE|CATALOG)\s*\|\||ENABLE_GALLERY_COSMOS_(?:PERSISTENCE|CATALOG):\s*true/,
+  );
+
+  assert.match(migrationJob, /^    environment:\s*gallery-publication\s*$/m);
+  assert.match(candidateJob, /^    environment:\s*gallery-pipeline-storage\s*$/m);
+  assert.doesNotMatch(verifyJob, /environment:|id-token:\s*write|azure\/login@|\$\{\{\s*secrets\./);
+  assert.match(reviewJob, /^    environment:\s*gallery-pipeline-storage\s*$/m);
+  assert.match(publishJob, /^    environment:\s*gallery-publication\s*$/m);
+  assert.equal(catalog.match(/^\s+environment:\s*gallery-publication\s*$/gm)?.length, 1);
+  assert.equal(catalog.match(/^\s+environment:\s*gallery-pipeline-storage\s*$/gm)?.length, 1);
+
+  for (const [name, workflow] of [["migration", migration], ["candidates", candidates], ["catalog", catalog]]) {
+    assert.match(workflow, /^permissions:\s*\{\}\s*$/m, `${name} must deny workflow-wide permissions`);
+    assert.doesNotMatch(workflow, /pull-requests:\s*write|contents:\s*write|\$\{\{\s*secrets\./);
+    assert.doesNotMatch(workflow, /COSMOS_(?:KEY|CONNECTION_STRING)|AZURE_COSMOS_KEY|AccountKey=/i);
+    assert.doesNotMatch(workflow, /az account get-access-token|printenv|set -x/);
+    assert.match(workflow, /AZURE_COSMOS_CREDENTIAL:\s*azure-cli/);
+    assert.match(workflow, /eyJ\[A-Za-z0-9_-\]\+\\\./);
+  }
+  assert.equal(migration.match(/azure\/login@/g)?.length, 1);
+  assert.equal(candidates.match(/azure\/login@/g)?.length, 1);
+  assert.equal(catalog.match(/azure\/login@/g)?.length, 2);
+});
+
+test("Cosmos workflows verify exact run, attempt, digest, members, and dry-run before OIDC", async () => {
+  const [migration, candidates, catalog] = await Promise.all([
+    readWorkflow("migrate-gallery-catalog.yml"),
+    readWorkflow("persist-gallery-candidates.yml"),
+    readWorkflow("publish-gallery-catalog.yml"),
+  ]);
+
+  const migrationJob = yamlSection(migration, "migrate", 2);
+  const candidateJob = yamlSection(candidates, "persist", 2);
+  const catalogVerify = yamlSection(catalog, "verify", 2);
+  const reviewJob = yamlSection(catalog, "persist-review", 2);
+  const publishJob = yamlSection(catalog, "publish", 2);
+  for (const workflow of [migration, candidates, catalog]) {
+    assert.match(workflow, /\.repository\.full_name == \$repository/);
+    assert.match(workflow, /\.head_repository\.full_name == \$repository/);
+    assert.match(workflow, /\.head_sha == \$sha/);
+    assert.match(workflow, /\.run_attempt == \$attempt/);
+  }
+  assert.match(migrationJob, /\.path == "\.github\/workflows\/migrate-gallery-catalog\.yml"/);
+  assert.match(migrationJob, /sha256sum static\/templates\.json/);
+  assert.match(migrationJob, /gallery-migration-provenance\.json/);
+  assert.match(candidateJob, /\.path == "\.github\/workflows\/discover-content\.yml"/);
+  assert.match(candidateJob, /gallery-discovery-\$\{TRIGGER_RUN_ID\}-\$\{TRIGGER_RUN_ATTEMPT\}/);
+  assert.match(candidateJob, /expected_entries=\("candidate-gates\.json" "discovery\.json"\)/);
+  assert.match(candidateJob, /actual_digest="sha256:\$\(sha256sum/);
+  assert.match(catalogVerify, /\.path == "\.github\/workflows\/propose-gallery-changes\.yml"/);
+  assert.match(catalogVerify, /gallery-proposal-\$\{TRIGGER_RUN_ID\}-\$\{TRIGGER_RUN_ATTEMPT\}/);
+  assert.match(catalogVerify, /plans\/catalog-change-plan-001\.json/);
+  assert.match(catalogVerify, /proposal-receipt\.json/);
+  assert.match(catalogVerify, /artifact_digest/);
+  assert.match(catalogVerify, /member allowlist/i);
+  assert.match(catalog, /payload_digest="sha256:\$\(sha256sum/);
+  assert.match(reviewJob, /EXPECTED_PAYLOAD_DIGEST/);
+  assert.match(publishJob, /EXPECTED_PAYLOAD_DIGEST/);
+
+  for (const job of [migrationJob, candidateJob, reviewJob, publishJob]) {
+    const dryRunIndex = job.indexOf("--dry-run");
+    const oidcIndex = job.indexOf("azure/login@");
+    assert.notEqual(dryRunIndex, -1);
+    assert.notEqual(oidcIndex, -1);
+    assert.ok(dryRunIndex < oidcIndex, "artifact/config dry-run must precede OIDC");
+  }
+  assert.match(reviewJob, /persist-review-decisions-cli\.mjs/);
+  assert.match(publishJob, /publish-catalog-cli\.mjs/);
+  assert.match(publishJob, /--verify/);
 });
 
 test("gallery proposal verification always publishes token-safe diagnostics", async () => {
@@ -736,4 +925,13 @@ test("pre-install discovery diagnostics initialize without node_modules", async 
   } finally {
     await rm(rootDirectory, { recursive: true, force: true });
   }
+});
+
+test("Pages keeps the static catalog until Cosmos activation and then requires HTTPS API configuration", async () => {
+  const workflow = await readWorkflow("deploy.yml");
+  assert.match(workflow, /vars\.ENABLE_GALLERY_COSMOS_CATALOG/);
+  assert.match(workflow, /vars\.GALLERY_API_BASE_URL/);
+  assert.match(workflow, /GALLERY_USE_STATIC_CATALOG=true/);
+  assert.match(workflow, /GALLERY_API_BASE_URL is required when the Cosmos catalog is enabled/);
+  assert.match(workflow, /GALLERY_API_BASE_URL must use HTTPS/);
 });

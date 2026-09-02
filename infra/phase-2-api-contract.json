@@ -1,0 +1,141 @@
+{
+  "version": "2.0.0",
+  "status": "implemented",
+  "infrastructureState": "staged-disabled",
+  "resources": {
+    "storageAccount": {
+      "name": "stgallerychatjgd826",
+      "sku": "Standard_LRS",
+      "sharedKeyAccess": false,
+      "deploymentContainer": "deployments",
+      "deploymentContainerPublicAccess": "None",
+      "rateLimitTable": "gallerychatlimits"
+    },
+    "functionPlan": {
+      "name": "asp-gallery-chat-dev-eus2",
+      "sku": "FC1",
+      "tier": "FlexConsumption"
+    },
+    "functionApp": {
+      "name": "func-gallery-chat-dev-jgd826",
+      "runtime": "node",
+      "runtimeVersion": "22",
+      "enabled": false,
+      "deploymentAuthentication": "UserAssignedIdentity"
+    },
+    "applicationInsights": {
+      "name": "appi-gallery-chat-dev",
+      "workspaceBased": true,
+      "localAuthentication": false
+    },
+    "apiManagement": {
+      "name": "apim-gallery-chat-dev-jgd826",
+      "sku": "Consumption",
+      "capacity": 0,
+      "identity": "SystemAssigned",
+      "subscriptionRequired": false
+    }
+  },
+  "graphProvisioning": {
+    "mode": "external-precreated",
+    "reason": "The local Bicep compiler has no approved Microsoft Graph extension schema for this deployment.",
+    "requiredParameters": [
+      "apiAppClientId",
+      "chatInvokeAppRoleId",
+      "apimClientId",
+      "apimPrincipalId"
+    ],
+    "preflightOutputs": [
+      "apiAuthPreflight",
+      "graphPreflight"
+    ],
+    "requiredChecks": [
+      "The API application and service principal exist in the deployment tenant",
+      "The API exposes api://gallery-chat-api-dev and the Chat.Invoke application role",
+      "The API service principal requires app-role assignment",
+      "The APIM client and principal IDs match its deployed managed identity",
+      "The APIM service principal has the Chat.Invoke app-role assignment"
+    ]
+  },
+  "runtimeIdentity": "id-gallery-chat-dev",
+  "dataAccess": {
+    "cosmosDatabase": "gallery",
+    "readContainers": [
+      "public-catalog"
+    ],
+    "writeContainers": [],
+    "forbiddenContainers": [
+      "catalog-items",
+      "review-candidates",
+      "review-decisions",
+      "pipeline-records"
+    ],
+    "visibilityProtocol": "Point-read active-snapshot, then query only that exact snapshotId",
+    "publicPredicate": "type = catalog-item AND publicationStatus = published AND lifecycleStatus IN (active, needs-review)"
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/gallery/items",
+      "public": true,
+      "source": "public-catalog",
+      "mutationAllowed": false,
+      "conditionalRequestHeader": "If-None-Match",
+      "responseEntityHeader": "ETag",
+      "cacheSeconds": 60,
+      "chatQuotaApplied": false
+    },
+    {
+      "method": "POST",
+      "path": "/gallery/chat",
+      "public": true,
+      "source": "public-catalog",
+      "mutationAllowed": false,
+      "maximumRequestBytes": 8192,
+      "maximumContextItems": 20,
+      "maximumModelOutputTokens": 800,
+      "backendTimeoutSeconds": 30,
+      "rateLimitPerMinutePerClientIp": 20,
+      "dailyQuotaPerClientIp": 200,
+      "quotaEnforcement": "Authenticated Function using ETag-protected fixed-window counters in Azure Table Storage",
+      "clientIpSource": "APIM overwrites X-Gallery-Client-IP from context.Request.IpAddress",
+      "chatHistoryPersistence": false
+    }
+  ],
+  "security": {
+    "allowedBrowserOrigin": "https://jaydestro.github.io",
+    "browserReceivesAzureCredentials": false,
+    "directAnonymousFunctionAccess": false,
+    "backendAuthentication": "API Management system-assigned managed identity token",
+    "backendAudience": "api://gallery-chat-api-dev",
+    "authsettingsV2": {
+      "platformEnabled": true,
+      "requireAuthentication": true,
+      "unauthenticatedClientAction": "Return401",
+      "issuer": "https://login.microsoftonline.com/{tenantId}/v2.0",
+      "allowedAudiences": [
+        "api://gallery-chat-api-dev"
+      ],
+      "allowedClientApplications": [
+        "apimClientId"
+      ],
+      "allowedPrincipalObjectIds": [
+        "apimPrincipalId"
+      ]
+    },
+    "roleEnforcement": {
+      "requiredRole": "Chat.Invoke",
+      "requiredRoleIdParameter": "chatInvokeAppRoleId",
+      "mode": "Required external app-role grant plus application claim check"
+    },
+    "localAuthenticationAllowed": false
+  },
+  "activation": {
+    "functionAppEnabled": false,
+    "modelEvaluation": false,
+    "candidateAnalysis": false,
+    "cosmosPersistence": false,
+    "catalogMutation": false,
+    "emergencyDisable": true
+  }
+}

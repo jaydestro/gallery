@@ -9,7 +9,10 @@ import ShowcaseLeftFilters from "../components/gallery/ShowcaseLeftFilters";
 import ShowcaseCoverPage from "../components/gallery/ShowcaseCoverPage";
 import ShowcaseCardPage, { UserState } from "./ShowcaseCardPage";
 import {
+  Button,
   FluentProvider,
+  Spinner,
+  Text,
   webLightTheme,
   webDarkTheme,
 } from "@fluentui/react-components";
@@ -19,10 +22,12 @@ import { useColorMode } from "@docusaurus/theme-common";
 import styles from "./styles.module.css";
 import { type TagType } from "@site/src/data/tags";
 import { TagList } from "@site/src/data/users";
+import { useGalleryUsers } from "@site/src/data/useGalleryUsers";
 import { useLocation } from "@docusaurus/router";
 import { Helmet } from "react-helmet";
 import StructuredData from "@site/src/components/StructuredData";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
+import GalleryChat from "@site/src/components/gallery/GalleryChat";
 
 initializeIcons();
 
@@ -50,33 +55,45 @@ const replaceSearchTags = (search: string, newTags: TagType[]) => {
 const App = () => {
   const location = useLocation<UserState>();
   const { colorMode } = useColorMode();
-  const [loading, setLoading] = useState(true);
+  const { siteConfig } = useDocusaurusContext();
+  const galleryApiBaseUrl = siteConfig.customFields.galleryApiBaseUrl;
+  const configuredGalleryApiBaseUrl =
+    typeof galleryApiBaseUrl === "string" && galleryApiBaseUrl.trim() !== ""
+      ? galleryApiBaseUrl
+      : null;
+  const galleryUseStaticCatalog = siteConfig.customFields.galleryUseStaticCatalog === true;
+  const { status, users, error, retry } = useGalleryUsers({
+    apiBaseUrl: galleryApiBaseUrl,
+    useStaticCatalog: galleryUseStaticCatalog,
+  });
   const [selectedCheckbox, setSelectedCheckbox] = useState<TagType[]>([]);
   const [selectedTags, setSelectedTags] = useState<TagType[]>([]);
   const [activeTags, setActiveTags] = useState<TagType[]>(TagList);
 
   useEffect(() => {
-    setTimeout(() => {
-      setLoading(false);
-    }, 500);
-    
-    // Read tags from location search regardless of loading state
     const tags = readSearchTags(location.search);
     setSelectedCheckbox(tags);
     setSelectedTags(tags);
   }, [location]);
-
-  // You can still render null for loading state, but hooks should always run
-  if (loading) {
-    return null; // This will not affect hook calls as all hooks are already called
-  }
 
   return (
     <FluentProvider
       theme={colorMode == "dark" ? webDarkTheme : webLightTheme}
       className={styles.container}
     >
-      <ShowcaseCoverPage />
+      {status === "loading" ? (
+        <main className={styles.galleryStatus} aria-live="polite" aria-busy="true">
+          <Spinner labelPosition="below" label="Loading gallery items..." />
+        </main>
+      ) : status === "error" ? (
+        <main className={styles.galleryStatus} role="alert">
+          <Text size={500} weight="semibold">Unable to load gallery items</Text>
+          <Text>{error}</Text>
+          <Button appearance="primary" onClick={retry}>Retry</Button>
+        </main>
+      ) : (
+      <>
+      <ShowcaseCoverPage users={users} />
       <div className={styles.filterAndCardContainer}>
         <div className={styles.filterAndCard}>
           <div className={styles.filter}>
@@ -93,6 +110,7 @@ const App = () => {
           </div>
           <div className={styles.card}>
             <ShowcaseCardPage
+              users={users}
               setActiveTags={setActiveTags}
               selectedTags={selectedTags}
               location={location}
@@ -104,6 +122,11 @@ const App = () => {
           </div>
         </div>
       </div>
+      {configuredGalleryApiBaseUrl ? (
+        <GalleryChat apiBaseUrl={configuredGalleryApiBaseUrl} />
+      ) : null}
+      </>
+      )}
     </FluentProvider>
   );
 };

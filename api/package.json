@@ -1,0 +1,20 @@
+{
+  "name": "gallery-function-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Managed Azure Function API for public gallery reads and bounded chat.",
+  "main": "src/{index.js,functions/*.js}",
+  "scripts": {
+    "start": "func start",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.0.0",
+    "@azure/data-tables": "^13.3.2",
+    "@azure/functions": "^4.11.0",
+    "@azure/identity": "^4.0.0"
+  }
+}

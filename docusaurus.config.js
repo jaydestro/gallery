@@ -13,12 +13,16 @@ const baseUrl = process.env.BASE_URL ||
     : `/${repositoryName}/`);
 const absoluteSiteUrl = `${siteUrl.replace(/\/$/, "")}${baseUrl}`;
 const repositoryUrl = `https://github.com/${repositoryOwner}/${repositoryName}`;
+const galleryApiBaseUrl = process.env.GALLERY_API_BASE_URL?.trim() || null;
+const galleryUseStaticCatalog = process.env.GALLERY_USE_STATIC_CATALOG === "true";
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   customFields: {
     absoluteSiteUrl,
     repositoryUrl,
+    galleryApiBaseUrl,
+    galleryUseStaticCatalog,
     description:
       "Your one-stop for everything Azure Cosmos DB. Code samples, docs, videos, decks, etc. Everything in one location. Community contributions are welcome.",
     keywords:
