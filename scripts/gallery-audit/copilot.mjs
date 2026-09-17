@@ -88,9 +88,21 @@ export function validateClassification(value, candidates, existingEntries) {
   if (!exactKeys(value, ['newContent', 'existingContent'])) throw new Error('Classification must have exact top-level fields');
   if (!Array.isArray(value.newContent) || value.newContent.length !== candidates.length) throw new Error('Classification candidate count mismatch');
   if (!Array.isArray(value.existingContent) || value.existingContent.length !== existingEntries.length) throw new Error('Classification retirement candidate count mismatch');
-  value.newContent.forEach((item, index) => validateItem(item, index, candidates[index].url, 'new'));
-  value.existingContent.forEach((item, index) => validateItem(item, existingEntries[index].catalogIndex, existingEntries[index].url, 'existing'));
-  return value;
+  const newByIndex = new Map(value.newContent.map((item) => [item.candidateIndex, item]));
+  const existingByIndex = new Map(value.existingContent.map((item) => [item.catalogIndex, item]));
+  if (newByIndex.size !== candidates.length) throw new Error('Classification candidate indexes must be unique');
+  if (existingByIndex.size !== existingEntries.length) throw new Error('Classification retirement candidate indexes must be unique');
+  const newContent = candidates.map((candidate, index) => {
+    const item = newByIndex.get(index);
+    validateItem(item, index, candidate.url, 'new');
+    return item;
+  });
+  const existingContent = existingEntries.map((entry) => {
+    const item = existingByIndex.get(entry.catalogIndex);
+    validateItem(item, entry.catalogIndex, entry.url, 'existing');
+    return item;
+  });
+  return { newContent, existingContent };
 }
 
 export function buildClassificationPrompt({ prompt, candidatePath, auditPath, catalogPath, existingEntries }) {
