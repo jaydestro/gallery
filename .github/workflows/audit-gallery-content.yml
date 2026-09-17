@@ -18,25 +18,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Prepare stable automation branch
         env:
+          GH_TOKEN: ${{ github.token }}
           UPDATE_BRANCH: automation/gallery-content-updates
         run: |
+          git config user.name "gallery-content-automation"
+          git config user.email "gallery-content-automation@users.noreply.github.com"
           git fetch origin main
           if git ls-remote --exit-code --heads origin "$UPDATE_BRANCH" > /dev/null; then
             git fetch origin "$UPDATE_BRANCH"
-            git checkout -B "$UPDATE_BRANCH" "origin/$UPDATE_BRANCH"
-            git rebase origin/main
+            pr_number=$(gh pr list --head "$UPDATE_BRANCH" --base main --state open --json number --jq '.[0].number')
+            if [ -n "$pr_number" ]; then
+              git checkout -B "$UPDATE_BRANCH" "origin/$UPDATE_BRANCH"
+              git rebase origin/main
+            else
+              git checkout -B "$UPDATE_BRANCH" origin/main
+            fi
           else
             git checkout -b "$UPDATE_BRANCH" origin/main
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -52,16 +60,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: npm run gallery:audit
 
+      - name: Install GitHub Copilot CLI
+        run: npm install --global @github/copilot@1.0.85
+
       - name: Classify and promote high-confidence updates
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
-          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+          if [ "${{ secrets.COPILOT_GITHUB_TOKEN != '' }}" != "true" ]; then
             echo "Copilot classification skipped: COPILOT_GITHUB_TOKEN is not configured."
             exit 0
           fi
-          npm install --global @github/copilot@1.0.85
-          npm run gallery:promote
+          COPILOT_GITHUB_TOKEN="${{ secrets.COPILOT_GITHUB_TOKEN }}" node scripts/gallery-audit/index.mjs --classify-only --promote
 
       - name: Validate proposed catalog
         if: hashFiles('output/gallery-content-review/promotion-result.json') != ''
@@ -86,12 +94,10 @@ jobs:
           UPDATE_BRANCH: automation/gallery-content-updates
         run: |
           test -n "$GH_TOKEN" || { echo "GALLERY_UPDATE_TOKEN is required to publish the draft pull request."; exit 1; }
-          git config user.name "gallery-content-automation"
-          git config user.email "gallery-content-automation@users.noreply.github.com"
           git add static/templates.json static/retired-templates.json
           git commit -m "chore: refresh gallery content"
           gh auth setup-git
-          git push origin "HEAD:$UPDATE_BRANCH"
+          git push --force-with-lease origin "HEAD:$UPDATE_BRANCH"
           pr_number=$(gh pr list --head "$UPDATE_BRANCH" --base main --state open --json number --jq '.[0].number')
           if [ -n "$pr_number" ]; then
             gh pr edit "$pr_number" --title "chore: refresh gallery content" --body-file output/gallery-content-review/promotion-summary.md
@@ -107,7 +113,7 @@ jobs:
 
       - name: Upload review bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gallery-content-review-${{ github.run_id }}
           path: output/gallery-content-review/

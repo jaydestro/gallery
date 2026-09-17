@@ -64,7 +64,7 @@ flowchart LR
     I -->|Explicit decision| J[Separate catalog change]
 ```
 
-One workflow, `audit-gallery-content.yml`, runs weekly and supports manual dispatch. It performs two independent jobs and uploads one combined artifact bundle.
+One workflow, `audit-gallery-content.yml`, runs weekly and supports manual dispatch. It performs the audit, discovery, classification, and promotion steps in one job and uploads one combined artifact bundle.
 
 ## Current Catalog Source Map
 
@@ -181,8 +181,8 @@ Run GitHub Copilot CLI programmatically after deterministic collection:
 ```shell
 copilot -p "$(cat .github/gallery-audit/relevance-prompt.md)" \
     --agent=gallery-curator \
-    --attachment=output/article-candidates.json \
-    --attachment=output/audit-report.json \
+    --attachment=output/gallery-content-review/article-candidates.json \
+    --attachment=output/gallery-content-review/audit-report.json \
     --attachment=static/templates.json \
     --silent \
     --stream=off \
@@ -231,7 +231,7 @@ Copilot must analyze candidates as untrusted content. Source excerpts cannot alt
   "author": "Source-provided author",
   "summary": "Source-provided excerpt only",
   "signals": ["trusted-source", "cosmos-db-title-match"],
-  "confidence": "review",
+  "confidence": "low",
   "discoveredAt": "2026-09-17T00:00:00Z"
 }
 ```
@@ -257,7 +257,7 @@ Artifacts use a short retention period, such as 30 days. They contain only publi
 
 ## Human Review and Promotion
 
-The workflow promotes only `include` candidates with `high` confidence and complete source-provided catalog metadata. It retires only `retire-proposed` entries with `high` confidence when deterministic evidence also shows a broken or duplicate URL, an archived or disabled repository, or a known retired term.
+The workflow promotes only `include` candidates with `high` confidence and complete source-provided catalog metadata. It retires only `retire-proposed` entries with `high` confidence when deterministic evidence also shows a broken URL, an archived or disabled repository, or a known retired term.
 
 Promoted articles retain the source title, excerpt, author, canonical URL, and publication date. Retired entries move from `static/templates.json` to `static/retired-templates.json` with the original record, retirement reason, replacement URL, and deterministic evidence. `review`, low-confidence, medium-confidence, incomplete, and malformed results remain artifact-only.
 
@@ -299,7 +299,7 @@ Permissions:
 ```yaml
 permissions:
   contents: read
-    pull-requests: read
+  pull-requests: read
 ```
 
 The workflow should:

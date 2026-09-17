@@ -1,5 +1,6 @@
 {
   "requestTimeoutMs": 10000,
+  "auditConcurrency": 8,
   "maxResponseBytes": 1048576,
   "redirectLimit": 5,
   "trackingParameters": ["utm_*", "fbclid", "gclid", "mc_cid", "mc_eid"],

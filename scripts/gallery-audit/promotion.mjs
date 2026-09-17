@@ -9,7 +9,7 @@ const STRONG_RETIREMENT_REASONS = new Set([
 ]);
 
 function strongRetirementEvidence(entry) {
-  return ['broken', 'duplicate'].includes(entry.outcome)
+  return entry.outcome === 'broken'
     || entry.reasonCodes.some((reason) => STRONG_RETIREMENT_REASONS.has(reason));
 }
 

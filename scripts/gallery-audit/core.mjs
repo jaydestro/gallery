@@ -15,6 +15,24 @@ function asArray(value) {
 function privateAddress(address) {
   if (net.isIPv6(address)) {
     const normalized = address.toLowerCase();
+    const dotted = normalized.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+    const hexadecimal = dotted
+      ? `${dotted[1]}${dotted[2].split('.').reduce((parts, octet, index, octets) => {
+        if (index % 2 === 0) parts.push(((Number(octet) << 8) | Number(octets[index + 1])).toString(16));
+        return parts;
+      }, []).join(':')}`
+      : normalized;
+    const [left, right = ''] = hexadecimal.split('::');
+    const leftParts = left ? left.split(':') : [];
+    const rightParts = right ? right.split(':') : [];
+    const parts = hexadecimal.includes('::')
+      ? [...leftParts, ...Array(8 - leftParts.length - rightParts.length).fill('0'), ...rightParts]
+      : leftParts;
+    if (parts.length === 8 && parts.slice(0, 5).every((part) => Number.parseInt(part, 16) === 0) && Number.parseInt(parts[5], 16) === 0xffff) {
+      const high = Number.parseInt(parts[6], 16);
+      const low = Number.parseInt(parts[7], 16);
+      return privateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+    }
     return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb');
   }
   if (!net.isIPv4(address)) return true;
@@ -27,7 +45,7 @@ async function assertSafeUrl(value, allowPrivate) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported-protocol');
   if (url.username || url.password) throw new Error('embedded-credentials');
   if (allowPrivate) return url;
-  const hostname = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) throw new Error('private-host');
   const addresses = net.isIP(hostname) ? [{ address: hostname }] : await dns.lookup(hostname, { all: true });
   if (addresses.length === 0 || addresses.some(({ address }) => privateAddress(address))) throw new Error('private-host');
@@ -89,7 +107,7 @@ export async function boundedGet(value, policy, options = {}) {
 
 function statusResult(result) {
   if (result.status === 404 || result.status === 410) return { outcome: 'broken', reason: `http-${result.status}` };
-  if (result.status < 200 || result.status >= 400) return { outcome: 'indeterminate', reason: `http-${result.status}` };
+  if (result.status < 200 || result.status >= 300) return { outcome: 'indeterminate', reason: `http-${result.status}` };
   if (result.redirects > 0) return { outcome: 'redirected', reason: 'http-redirect' };
   return { outcome: 'healthy', reason: 'http-ok' };
 }
@@ -97,8 +115,8 @@ function statusResult(result) {
 function githubRepository(value) {
   const url = new URL(value);
   const parts = url.pathname.split('/').filter(Boolean);
-  return url.hostname.toLowerCase() === 'github.com' && parts.length === 2
-    ? { owner: parts[0], repository: parts[1].replace(/\.git$/i, '') }
+  return url.hostname.toLowerCase() === 'github.com' && parts.length >= 2
+    ? { owner: parts[0], repository: parts[1].replace(/\.git$/i, ''), hasPath: parts.length > 2 }
     : null;
 }
 
@@ -116,7 +134,7 @@ export async function checkUrl(value, policy, options = {}) {
       const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`;
       const result = await boundedGet(oembedUrl, policy, { ...options, allowedHostnames: ['www.youtube.com'] });
       if (result.status === 404 || result.status === 410) return { ...result, finalUrl: videoUrl, outcome: 'broken', reason: 'youtube-unavailable' };
-      if (result.status < 200 || result.status >= 400) return { ...result, finalUrl: videoUrl, outcome: 'indeterminate', reason: `youtube-http-${result.status}` };
+      if (result.status < 200 || result.status >= 300) return { ...result, finalUrl: videoUrl, outcome: 'indeterminate', reason: `youtube-http-${result.status}` };
       return { ...result, finalUrl: videoUrl, outcome: 'healthy', reason: 'youtube-available' };
     }
     const repository = githubRepository(value);
@@ -130,10 +148,15 @@ export async function checkUrl(value, policy, options = {}) {
         headers,
       });
       if (apiResult.status === 404 || apiResult.status === 410) return { ...apiResult, outcome: 'broken', reason: 'github-missing' };
-      if (apiResult.status === 403 || apiResult.status === 429 || apiResult.status >= 500) return { ...apiResult, outcome: 'indeterminate', reason: `github-http-${apiResult.status}` };
+      if (apiResult.status < 200 || apiResult.status >= 300) return { ...apiResult, outcome: 'indeterminate', reason: `github-http-${apiResult.status}` };
       const metadata = JSON.parse(apiResult.body);
+      if (metadata.private) return { ...apiResult, outcome: 'review', reason: 'github-private' };
       if (metadata.disabled) return { ...apiResult, outcome: 'review', reason: 'github-disabled' };
       if (metadata.archived) return { ...apiResult, outcome: 'review', reason: 'github-archived' };
+      if (repository.hasPath) {
+        const pathResult = await boundedGet(value, policy, options);
+        return { ...pathResult, ...statusResult(pathResult) };
+      }
       return { ...apiResult, finalUrl: metadata.html_url ?? value, outcome: 'healthy', reason: 'github-active' };
     }
     const result = await boundedGet(value, policy, options);
@@ -179,6 +202,21 @@ export function findDuplicates(catalog, trackingParameters = []) {
   }));
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+  const workerCount = Math.min(items.length, Math.max(1, Number.isInteger(limit) ? limit : 1));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 function reviewSignals(entry, policy, now) {
   const signals = [];
   const ageDays = (now.getTime() - Date.parse(entry.date)) / 86_400_000;
@@ -193,30 +231,27 @@ export async function auditCatalog(catalog, policy, options = {}) {
   const duplicates = findDuplicates(catalog, policy.trackingParameters);
   const scannedAt = (options.now ?? new Date()).toISOString();
   const checker = options.checker ?? ((url) => checkUrl(url, policy));
-  const entries = [];
-  for (let index = 0; index < catalog.length; index += 1) {
-    const item = catalog[index];
+  return mapWithConcurrency(catalog, policy.auditConcurrency ?? 8, async (item, index) => {
     const checked = await checker(item.source);
     const signals = reviewSignals(item, policy, options.now ?? new Date());
     let outcome = checked.outcome;
     const duplicate = duplicates[index];
     if (!['broken', 'indeterminate'].includes(outcome) && (duplicate.exact.length > 0 || duplicate.normalized.length > 0)) outcome = 'duplicate';
     else if (outcome === 'healthy' && signals.length > 0) outcome = 'review';
-    entries.push({
+    return {
       catalogIndex: index,
       title: item.title,
       url: item.source,
       normalizedUrl: normalizeUrl(item.source, policy.trackingParameters),
       outcome,
-      reasonCodes: [checked.reason, ...signals].filter(Boolean),
+      reasonCodes: [checked.reason, outcome !== checked.outcome ? outcome : null, ...signals].filter(Boolean),
       httpStatus: checked.status ?? null,
       finalUrl: checked.finalUrl ?? item.source,
       duplicates: duplicate,
       scannedAt,
       classification: null,
-    });
-  }
-  return entries;
+    };
+  });
 }
 
 function textValue(value) {
@@ -286,18 +321,28 @@ export async function discoverArticles(sources, policy, liveCatalog, retiredCata
     try {
       const feedUrl = new URL(source.url);
       if (!source.allowedHostnames.includes(feedUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
-      const xml = options.feedProvider
+      const feedResult = options.feedProvider
         ? await options.feedProvider(source)
-        : (await boundedGet(source.url, policy, { allowedHostnames: source.allowedHostnames })).body;
+        : await boundedGet(source.url, policy, { allowedHostnames: source.allowedHostnames, fetchImpl: options.fetchImpl });
+      if (typeof feedResult !== 'string' && (feedResult.status < 200 || feedResult.status >= 300)) throw new Error(`feed-http-${feedResult.status}`);
+      const xml = typeof feedResult === 'string' ? feedResult : feedResult.body;
       const discovered = discoverFromFeed(xml, source, policy, existing, { now: options.now });
+      const candidateCountBefore = candidates.length;
       for (const candidate of discovered) {
+        const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
+          allowedHostnames: source.allowedHostnames,
+          fetchImpl: options.fetchImpl,
+        });
+        if (!['healthy', 'redirected'].includes(checked.outcome)) continue;
+        const finalHostname = new URL(checked.finalUrl ?? candidate.url).hostname.toLowerCase();
+        if (!source.allowedHostnames.includes(finalHostname)) continue;
         const fingerprint = urlFingerprint(candidate.url, policy.trackingParameters);
         if (seen.has(fingerprint)) continue;
         candidate.candidateIndex = candidates.length;
         seen.add(fingerprint);
         candidates.push(candidate);
       }
-      sourceResults.push({ sourceId: source.id, status: 'complete', candidateCount: discovered.length });
+      sourceResults.push({ sourceId: source.id, status: 'complete', candidateCount: candidates.length - candidateCountBefore });
     } catch (error) {
       sourceResults.push({ sourceId: source.id, status: 'partial', candidateCount: 0, error: error?.message ?? 'source-error' });
     }

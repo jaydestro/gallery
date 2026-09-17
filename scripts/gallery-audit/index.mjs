@@ -112,6 +112,7 @@ async function run() {
   const discovery = await discoverArticles(sourcesDocument.sources, policy, catalog, retiredCatalog, {
     now,
     feedProvider: fixtures ? async () => fixtureFeed : undefined,
+    checker,
   });
   const generatedAt = now.toISOString();
   const auditReport = { generatedAt, catalogCount: catalog.length, entries: auditEntries };
