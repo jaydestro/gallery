@@ -232,6 +232,28 @@ test('removes trailing commas outside JSON strings', () => {
   assert.deepEqual(parsed.items, [1, 2]);
 });
 
+test('normalizes trailing commas through the classification path', () => {
+  const candidate = { url: 'https://example.com/new' };
+  const response = `{
+    "newContent": [{
+      "candidateIndex": 0,
+      "url": "${candidate.url}",
+      "verdict": "review",
+      "confidence": "low",
+      "criteria": ["uncertain",],
+      "evidence": "Needs review.",
+      "relatedUrl": null,
+    },],
+    "existingContent": [],
+  }`;
+  const result = runCopilotClassification({
+    prompt: 'prompt', candidatePath: 'candidates.json', auditPath: 'audit.json', catalogPath: 'catalog.json',
+    candidates: [candidate], catalog: [], execute: () => ({ status: 0, stdout: response }),
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.classification.newContent[0].url, candidate.url);
+});
+
 test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'gallery-copilot-'));
   const documents = [
