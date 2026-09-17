@@ -8,7 +8,7 @@ const STRONG_RETIREMENT_REASONS = new Set([
   'known-retired-term',
 ]);
 
-function strongRetirementEvidence(entry) {
+export function strongRetirementEvidence(entry) {
   return entry.outcome === 'broken'
     || entry.reasonCodes.some((reason) => STRONG_RETIREMENT_REASONS.has(reason));
 }

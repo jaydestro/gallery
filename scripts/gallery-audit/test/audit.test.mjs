@@ -247,8 +247,14 @@ test('embeds JSON inputs as untrusted prompt data without native attachments', (
   const directory = mkdtempSync(path.join(tmpdir(), 'gallery-copilot-'));
   const documents = [
     { candidates: [{ title: 'Candidate', url: 'https://example.com/new', summary: 'Useful guide.' }] },
-    { entries: [{ catalogIndex: 0, title: 'Existing', url: 'https://example.com/old', outcome: 'review', reasonCodes: ['age'] }] },
-    [{ title: 'Existing', description: 'Catalog description.', source: 'https://example.com/old', tags: ['blog'] }],
+    { entries: [
+      { catalogIndex: 0, title: 'Healthy', url: 'https://example.com/healthy', outcome: 'healthy', reasonCodes: ['http-ok'] },
+      { catalogIndex: 1, title: 'Existing', url: 'https://example.com/old', outcome: 'broken', reasonCodes: ['http-404'] },
+    ] },
+    [
+      { title: 'Healthy', description: 'Keep this.', source: 'https://example.com/healthy', tags: ['blog'] },
+      { title: 'Existing', description: 'Catalog description.', source: 'https://example.com/old', tags: ['blog'] },
+    ],
   ];
   const files = ['candidates.json', 'audit.json', 'catalog.json'].map((name, index) => {
     const file = path.join(directory, name);
@@ -260,12 +266,17 @@ test('embeds JSON inputs as untrusted prompt data without native attachments', (
     candidatePath: files[0],
     auditPath: files[1],
     catalogPath: files[2],
+    existingEntries: [{ catalogIndex: 1, url: 'https://example.com/old' }],
   };
   const prompt = buildClassificationPrompt(options);
   const argumentsList = buildCopilotArguments(options);
   assert.match(prompt, /BEGIN ARTICLE CANDIDATES/);
-  assert.match(prompt, /BEGIN EXISTING CATALOG AUDIT/);
+  assert.match(prompt, /BEGIN RETIREMENT CANDIDATES/);
+  assert.match(prompt, /BEGIN CATALOG COMPARISON ONLY/);
   assert.match(prompt, /Catalog description/);
+  assert.match(prompt, /Keep this/);
+  const retirementSection = prompt.match(/BEGIN RETIREMENT CANDIDATES ---([\s\S]*?)--- END RETIREMENT CANDIDATES/)?.[1] ?? '';
+  assert.doesNotMatch(retirementSection, /Keep this/);
   assert.equal(argumentsList[0], '-p');
   assert.equal(argumentsList[1], prompt);
   assert.ok(argumentsList.includes('--no-color'));
@@ -362,4 +373,19 @@ test('does not retire entries based only on duplicate findings', () => {
   });
   assert.deepEqual(result.catalog, catalog);
   assert.equal(result.retirements.length, 0);
+});
+
+test('validates a sparse retirement candidate set with original catalog indexes', () => {
+  const catalog = [catalogEntry(), catalogEntry({ source: 'https://example.com/retire' })];
+  const existingEntries = [{ catalogIndex: 1, url: catalog[1].source }];
+  const response = {
+    newContent: [],
+    existingContent: [{ catalogIndex: 1, url: catalog[1].source, verdict: 'retire-proposed', confidence: 'high', criteria: ['broken'], evidence: 'Source is gone.', relatedUrl: null }],
+  };
+  const result = runCopilotClassification({
+    prompt: 'prompt', candidatePath: 'candidates.json', auditPath: 'audit.json', catalogPath: 'catalog.json',
+    candidates: [], catalog, existingEntries, execute: () => ({ status: 0, stdout: JSON.stringify(response) }),
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.classification.existingContent[0].catalogIndex, 1);
 });
