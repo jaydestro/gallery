@@ -1,0 +1,46 @@
+{
+  "sources": [
+    {
+      "id": "cosmos-devblog",
+      "url": "https://devblogs.microsoft.com/cosmosdb/feed/",
+      "allowedHostnames": ["devblogs.microsoft.com"],
+      "trustTier": "first-party",
+      "enabled": true,
+      "lookbackDays": 45,
+      "inclusionTerms": ["azure cosmos db", "cosmos db", "cosmosdb"],
+      "catalogDefaults": {
+        "preview": "coming soon",
+        "website": "https://devblogs.microsoft.com/cosmosdb/",
+        "author": "Azure Cosmos DB Team",
+        "tags": ["blog", "microsoft"]
+      }
+    },
+    {
+      "id": "walmart-global-tech-medium",
+      "url": "https://medium.com/feed/walmartglobaltech",
+      "allowedHostnames": ["medium.com"],
+      "trustTier": "reviewed-community",
+      "enabled": false,
+      "lookbackDays": 45,
+      "inclusionTerms": ["azure cosmos db", "cosmos db", "cosmosdb"]
+    },
+    {
+      "id": "deepu-bhatia-medium",
+      "url": "https://deepubhatia.medium.com/feed",
+      "allowedHostnames": ["deepubhatia.medium.com"],
+      "trustTier": "reviewed-community",
+      "enabled": false,
+      "lookbackDays": 45,
+      "inclusionTerms": ["azure cosmos db", "cosmos db", "cosmosdb"]
+    },
+    {
+      "id": "made-of-strings",
+      "url": "https://madeofstrings.com/feed/",
+      "allowedHostnames": ["madeofstrings.com"],
+      "trustTier": "reviewed-community",
+      "enabled": false,
+      "lookbackDays": 45,
+      "inclusionTerms": ["azure cosmos db", "cosmos db", "cosmosdb"]
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+name: Audit gallery content
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: gallery-content-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare stable automation branch
+        env:
+          UPDATE_BRANCH: automation/gallery-content-updates
+        run: |
+          git fetch origin main
+          if git ls-remote --exit-code --heads origin "$UPDATE_BRANCH" > /dev/null; then
+            git fetch origin "$UPDATE_BRANCH"
+            git checkout -B "$UPDATE_BRANCH" "origin/$UPDATE_BRANCH"
+            git rebase origin/main
+          else
+            git checkout -b "$UPDATE_BRANCH" origin/main
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test gallery audit
+        run: npm run test:gallery-audit
+
+      - name: Run deterministic audit and discovery
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run gallery:audit
+
+      - name: Classify and promote high-confidence updates
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "Copilot classification skipped: COPILOT_GITHUB_TOKEN is not configured."
+            exit 0
+          fi
+          npm install --global @github/copilot@1.0.85
+          npm run gallery:promote
+
+      - name: Validate proposed catalog
+        if: hashFiles('output/gallery-content-review/promotion-result.json') != ''
+        run: |
+          npm run test:gallery-audit
+          npm run build
+
+      - name: Detect catalog changes
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet -- static/templates.json static/retired-templates.json; then
+            echo "catalog=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "catalog=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish or refresh draft pull request
+        if: steps.changes.outputs.catalog == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GALLERY_UPDATE_TOKEN }}
+          UPDATE_BRANCH: automation/gallery-content-updates
+        run: |
+          test -n "$GH_TOKEN" || { echo "GALLERY_UPDATE_TOKEN is required to publish the draft pull request."; exit 1; }
+          git config user.name "gallery-content-automation"
+          git config user.email "gallery-content-automation@users.noreply.github.com"
+          git add static/templates.json static/retired-templates.json
+          git commit -m "chore: refresh gallery content"
+          gh auth setup-git
+          git push origin "HEAD:$UPDATE_BRANCH"
+          pr_number=$(gh pr list --head "$UPDATE_BRANCH" --base main --state open --json number --jq '.[0].number')
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --title "chore: refresh gallery content" --body-file output/gallery-content-review/promotion-summary.md
+          else
+            gh pr create --draft --base main --head "$UPDATE_BRANCH" --title "chore: refresh gallery content" --body-file output/gallery-content-review/promotion-summary.md
+          fi
+
+      - name: Add summary
+        if: always()
+        run: |
+          test ! -f "output/gallery-content-review/audit-summary.md" || cat "output/gallery-content-review/audit-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          test ! -f "output/gallery-content-review/promotion-summary.md" || cat "output/gallery-content-review/promotion-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-content-review-${{ github.run_id }}
+          path: output/gallery-content-review/
+          retention-days: 30
+          if-no-files-found: error
