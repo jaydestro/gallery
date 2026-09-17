@@ -389,3 +389,18 @@ test('validates a sparse retirement candidate set with original catalog indexes'
   assert.equal(result.status, 'complete');
   assert.equal(result.classification.existingContent[0].catalogIndex, 1);
 });
+
+test('accepts classifications returned out of input order and normalizes them by index', () => {
+  const candidates = [{ url: 'https://example.com/first' }, { url: 'https://example.com/second' }];
+  const classify = (candidateIndex) => ({
+    candidateIndex, url: candidates[candidateIndex].url, verdict: 'review', confidence: 'low',
+    criteria: ['uncertain'], evidence: 'Needs review.', relatedUrl: null,
+  });
+  const response = { newContent: [classify(1), classify(0)], existingContent: [] };
+  const result = runCopilotClassification({
+    prompt: 'prompt', candidatePath: 'candidates.json', auditPath: 'audit.json', catalogPath: 'catalog.json',
+    candidates, catalog: [], execute: () => ({ status: 0, stdout: JSON.stringify(response) }),
+  });
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(result.classification.newContent.map((item) => item.candidateIndex), [0, 1]);
+});
