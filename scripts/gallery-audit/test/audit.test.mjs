@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
-import { buildClassificationPrompt, runCopilotClassification } from '../copilot.mjs';
+import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
 import { planCatalogPromotion } from '../promotion.mjs';
 
@@ -221,21 +221,31 @@ test('retries malformed Copilot output once and returns an incomplete fallback',
 
 test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'gallery-copilot-'));
+  const documents = [
+    { candidates: [{ title: 'Candidate', url: 'https://example.com/new', summary: 'Useful guide.' }] },
+    { entries: [{ catalogIndex: 0, title: 'Existing', url: 'https://example.com/old', outcome: 'review', reasonCodes: ['age'] }] },
+    [{ title: 'Existing', description: 'Catalog description.', source: 'https://example.com/old', tags: ['blog'] }],
+  ];
   const files = ['candidates.json', 'audit.json', 'catalog.json'].map((name, index) => {
     const file = path.join(directory, name);
-    writeFileSync(file, JSON.stringify({ index }));
+    writeFileSync(file, JSON.stringify(documents[index]));
     return file;
   });
-  const prompt = buildClassificationPrompt({
+  const options = {
     prompt: 'Classify the documents.',
     candidatePath: files[0],
     auditPath: files[1],
     catalogPath: files[2],
-  });
+  };
+  const prompt = buildClassificationPrompt(options);
+  const argumentsList = buildCopilotArguments(options);
   assert.match(prompt, /BEGIN ARTICLE CANDIDATES/);
-  assert.match(prompt, /BEGIN DETERMINISTIC AUDIT/);
-  assert.match(prompt, /BEGIN LIVE CATALOG/);
-  assert.doesNotMatch(prompt, /--attachment/);
+  assert.match(prompt, /BEGIN EXISTING CATALOG AUDIT/);
+  assert.match(prompt, /Catalog description/);
+  assert.equal(argumentsList[0], '-p');
+  assert.equal(argumentsList[1], prompt);
+  assert.equal(argumentsList.some((argument) => argument.startsWith('--attachment')), false);
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= 96 * 1024);
 });
 
 test('accepts a fenced strict Copilot response with exact indexes and URLs', () => {
