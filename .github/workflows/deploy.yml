@@ -6,17 +6,16 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
-  deployments: write
 
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: https://jaydestro.github.io/gallery/
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       # Checkout source repo
       - uses: actions/checkout@v4
@@ -37,12 +36,13 @@ jobs:
       - name: Build website
         run: yarn build
 
-      # Deploy to gh-pages branch using PAT
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      # Package the static build for GitHub Pages
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          personal_token: ${{ secrets.GH_PAT }}
-          publish_dir: ./build
-          publish_branch: gh-pages
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
+          path: ./build
+
+      # Deploy with GitHub's native Pages integration
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
