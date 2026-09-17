@@ -219,7 +219,7 @@ test('retries malformed Copilot output once and returns an incomplete fallback',
   assert.equal(result.attempts, 2);
 });
 
-test('repairs malformed model JSON through the classification path', () => {
+test('repairs ANSI-wrapped malformed model JSON through the classification path', () => {
   const candidate = { url: 'https://example.com/new' };
   const response = `{
     newContent: [{
@@ -236,7 +236,7 @@ review.",
   }`;
   const result = runCopilotClassification({
     prompt: 'prompt', candidatePath: 'candidates.json', auditPath: 'audit.json', catalogPath: 'catalog.json',
-    candidates: [candidate], catalog: [], execute: () => ({ status: 0, stdout: response }),
+    candidates: [candidate], catalog: [], execute: () => ({ status: 0, stdout: `\u001b[32m${response}\u001b[0m` }),
   });
   assert.equal(result.status, 'complete');
   assert.equal(result.classification.newContent[0].url, candidate.url);
@@ -268,6 +268,7 @@ test('embeds JSON inputs as untrusted prompt data without native attachments', (
   assert.match(prompt, /Catalog description/);
   assert.equal(argumentsList[0], '-p');
   assert.equal(argumentsList[1], prompt);
+  assert.ok(argumentsList.includes('--no-color'));
   assert.equal(argumentsList.some((argument) => argument.startsWith('--attachment')), false);
   assert.ok(Buffer.byteLength(prompt, 'utf8') <= 96 * 1024);
 });
