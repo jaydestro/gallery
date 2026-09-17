@@ -272,8 +272,11 @@ test('embeds JSON inputs as untrusted prompt data without native attachments', (
   const argumentsList = buildCopilotArguments(options);
   assert.match(prompt, /BEGIN ARTICLE CANDIDATES/);
   assert.match(prompt, /BEGIN RETIREMENT CANDIDATES/);
+  assert.match(prompt, /BEGIN CATALOG COMPARISON ONLY/);
   assert.match(prompt, /Catalog description/);
-  assert.doesNotMatch(prompt, /Keep this/);
+  assert.match(prompt, /Keep this/);
+  const retirementSection = prompt.match(/BEGIN RETIREMENT CANDIDATES ---([\s\S]*?)--- END RETIREMENT CANDIDATES/)?.[1] ?? '';
+  assert.doesNotMatch(retirementSection, /Keep this/);
   assert.equal(argumentsList[0], '-p');
   assert.equal(argumentsList[1], prompt);
   assert.ok(argumentsList.includes('--no-color'));

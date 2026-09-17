@@ -44,6 +44,13 @@ function projectedDocuments({ candidatePath, auditPath, catalogPath, existingEnt
       reasonCodes: entry.reasonCodes,
       finalUrl: entry.finalUrl,
     })) }],
+    ['CATALOG COMPARISON ONLY', { entries: catalog.map((entry, catalogIndex) => ({
+      catalogIndex,
+      title: boundedText(entry.title, 160),
+      description: boundedText(entry.description, 180),
+      source: entry.source,
+      tags: entry.tags,
+    })) }],
   ];
 }
 
