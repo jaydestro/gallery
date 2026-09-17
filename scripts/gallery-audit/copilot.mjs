@@ -68,6 +68,33 @@ export function escapeJsonStringControlCharacters(value) {
   return result;
 }
 
+export function removeJsonTrailingCommas(value) {
+  let insideString = false;
+  let escaped = false;
+  let result = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (!insideString && character === ',') {
+      let next = index + 1;
+      while (/\s/.test(value[next] ?? '')) next += 1;
+      if (value[next] === '}' || value[next] === ']') continue;
+    }
+    result += character;
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\' && insideString) {
+      escaped = true;
+    } else if (character === '"') {
+      insideString = !insideString;
+    }
+  }
+  return result;
+}
+
+function normalizeCopilotJson(value) {
+  return removeJsonTrailingCommas(escapeJsonStringControlCharacters(stripJsonFence(value)));
+}
+
 function exactKeys(value, expected) {
   return value && typeof value === 'object' && !Array.isArray(value)
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort());
@@ -143,7 +170,7 @@ export function runCopilotClassification(options) {
     try {
       const result = execute(options);
       if (result.status !== 0) throw new Error(`Copilot exited with status ${result.status}: ${(result.stderr ?? '').trim()}`);
-      const parsed = JSON.parse(escapeJsonStringControlCharacters(stripJsonFence(result.stdout ?? '')));
+      const parsed = JSON.parse(normalizeCopilotJson(result.stdout ?? ''));
       return { status: 'complete', attempts: attempt, classification: validateClassification(parsed, options.candidates, options.catalog) };
     } catch (error) {
       lastError = error?.message ?? 'Invalid Copilot response';

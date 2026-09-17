@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
-import { buildClassificationPrompt, buildCopilotArguments, escapeJsonStringControlCharacters, runCopilotClassification } from '../copilot.mjs';
+import { buildClassificationPrompt, buildCopilotArguments, escapeJsonStringControlCharacters, removeJsonTrailingCommas, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
 import { planCatalogPromotion } from '../promotion.mjs';
 
@@ -224,6 +224,12 @@ test('escapes literal control characters only inside JSON strings', () => {
   const parsed = JSON.parse(escapeJsonStringControlCharacters(malformed));
   assert.equal(parsed.evidence, 'line one\nline two');
   assert.equal(parsed.value, 1);
+});
+
+test('removes trailing commas outside JSON strings', () => {
+  const parsed = JSON.parse(removeJsonTrailingCommas('{"text":"keep,}","items":[1,2,],}'));
+  assert.equal(parsed.text, 'keep,}');
+  assert.deepEqual(parsed.items, [1, 2]);
 });
 
 test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
