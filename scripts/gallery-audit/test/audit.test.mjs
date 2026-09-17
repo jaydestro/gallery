@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
-import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
+import { buildClassificationPrompt, buildCopilotArguments, escapeJsonStringControlCharacters, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
 import { planCatalogPromotion } from '../promotion.mjs';
 
@@ -217,6 +217,13 @@ test('retries malformed Copilot output once and returns an incomplete fallback',
   assert.equal(calls, 2);
   assert.equal(result.status, 'incomplete');
   assert.equal(result.attempts, 2);
+});
+
+test('escapes literal control characters only inside JSON strings', () => {
+  const malformed = '{\n"evidence":"line one\nline two",\n"value":1\n}';
+  const parsed = JSON.parse(escapeJsonStringControlCharacters(malformed));
+  assert.equal(parsed.evidence, 'line one\nline two');
+  assert.equal(parsed.value, 1);
 });
 
 test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
