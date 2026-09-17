@@ -45,6 +45,29 @@ export function stripJsonFence(value) {
   return match ? match[1].trim() : trimmed;
 }
 
+export function escapeJsonStringControlCharacters(value) {
+  let insideString = false;
+  let escaped = false;
+  let result = '';
+  for (const character of value) {
+    if (insideString && character.charCodeAt(0) < 0x20) {
+      const replacements = { '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+      result += replacements[character] ?? `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      escaped = false;
+      continue;
+    }
+    result += character;
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\' && insideString) {
+      escaped = true;
+    } else if (character === '"') {
+      insideString = !insideString;
+    }
+  }
+  return result;
+}
+
 function exactKeys(value, expected) {
   return value && typeof value === 'object' && !Array.isArray(value)
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort());
@@ -120,7 +143,7 @@ export function runCopilotClassification(options) {
     try {
       const result = execute(options);
       if (result.status !== 0) throw new Error(`Copilot exited with status ${result.status}: ${(result.stderr ?? '').trim()}`);
-      const parsed = JSON.parse(stripJsonFence(result.stdout ?? ''));
+      const parsed = JSON.parse(escapeJsonStringControlCharacters(stripJsonFence(result.stdout ?? '')));
       return { status: 'complete', attempts: attempt, classification: validateClassification(parsed, options.candidates, options.catalog) };
     } catch (error) {
       lastError = error?.message ?? 'Invalid Copilot response';
