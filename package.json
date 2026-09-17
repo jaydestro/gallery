@@ -4,6 +4,10 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
+    "gallery:audit": "node scripts/gallery-audit/index.mjs",
+    "gallery:audit:fixtures": "node scripts/gallery-audit/index.mjs --fixtures",
+    "gallery:promote": "node scripts/gallery-audit/index.mjs --classify-only --promote",
+    "test:gallery-audit": "node --test scripts/gallery-audit/test/*.test.mjs",
     "start": "docusaurus start",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
@@ -23,6 +27,7 @@
     "@mdx-js/react": "^3.0.0",
     "@types/react-dom": "^18.2.17",
     "clsx": "^2.0.0",
+    "fast-xml-parser": "5.11.1",
     "prism-react-renderer": "^2.3.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
