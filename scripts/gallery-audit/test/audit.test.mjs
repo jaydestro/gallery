@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
-import { runCopilotClassification } from '../copilot.mjs';
+import { buildClassificationPrompt, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
 import { planCatalogPromotion } from '../promotion.mjs';
 
@@ -214,6 +217,25 @@ test('retries malformed Copilot output once and returns an incomplete fallback',
   assert.equal(calls, 2);
   assert.equal(result.status, 'incomplete');
   assert.equal(result.attempts, 2);
+});
+
+test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'gallery-copilot-'));
+  const files = ['candidates.json', 'audit.json', 'catalog.json'].map((name, index) => {
+    const file = path.join(directory, name);
+    writeFileSync(file, JSON.stringify({ index }));
+    return file;
+  });
+  const prompt = buildClassificationPrompt({
+    prompt: 'Classify the documents.',
+    candidatePath: files[0],
+    auditPath: files[1],
+    catalogPath: files[2],
+  });
+  assert.match(prompt, /BEGIN ARTICLE CANDIDATES/);
+  assert.match(prompt, /BEGIN DETERMINISTIC AUDIT/);
+  assert.match(prompt, /BEGIN LIVE CATALOG/);
+  assert.doesNotMatch(prompt, /--attachment/);
 });
 
 test('accepts a fenced strict Copilot response with exact indexes and URLs', () => {
