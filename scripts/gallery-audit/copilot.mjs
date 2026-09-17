@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { jsonrepair } from 'jsonrepair';
 
 const CONFIDENCE = new Set(['high', 'medium', 'low']);
 const NEW_VERDICTS = new Set(['include', 'review', 'exclude']);
@@ -45,54 +46,8 @@ export function stripJsonFence(value) {
   return match ? match[1].trim() : trimmed;
 }
 
-export function escapeJsonStringControlCharacters(value) {
-  let insideString = false;
-  let escaped = false;
-  let result = '';
-  for (const character of value) {
-    if (insideString && character.charCodeAt(0) < 0x20) {
-      const replacements = { '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r', '\t': '\\t' };
-      result += replacements[character] ?? `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
-      escaped = false;
-      continue;
-    }
-    result += character;
-    if (escaped) {
-      escaped = false;
-    } else if (character === '\\' && insideString) {
-      escaped = true;
-    } else if (character === '"') {
-      insideString = !insideString;
-    }
-  }
-  return result;
-}
-
-export function removeJsonTrailingCommas(value) {
-  let insideString = false;
-  let escaped = false;
-  let result = '';
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (!insideString && character === ',') {
-      let next = index + 1;
-      while (/\s/.test(value[next] ?? '')) next += 1;
-      if (value[next] === '}' || value[next] === ']') continue;
-    }
-    result += character;
-    if (escaped) {
-      escaped = false;
-    } else if (character === '\\' && insideString) {
-      escaped = true;
-    } else if (character === '"') {
-      insideString = !insideString;
-    }
-  }
-  return result;
-}
-
 function normalizeCopilotJson(value) {
-  return removeJsonTrailingCommas(escapeJsonStringControlCharacters(stripJsonFence(value)));
+  return jsonrepair(stripJsonFence(value));
 }
 
 function exactKeys(value, expected) {
