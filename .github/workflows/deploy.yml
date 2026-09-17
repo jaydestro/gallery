@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: https://azurecosmosdb.github.io/gallery/
+      url: https://jaydestro.github.io/gallery/
     steps:
       # Checkout source repo
       - uses: actions/checkout@v4
