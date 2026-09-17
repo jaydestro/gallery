@@ -240,6 +240,7 @@ review.",
   });
   assert.equal(result.status, 'complete');
   assert.equal(result.classification.newContent[0].url, candidate.url);
+  assert.equal(result.classification.newContent[0].evidence, 'Needs\nreview.');
 });
 
 test('embeds JSON inputs as untrusted prompt data without native attachments', () => {
