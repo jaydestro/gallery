@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { stripVTControlCharacters } from 'node:util';
 import { jsonrepair } from 'jsonrepair';
 
 const CONFIDENCE = new Set(['high', 'medium', 'low']);
@@ -47,7 +48,7 @@ export function stripJsonFence(value) {
 }
 
 function normalizeCopilotJson(value) {
-  return jsonrepair(stripJsonFence(value));
+  return jsonrepair(stripJsonFence(stripVTControlCharacters(value)));
 }
 
 function exactKeys(value, expected) {
@@ -105,6 +106,7 @@ export function buildCopilotArguments({ prompt, candidatePath, auditPath, catalo
     '--no-ask-user',
     '--disable-builtin-mcps',
     '--no-custom-instructions',
+    '--no-color',
     '--no-remote',
   ];
 }
