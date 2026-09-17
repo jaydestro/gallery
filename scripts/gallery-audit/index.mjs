@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { auditCatalog, discoverArticles } from './core.mjs';
 import { runCopilotClassification } from './copilot.mjs';
-import { applyCatalogPromotion } from './promotion.mjs';
+import { applyCatalogPromotion, strongRetirementEvidence } from './promotion.mjs';
 
 const root = process.cwd();
 const outputDirectory = path.join(root, 'output', 'gallery-content-review');
@@ -67,6 +67,7 @@ async function classifyOnly({ promote = false } = {}) {
     await writeJson('run-metadata.json', metadata);
     return;
   }
+  const existingEntries = auditReport.entries.filter(strongRetirementEvidence);
   const result = runCopilotClassification({
     prompt,
     candidatePath: path.join(outputDirectory, 'article-candidates.json'),
@@ -74,6 +75,7 @@ async function classifyOnly({ promote = false } = {}) {
     catalogPath: path.join(root, 'static', 'templates.json'),
     candidates: candidateReport.candidates,
     catalog,
+    existingEntries,
   });
   if (result.status === 'complete') {
     result.classification.newContent.forEach((classification) => {
@@ -82,7 +84,7 @@ async function classifyOnly({ promote = false } = {}) {
     result.classification.existingContent.forEach((classification) => {
       auditReport.entries[classification.catalogIndex].classification = classification;
     });
-    metadata.copilot = { status: 'complete', attempts: result.attempts, responseCaptured: true };
+    metadata.copilot = { status: 'complete', attempts: result.attempts, responseCaptured: true, retirementCandidates: existingEntries.length };
   } else {
     metadata.complete = false;
     metadata.copilot = { status: 'incomplete', attempts: result.attempts, error: result.error };
