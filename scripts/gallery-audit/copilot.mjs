@@ -73,7 +73,8 @@ function validateItem(item, expectedIndex, expectedUrl, kind) {
   const indexKey = kind === 'new' ? 'candidateIndex' : 'catalogIndex';
   const expectedKeys = [indexKey, 'url', 'verdict', 'confidence', 'criteria', 'evidence', 'relatedUrl'];
   if (!exactKeys(item, expectedKeys)) throw new Error(`${kind} classification has unexpected fields`);
-  if (item[indexKey] !== expectedIndex || item.url !== expectedUrl) throw new Error(`${kind} classification index or URL mismatch`);
+  if (item[indexKey] !== expectedIndex) throw new Error(`${kind} classification index mismatch`);
+  if (typeof item.url !== 'string' || !['http:', 'https:'].includes(new URL(item.url).protocol)) throw new Error(`${kind} classification has invalid URL`);
   if (!(kind === 'new' ? NEW_VERDICTS : EXISTING_VERDICTS).has(item.verdict)) throw new Error(`${kind} classification has invalid verdict`);
   if (!CONFIDENCE.has(item.confidence)) throw new Error(`${kind} classification has invalid confidence`);
   if (!Array.isArray(item.criteria) || item.criteria.length === 0 || item.criteria.some((criterion) => typeof criterion !== 'string' || criterion.trim() === '')) throw new Error(`${kind} classification has invalid criteria`);
@@ -82,6 +83,7 @@ function validateItem(item, expectedIndex, expectedUrl, kind) {
     const related = new URL(item.relatedUrl);
     if (!['http:', 'https:'].includes(related.protocol)) throw new Error(`${kind} classification has invalid relatedUrl`);
   }
+  item.url = expectedUrl;
 }
 
 export function validateClassification(value, candidates, existingEntries) {

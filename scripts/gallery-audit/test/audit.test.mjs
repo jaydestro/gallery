@@ -405,6 +405,20 @@ test('accepts classifications returned out of input order and normalizes them by
   assert.deepEqual(result.classification.newContent.map((item) => item.candidateIndex), [0, 1]);
 });
 
+test('restores authoritative input URLs when Copilot rewrites echoed URLs', () => {
+  const candidate = { url: 'https://example.com/article?source=feed' };
+  const response = {
+    newContent: [{ candidateIndex: 0, url: 'https://example.com/article', verdict: 'review', confidence: 'low', criteria: ['uncertain'], evidence: 'Needs review.', relatedUrl: null }],
+    existingContent: [],
+  };
+  const result = runCopilotClassification({
+    prompt: 'prompt', candidatePath: 'candidates.json', auditPath: 'audit.json', catalogPath: 'catalog.json',
+    candidates: [candidate], catalog: [], execute: () => ({ status: 0, stdout: JSON.stringify(response) }),
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.classification.newContent[0].url, candidate.url);
+});
+
 test('rejects duplicate, missing, and out-of-range candidate indexes', () => {
   const candidates = [{ url: 'https://example.com/first' }, { url: 'https://example.com/second' }];
   const classify = (candidateIndex, url = candidates[candidateIndex]?.url ?? 'https://example.com/other') => ({
