@@ -359,7 +359,7 @@ export function discoverFromGithubSearch(value, source, policy, existingFingerpr
     if (!repository || typeof repository !== 'object' || Array.isArray(repository)) return [];
     const timestamp = repository.created_at;
     if (!repository?.name || !repository.html_url || !timestamp || Date.parse(timestamp) < earliest) return [];
-    if (repository.private || repository.archived || repository.disabled || repository.fork || repository.size === 0) return [];
+    if (repository.private || repository.visibility !== 'public' || repository.archived || repository.disabled || repository.fork || repository.size === 0) return [];
     if (!allowedOwners.has(String(repository.owner?.login).toLowerCase())) return [];
     let fingerprint;
     try {

@@ -223,7 +223,7 @@ test('discovers catalog-aligned blogs, videos, repositories, and Learn documenta
       if (!requestUrl.includes('/feeds/')) return '"externalId":"UC0000000000000000000000"';
       return '<feed><entry><title>Azure Cosmos DB vector search</title><link href="https://www.youtube.com/watch?v=video123"/><published>2026-09-11T00:00:00Z</published><author><name>Azure Cosmos DB Team</name></author><summary>Technical walkthrough.</summary></entry></feed>';
     }
-    if (source.id === 'github') return JSON.stringify({ incomplete_results: false, items: [{ name: 'cosmosdb-new-sample', html_url: 'https://github.com/AzureCosmosDB/cosmosdb-new-sample', created_at: '2026-09-12T00:00:00Z', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Runnable Azure Cosmos DB sample.', topics: ['cosmosdb'], owner: { login: 'AzureCosmosDB' } }] });
+    if (source.id === 'github') return JSON.stringify({ incomplete_results: false, items: [{ name: 'cosmosdb-new-sample', html_url: 'https://github.com/AzureCosmosDB/cosmosdb-new-sample', created_at: '2026-09-12T00:00:00Z', private: false, visibility: 'public', archived: false, disabled: false, fork: false, size: 10, description: 'Runnable Azure Cosmos DB sample.', topics: ['cosmosdb'], owner: { login: 'AzureCosmosDB' } }] });
     return JSON.stringify({ results: [{ title: 'Configure Azure Cosmos DB indexing', url: 'https://learn.microsoft.com/en-us/azure/cosmos-db/indexing', lastUpdatedDate: '2026-09-13T00:00:00Z', description: 'Configure indexing for Azure Cosmos DB.', products: ['Azure Cosmos DB'] }] });
   };
   const discovery = await discoverContent(sources, policy, [], [], {
@@ -273,8 +273,9 @@ test('skips malformed source dates and propagates GitHub tokens to candidate che
   const repositories = {
     incomplete_results: false,
     items: [
-      { name: 'invalid-date', html_url: 'https://github.com/AzureCosmosDB/invalid-date', created_at: 'not-a-date', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
-      { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/valid-cosmosdb', created_at: '2026-09-12T00:00:00Z', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+      { name: 'invalid-date', html_url: 'https://github.com/AzureCosmosDB/invalid-date', created_at: 'not-a-date', private: false, visibility: 'public', archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+      { name: 'internal-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/internal-cosmosdb', created_at: '2026-09-12T00:00:00Z', private: false, visibility: 'internal', archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+      { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/valid-cosmosdb', created_at: '2026-09-12T00:00:00Z', private: false, visibility: 'public', archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
     ],
   };
   let receivedToken;
@@ -380,7 +381,7 @@ test('applies the aggregate budget before checks and enforces final GitHub owner
   assert.deepEqual(budgeted.candidates.map((candidate) => candidate.sourceId), ['first', 'second', 'first']);
 
   const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
-  const repositories = { incomplete_results: false, items: [{ name: 'cosmosdb', html_url: 'https://github.com/AzureCosmosDB/cosmosdb', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } }, null, 'bad'] };
+  const repositories = { incomplete_results: false, items: [{ name: 'cosmosdb', html_url: 'https://github.com/AzureCosmosDB/cosmosdb', created_at: '2026-09-12T00:00:00Z', visibility: 'public', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } }, null, 'bad'] };
   const escaped = await discoverContent([githubSource], policy, [], [], {
     now: new Date('2026-09-17T00:00:00Z'),
     sourceProvider: async () => JSON.stringify(repositories),
@@ -407,8 +408,8 @@ test('authenticates GitHub source requests only to the API host', async () => {
 test('skips malformed GitHub results and deduplicates canonical redirect destinations', async () => {
   const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
   const repositories = { incomplete_results: false, items: [
-    { name: 'malformed', html_url: 'not-a-url', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
-    { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/alias', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+    { name: 'malformed', html_url: 'not-a-url', created_at: '2026-09-12T00:00:00Z', visibility: 'public', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+    { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/alias', created_at: '2026-09-12T00:00:00Z', visibility: 'public', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
   ] };
   const existing = [catalogEntry({ source: 'https://github.com/AzureCosmosDB/canonical' })];
   const discovery = await discoverContent([githubSource], policy, existing, [], {
