@@ -8,7 +8,7 @@ import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverContent, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
 import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
-import { planCatalogPromotion } from '../promotion.mjs';
+import { planCatalogPromotion, promotionMarkdown } from '../promotion.mjs';
 
 const policy = {
   requestTimeoutMs: 250,
@@ -550,6 +550,18 @@ test('promotes only high-confidence additions with complete source metadata', ()
   assert.equal(result.catalog[0].source, candidate.url);
   assert.equal(result.catalog[0].author, 'Publisher');
   assert.deepEqual(result.catalog[0].tags, ['blog']);
+});
+
+test('numbers every maintenance PR item for unambiguous review comments', () => {
+  const markdown = promotionMarkdown({
+    additions: [{ title: 'First addition', source: 'https://example.com/add' }],
+    retirements: [{ title: 'First retirement', source: 'https://example.com/retire', retirementReason: 'Superseded.' }],
+    skippedAdditions: [{ url: 'https://example.com/skip', reason: 'already-cataloged' }],
+  }, '2026-09-18T00:00:00.000Z');
+  assert.match(markdown, /\*\*A1\*\* Add \[First addition\]/);
+  assert.match(markdown, /\*\*R1\*\* Retire \[First retirement\]/);
+  assert.match(markdown, /\*\*S1\*\* https:\/\/example\.com\/skip/);
+  assert.match(markdown, /include A1; exclude A2; keep R1/);
 });
 
 test('retires only high-confidence classifications backed by strong deterministic evidence', () => {
