@@ -303,6 +303,31 @@ test('rejects Learn candidates redirected outside the approved product tree', as
   assert.equal(discovery.sourceResults[0].status, 'complete');
 });
 
+test('restricts GitHub source redirects and records aggregate candidate truncation', async () => {
+  const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
+  let redirectedFetch = false;
+  const redirected = await discoverContent([githubSource], policy, [], [], {
+    fetchImpl: async (url) => {
+      if (url.hostname === 'api.github.com') return new Response('', { status: 302, headers: { location: 'https://github.com/search' } });
+      redirectedFetch = true;
+      return new Response('{}');
+    },
+  });
+  assert.equal(redirectedFetch, false);
+  assert.equal(redirected.sourceResults[0].error, 'hostname-not-allowlisted');
+
+  const feedSource = { id: 'feed', kind: 'feed', contentType: 'blog', url: 'https://example.com/feed', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] };
+  const xml = `<rss><channel>${[1, 2, 3].map((number) => `<item><title>Cosmos DB guide ${number}</title><link>https://example.com/${number}</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Guide ${number}</description></item>`).join('')}</channel></rss>`;
+  const truncated = await discoverContent([feedSource], { ...policy, discoveryCandidateLimit: 2 }, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => xml,
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.equal(truncated.candidates.length, 2);
+  assert.deepEqual(truncated.candidates.map((candidate) => candidate.candidateIndex), [0, 1]);
+  assert.deepEqual(truncated.sourceResults, [{ sourceId: 'feed', status: 'partial', candidateCount: 2, error: 'aggregate-candidate-limit' }]);
+});
+
 test('retries malformed Copilot output once and returns an incomplete fallback', () => {
   let calls = 0;
   const result = runCopilotClassification({

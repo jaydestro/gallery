@@ -428,7 +428,8 @@ async function discoverSource(source, policy, existing, options) {
     const xml = await sourceBody(source, feedUrl, policy, options, ['www.youtube.com']);
     return discoverFromFeed(xml, source, policy, existing, { now: options.now });
   }
-  const body = await sourceBody(source, source.url, policy, options);
+  const sourceHostnames = kind === 'github-search' ? ['api.github.com'] : source.allowedHostnames;
+  const body = await sourceBody(source, source.url, policy, options, sourceHostnames);
   if (kind === 'github-search') return discoverFromGithubSearch(body, source, policy, existing, { now: options.now });
   if (kind === 'learn-search') return discoverFromLearnSearch(body, source, policy, existing, { now: options.now });
   return discoverFromFeed(body, source, policy, existing, { now: options.now });
@@ -471,6 +472,18 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
       sourceResults.push({ sourceId: source.id, status: 'complete', candidateCount: candidates.length - candidateCountBefore });
     } catch (error) {
       sourceResults.push({ sourceId: source.id, status: 'partial', candidateCount: 0, error: error?.message ?? 'source-error' });
+    }
+  }
+  const candidateLimit = policy.discoveryCandidateLimit ?? 40;
+  if (candidates.length > candidateLimit) {
+    const removedSourceIds = new Set(candidates.slice(candidateLimit).map((candidate) => candidate.sourceId));
+    candidates.length = candidateLimit;
+    candidates.forEach((candidate, index) => { candidate.candidateIndex = index; });
+    for (const result of sourceResults) {
+      if (!removedSourceIds.has(result.sourceId)) continue;
+      result.status = 'partial';
+      result.error = 'aggregate-candidate-limit';
+      result.candidateCount = candidates.filter((candidate) => candidate.sourceId === result.sourceId).length;
     }
   }
   return { candidates, sourceResults };
