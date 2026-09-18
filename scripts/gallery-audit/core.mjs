@@ -276,6 +276,8 @@ function inclusionSignals(source, policy, ...values) {
 }
 
 function candidateFromMetadata(source, policy, metadata, now) {
+  const publishedTime = Date.parse(metadata.publishedAt);
+  if (!Number.isFinite(publishedTime)) return null;
   const matchedTerms = inclusionSignals(source, policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []));
   if (matchedTerms.length === 0) return null;
   return {
@@ -284,7 +286,7 @@ function candidateFromMetadata(source, policy, metadata, now) {
     contentType: source.contentType ?? 'article',
     title: metadata.title.trim(),
     url: normalizeUrl(metadata.url, policy.trackingParameters),
-    publishedAt: new Date(metadata.publishedAt).toISOString(),
+    publishedAt: new Date(publishedTime).toISOString(),
     author: metadata.author?.trim() || null,
     summary: metadata.summary.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000),
     signals: [`trust:${source.trustTier}`, `type:${source.contentType ?? 'article'}`, ...matchedTerms.map((term) => `term:${term.toLowerCase()}`)],
@@ -442,6 +444,7 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
         const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
           allowedHostnames: source.allowedHostnames,
           fetchImpl: options.fetchImpl,
+          githubToken: options.githubToken,
         });
         if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
         const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));

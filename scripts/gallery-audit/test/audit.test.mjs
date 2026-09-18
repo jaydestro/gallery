@@ -267,6 +267,30 @@ test('marks incomplete GitHub searches partial and bounds ordered candidate chec
   assert.deepEqual(concurrent.candidates.map((candidate) => candidate.url), ['https://example.com/1', 'https://example.com/2', 'https://example.com/3']);
 });
 
+test('skips malformed source dates and propagates GitHub tokens to candidate checks', async () => {
+  const source = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
+  const repositories = {
+    incomplete_results: false,
+    items: [
+      { name: 'invalid-date', html_url: 'https://github.com/AzureCosmosDB/invalid-date', created_at: 'not-a-date', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+      { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/valid-cosmosdb', created_at: '2026-09-12T00:00:00Z', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+    ],
+  };
+  let receivedToken;
+  const discovery = await discoverContent([source], policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    githubToken: 'test-token',
+    sourceProvider: async () => JSON.stringify(repositories),
+    checker: async (url, options) => {
+      receivedToken = options.githubToken;
+      return { outcome: 'healthy', finalUrl: url };
+    },
+  });
+  assert.equal(discovery.sourceResults[0].status, 'complete');
+  assert.deepEqual(discovery.candidates.map((candidate) => candidate.title), ['valid-cosmosdb']);
+  assert.equal(receivedToken, 'test-token');
+});
+
 test('rejects Learn candidates redirected outside the approved product tree', async () => {
   const source = { id: 'learn', kind: 'learn-search', contentType: 'documentation', url: 'https://learn.microsoft.com/api/search?search=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['learn.microsoft.com'], allowedPathPrefixes: ['/azure/cosmos-db/'] };
   const discovery = await discoverContent([source], policy, [], [], {
