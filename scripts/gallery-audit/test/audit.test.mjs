@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { auditCatalog, checkUrl, discoverArticles, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
+import { auditCatalog, checkUrl, discoverArticles, discoverContent, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
 import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
 import { planCatalogPromotion } from '../promotion.mjs';
@@ -74,7 +74,7 @@ test('classifies age alone as review rather than broken or retired', async () =>
 });
 
 test('filters RSS by lookback and inclusion terms and deduplicates live, retired, and feed URLs', () => {
-  const source = { id: 'feed', trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] };
+  const source = { id: 'feed', contentType: 'blog', trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] };
   const xml = `<?xml version="1.0"?><rss><channel>
     <item><title>Azure Cosmos DB new guide</title><link>https://example.com/new?utm_source=rss</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Technical tutorial</description></item>
     <item><title>Duplicate Cosmos DB guide</title><link>https://example.com/new</link><pubDate>2026-09-11T00:00:00Z</pubDate></item>
@@ -90,6 +90,7 @@ test('filters RSS by lookback and inclusion terms and deduplicates live, retired
   const candidates = discoverFromFeed(xml, source, policy, existing, { now: new Date('2026-09-17T00:00:00Z') });
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].url, 'https://example.com/new');
+  assert.equal(candidates[0].contentType, 'blog');
 });
 
 test('classifies HTTP outcomes, redirects, timeouts, and response limits', async (context) => {
@@ -208,6 +209,37 @@ test('rejects failed feeds and unresolved or off-host article candidates', async
   assert.equal(discovery.sourceResults[0].candidateCount, 1);
 });
 
+test('discovers catalog-aligned blogs, videos, repositories, and Learn documentation', async () => {
+  const sources = [
+    { id: 'blog', kind: 'feed', contentType: 'blog', url: 'https://example.com/feed', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] },
+    { id: 'video', kind: 'youtube', contentType: 'video', url: 'https://www.youtube.com/@AzureCosmosDB', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['www.youtube.com'] },
+    { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] },
+    { id: 'learn', kind: 'learn-search', contentType: 'documentation', url: 'https://learn.microsoft.com/api/search?search=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['learn.microsoft.com'], allowedPathPrefixes: ['/azure/cosmos-db/'] },
+  ];
+  const sourceProvider = async (source, requestUrl) => {
+    if (source.id === 'blog') return '<rss><channel><item><title>Azure Cosmos DB indexing guide</title><link>https://example.com/indexing</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Technical guide.</description></item></channel></rss>';
+    if (source.id === 'video') {
+      if (!requestUrl.includes('/feeds/')) return '"externalId":"UC0000000000000000000000"';
+      return '<feed><entry><title>Azure Cosmos DB vector search</title><link href="https://www.youtube.com/watch?v=video123"/><published>2026-09-11T00:00:00Z</published><author><name>Azure Cosmos DB Team</name></author><summary>Technical walkthrough.</summary></entry></feed>';
+    }
+    if (source.id === 'github') return JSON.stringify({ items: [{ name: 'cosmosdb-new-sample', html_url: 'https://github.com/AzureCosmosDB/cosmosdb-new-sample', created_at: '2026-09-12T00:00:00Z', private: false, archived: false, disabled: false, fork: false, size: 10, description: 'Runnable Azure Cosmos DB sample.', topics: ['cosmosdb'], owner: { login: 'AzureCosmosDB' } }] });
+    return JSON.stringify({ results: [{ title: 'Configure Azure Cosmos DB indexing', url: 'https://learn.microsoft.com/en-us/azure/cosmos-db/indexing', lastUpdatedDate: '2026-09-13T00:00:00Z', description: 'Configure indexing for Azure Cosmos DB.', products: ['Azure Cosmos DB'] }] });
+  };
+  const discovery = await discoverContent(sources, policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider,
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.deepEqual(discovery.candidates.map((candidate) => candidate.contentType), ['blog', 'video', 'example', 'documentation']);
+  assert.deepEqual(discovery.candidates.map((candidate) => candidate.url), [
+    'https://example.com/indexing',
+    'https://www.youtube.com/watch?v=video123',
+    'https://github.com/AzureCosmosDB/cosmosdb-new-sample',
+    'https://learn.microsoft.com/azure/cosmos-db/indexing',
+  ]);
+  assert.ok(discovery.sourceResults.every((result) => result.status === 'complete' && result.candidateCount === 1));
+});
+
 test('retries malformed Copilot output once and returns an incomplete fallback', () => {
   let calls = 0;
   const result = runCopilotClassification({
@@ -270,7 +302,7 @@ test('embeds JSON inputs as untrusted prompt data without native attachments', (
   };
   const prompt = buildClassificationPrompt(options);
   const argumentsList = buildCopilotArguments(options);
-  assert.match(prompt, /BEGIN ARTICLE CANDIDATES/);
+  assert.match(prompt, /BEGIN CONTENT CANDIDATES/);
   assert.match(prompt, /BEGIN RETIREMENT CANDIDATES/);
   assert.match(prompt, /BEGIN CATALOG COMPARISON ONLY/);
   assert.match(prompt, /Catalog description/);

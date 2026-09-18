@@ -269,20 +269,43 @@ function entryLink(entry) {
   return '';
 }
 
+function inclusionSignals(source, policy, ...values) {
+  const terms = source.inclusionTerms ?? policy.inclusionTerms;
+  const haystack = values.filter(Boolean).join(' ').toLowerCase();
+  return terms.filter((term) => haystack.includes(term.toLowerCase()));
+}
+
+function candidateFromMetadata(source, policy, metadata, now) {
+  const matchedTerms = inclusionSignals(source, policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []));
+  if (matchedTerms.length === 0) return null;
+  return {
+    candidateIndex: 0,
+    sourceId: source.id,
+    contentType: source.contentType ?? 'article',
+    title: metadata.title.trim(),
+    url: normalizeUrl(metadata.url, policy.trackingParameters),
+    publishedAt: new Date(metadata.publishedAt).toISOString(),
+    author: metadata.author?.trim() || null,
+    summary: metadata.summary.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000),
+    signals: [`trust:${source.trustTier}`, `type:${source.contentType ?? 'article'}`, ...matchedTerms.map((term) => `term:${term.toLowerCase()}`)],
+    discoveredAt: now.toISOString(),
+    classification: null,
+  };
+}
+
 export function discoverFromFeed(xml, source, policy, existingFingerprints, options = {}) {
   const parser = new XMLParser({ ignoreAttributes: false, processEntities: false, trimValues: true });
   const parsed = parser.parse(xml);
   const entries = asArray(parsed.rss?.channel?.item ?? parsed.feed?.entry);
   const now = options.now ?? new Date();
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
-  const terms = source.inclusionTerms ?? policy.inclusionTerms;
   const seen = new Set();
   const candidates = [];
   for (const entry of entries) {
     const title = textValue(entry.title).trim();
     const rawUrl = entryLink(entry).trim();
     const publishedAt = textValue(entry.pubDate ?? entry.published ?? entry.updated).trim();
-    const summary = textValue(entry.description ?? entry.summary ?? entry.content).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    const summary = textValue(entry.description ?? entry.summary ?? entry.content ?? entry['media:group']?.['media:description']);
     if (!title || !rawUrl || !publishedAt || Number.isNaN(Date.parse(publishedAt)) || Date.parse(publishedAt) < earliest) continue;
     let normalized;
     try {
@@ -291,44 +314,127 @@ export function discoverFromFeed(xml, source, policy, existingFingerprints, opti
       continue;
     }
     if (!source.allowedHostnames.includes(new URL(normalized).hostname.toLowerCase())) continue;
-    const haystack = `${title} ${summary} ${normalized}`.toLowerCase();
-    const matchedTerms = terms.filter((term) => haystack.includes(term.toLowerCase()));
     const fingerprint = urlFingerprint(normalized, policy.trackingParameters);
-    if (matchedTerms.length === 0 || existingFingerprints.has(fingerprint) || seen.has(fingerprint)) continue;
-    seen.add(fingerprint);
-    candidates.push({
-      candidateIndex: candidates.length,
-      sourceId: source.id,
+    const candidate = candidateFromMetadata(source, policy, {
       title,
       url: normalized,
-      publishedAt: new Date(publishedAt).toISOString(),
-      author: textValue(entry.author ?? entry['dc:creator']).trim() || null,
+      publishedAt,
+      author: textValue(entry.author ?? entry['dc:creator']),
       summary,
-      signals: [`trust:${source.trustTier}`, ...matchedTerms.map((term) => `term:${term.toLowerCase()}`)],
-      discoveredAt: now.toISOString(),
-      classification: null,
-    });
+    }, now);
+    if (!candidate || existingFingerprints.has(fingerprint) || seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    candidate.candidateIndex = candidates.length;
+    candidates.push(candidate);
   }
   return candidates;
 }
 
-export async function discoverArticles(sources, policy, liveCatalog, retiredCatalog, options = {}) {
+export function discoverFromGithubSearch(value, source, policy, existingFingerprints, options = {}) {
+  const document = typeof value === 'string' ? JSON.parse(value) : value;
+  const now = options.now ?? new Date();
+  const earliest = now.getTime() - source.lookbackDays * 86_400_000;
+  const allowedOwners = new Set((source.allowedOwners ?? []).map((owner) => owner.toLowerCase()));
+  return asArray(document.items).flatMap((repository) => {
+    const timestamp = repository.created_at;
+    if (!repository?.name || !repository.html_url || !timestamp || Date.parse(timestamp) < earliest) return [];
+    if (repository.private || repository.archived || repository.disabled || repository.fork || repository.size === 0) return [];
+    if (!allowedOwners.has(String(repository.owner?.login).toLowerCase())) return [];
+    const fingerprint = urlFingerprint(repository.html_url, policy.trackingParameters);
+    if (existingFingerprints.has(fingerprint)) return [];
+    const candidate = candidateFromMetadata(source, policy, {
+      title: repository.name,
+      url: repository.html_url,
+      publishedAt: timestamp,
+      author: repository.owner.login,
+      summary: repository.description ?? '',
+      topics: repository.topics,
+    }, now);
+    return candidate?.summary ? [candidate] : [];
+  });
+}
+
+export function discoverFromLearnSearch(value, source, policy, existingFingerprints, options = {}) {
+  const document = typeof value === 'string' ? JSON.parse(value) : value;
+  const now = options.now ?? new Date();
+  const earliest = now.getTime() - source.lookbackDays * 86_400_000;
+  const prefixes = source.allowedPathPrefixes ?? ['/azure/cosmos-db/'];
+  return asArray(document.results).flatMap((result) => {
+    if (!result?.title || !result.url || !result.lastUpdatedDate || Date.parse(result.lastUpdatedDate) < earliest) return [];
+    let normalized;
+    try {
+      normalized = normalizeUrl(result.url, policy.trackingParameters);
+    } catch {
+      return [];
+    }
+    const url = new URL(normalized);
+    if (url.hostname !== 'learn.microsoft.com' || !prefixes.some((prefix) => url.pathname.startsWith(prefix))) return [];
+    const fingerprint = urlFingerprint(normalized, policy.trackingParameters);
+    if (existingFingerprints.has(fingerprint)) return [];
+    const candidate = candidateFromMetadata(source, policy, {
+      title: result.title,
+      url: normalized,
+      publishedAt: result.lastUpdatedDate,
+      author: source.catalogDefaults?.author,
+      summary: result.description ?? '',
+      topics: result.products,
+    }, now);
+    return candidate?.summary ? [candidate] : [];
+  });
+}
+
+async function sourceBody(source, requestUrl, policy, options, allowedHostnames = source.allowedHostnames) {
+  const provided = options.sourceProvider
+    ? await options.sourceProvider(source, requestUrl)
+    : options.feedProvider && (source.kind ?? 'feed') === 'feed'
+      ? await options.feedProvider(source)
+      : null;
+  if (provided !== null) {
+    if (typeof provided === 'string') return provided;
+    if (provided.status < 200 || provided.status >= 300) throw new Error(`feed-http-${provided.status}`);
+    return provided.body;
+  }
+  const headers = { 'User-Agent': 'gallery-content-discovery' };
+  if (requestUrl.startsWith('https://api.github.com/')) {
+    headers.Accept = 'application/vnd.github+json';
+    const token = options.githubToken ?? process.env.GITHUB_TOKEN;
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  const result = await boundedGet(requestUrl, policy, { allowedHostnames, fetchImpl: options.fetchImpl, headers });
+  if (result.status < 200 || result.status >= 300) throw new Error(`source-http-${result.status}`);
+  return result.body;
+}
+
+async function discoverSource(source, policy, existing, options) {
+  const kind = source.kind ?? 'feed';
+  if (kind === 'youtube') {
+    const handlePolicy = { ...policy, maxResponseBytes: source.handleMaxResponseBytes ?? 4 * 1024 * 1024 };
+    const handleBody = await sourceBody(source, source.url, handlePolicy, options, ['www.youtube.com']);
+    const channelMatch = String(handleBody).match(/"(?:channelId|externalId|browseId)":"(UC[A-Za-z0-9_-]{20,})"|youtube\.com\/channel\/(UC[A-Za-z0-9_-]{20,})/);
+    const channelId = channelMatch?.[1] ?? channelMatch?.[2];
+    if (!channelId) throw new Error('youtube-channel-id-not-found');
+    const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`;
+    const xml = await sourceBody(source, feedUrl, policy, options, ['www.youtube.com']);
+    return discoverFromFeed(xml, source, policy, existing, { now: options.now });
+  }
+  const body = await sourceBody(source, source.url, policy, options);
+  if (kind === 'github-search') return discoverFromGithubSearch(body, source, policy, existing, { now: options.now });
+  if (kind === 'learn-search') return discoverFromLearnSearch(body, source, policy, existing, { now: options.now });
+  return discoverFromFeed(body, source, policy, existing, { now: options.now });
+}
+
+export async function discoverContent(sources, policy, liveCatalog, retiredCatalog, options = {}) {
   const existing = new Set([...liveCatalog, ...retiredCatalog].map((entry) => urlFingerprint(entry.source, policy.trackingParameters)));
   const candidates = [];
   const sourceResults = [];
   const seen = new Set();
   for (const source of sources.filter((item) => item.enabled)) {
     try {
-      const feedUrl = new URL(source.url);
-      if (!source.allowedHostnames.includes(feedUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
-      const feedResult = options.feedProvider
-        ? await options.feedProvider(source)
-        : await boundedGet(source.url, policy, { allowedHostnames: source.allowedHostnames, fetchImpl: options.fetchImpl });
-      if (typeof feedResult !== 'string' && (feedResult.status < 200 || feedResult.status >= 300)) throw new Error(`feed-http-${feedResult.status}`);
-      const xml = typeof feedResult === 'string' ? feedResult : feedResult.body;
-      const discovered = discoverFromFeed(xml, source, policy, existing, { now: options.now });
+      const sourceUrl = new URL(source.url);
+      if (!source.allowedHostnames.includes(sourceUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
+      const discovered = await discoverSource(source, policy, existing, options);
       const candidateCountBefore = candidates.length;
-      for (const candidate of discovered) {
+      for (const candidate of discovered.slice(0, source.maxCandidates ?? 25)) {
         const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
           allowedHostnames: source.allowedHostnames,
           fetchImpl: options.fetchImpl,
@@ -349,3 +455,5 @@ export async function discoverArticles(sources, policy, liveCatalog, retiredCata
   }
   return { candidates, sourceResults };
 }
+
+export const discoverArticles = discoverContent;

@@ -1,4 +1,4 @@
-# Static Gallery Audit and Article Discovery Plan
+# Static Gallery Audit and Content Discovery Plan
 
 **Status:** MVP implemented  
 **Phase:** Automated audit, classification, and draft pull request
@@ -8,7 +8,7 @@
 Keep the gallery as a static Docusaurus site on GitHub Pages. Add one GitHub Actions workflow that:
 
 1. audits the existing `static/templates.json` catalog for broken, redirected, duplicate, and potentially stale entries;
-2. discovers recent Azure Cosmos DB articles from a small allowlist of public feeds and documentation indexes;
+2. discovers recent Azure Cosmos DB examples, videos, documentation, and blogs from an exact allowlist of public endpoints;
 3. uses GitHub Copilot CLI in programmatic mode to evaluate relevance and semantic staleness against a fixed rubric; and
 4. applies only high-confidence additions and strongly evidenced retirements to a stable automation branch; and
 5. opens or refreshes a draft pull request and uploads validated reports for review.
@@ -32,14 +32,14 @@ The workflow can edit catalog files only on `automation/gallery-content-updates`
 
 - Produce a repeatable audit of every published gallery entry.
 - Surface entries that need human review without removing or hiding them.
-- Find recent first-party and explicitly trusted Azure Cosmos DB articles.
+- Find recent first-party and explicitly trusted content across the source families already represented in the catalog.
 - Exclude exact and normalized URL duplicates already present in the gallery.
 - Stage evidence in formats that are easy to inspect in a draft pull request and workflow artifact.
 - Keep the workflow small, explainable, inexpensive, and safe to disable.
 
 ## Non-Goals
 
-- Discovering code samples, repositories, videos, presentations, or social posts.
+- Discovering presentations, social posts, or content from unlisted publishers.
 - Allowing model output to merge, deploy, or rewrite source-provided descriptions.
 - Automatically approving, merging, or restoring entries.
 - Maintaining a second long-lived catalog or service-side state store.
@@ -51,7 +51,7 @@ The workflow can edit catalog files only on `automation/gallery-content-updates`
 ```mermaid
 flowchart LR
     A[static/templates.json] --> B[Catalog audit]
-    C[Trusted article sources] --> D[Article discovery]
+    C[Trusted catalog-aligned sources] --> D[Content discovery]
     B --> E[Normalize and deduplicate]
     D --> E
     E --> K[Copilot relevance and staleness analysis]
@@ -78,7 +78,7 @@ The source registry should start from the catalog that actually exists, not from
 | Azure Cosmos DB Blog | 5 | First-party announcements and technical articles | `devblogs.microsoft.com/cosmosdb/` |
 | Other approved sources | 10 | Community articles, framework documentation, and isolated tools | LlamaIndex, LangChain, Medium, Made of Strings, and GitHub Gist |
 
-The content labels overlap, but the current collection is primarily 53 examples, 26 videos, 20 documentation resources, 9 blogs, and 5 tools. This matters operationally: GitHub and YouTube are the largest stale-validation surfaces, while first-party blog and documentation sources are the strongest inputs for the article-only discovery phase.
+The content labels overlap, but the current collection is primarily 53 examples, 26 videos, 20 documentation resources, 9 blogs, and 5 tools. Discovery therefore covers GitHub, YouTube, Microsoft Learn, and the Azure Cosmos DB Blog instead of allowing the easiest available feed to determine the content mix.
 
 The `source` field is the canonical resource to audit. The `website` field often identifies an author or organization and must not be substituted for the resource URL. The baseline also found five groups in which multiple catalog records use the same exact source URL. Phase 1 should report those groups before any normalized-URL matching is added; a shared source may be intentional, so duplication is a review finding rather than a deletion instruction.
 
@@ -126,46 +126,47 @@ Read `static/templates.json` without modifying it. For each record:
 
 Every finding includes the item title, original URL, observed final URL, status, reason code, evidence, and scan timestamp. Repository inactivity and article age are review signals only.
 
-## 2. Discover New Articles
+## 2. Discover New Content
 
-Discovery reads a version-controlled allowlist of exact public sources. The initial scope should be deliberately narrow:
+Discovery reads a version-controlled allowlist of exact public sources aligned with the existing catalog:
 
-- enable the Azure Cosmos DB Blog RSS feed at `https://devblogs.microsoft.com/cosmosdb/feed/` as the primary recurring source;
-- inspect the Microsoft Learn Azure Cosmos DB product root at `https://learn.microsoft.com/azure/cosmos-db/` and its API-specific descendants through a bounded approved index or search query;
-- monitor article announcements from the approved GitHub organizations already represented in the catalog, but stage the canonical article rather than a repository when one is available;
+- read the Azure Cosmos DB Blog RSS feed at `https://devblogs.microsoft.com/cosmosdb/feed/`;
+- read public YouTube Atom feeds resolved only from the seven approved channel handles in `sources.json`, then validate every video through YouTube oEmbed;
+- query GitHub Search with the workflow `GITHUB_TOKEN` for newly created, public, active, non-fork repositories in `AzureCosmosDB`, `Azure-Samples`, `Azure`, and `microsoft`;
+- query Microsoft Learn Search and retain only recently updated canonical pages under `/azure/cosmos-db/`;
 - add `https://medium.com/feed/walmartglobaltech`, `https://deepubhatia.medium.com/feed`, and `https://madeofstrings.com/feed/` as reviewed community feed candidates, disabled until a maintainer approves each source; and
-- add other Microsoft-operated or community feeds only after the exact endpoint and publisher identity are reviewed.
+- add other sources only after the exact endpoint, publisher identity, catalog defaults, and candidate cap are reviewed.
 
 Do not configure `https://learn.microsoft.com/sitemapindex.xml`: it currently returns 404 and is not a dependable discovery contract. Learn discovery must remain bounded to the Cosmos DB product tree and must record the query or index endpoint used in each run.
 
-GitHub, YouTube, LlamaIndex, and LangChain remain important for auditing the existing catalog, but Phase 2 does not crawl them for new repositories, videos, or framework pages because new-content discovery is intentionally limited to articles. That boundary can be reconsidered as a separate proposal after the article workflow proves useful.
+LlamaIndex, LangChain, presentations, and social sources remain audit-only until an exact endpoint and promotion metadata are approved. Discovery never performs unrestricted web crawling.
 
 ### Discovery Priority
 
-1. **First-party current:** Azure Cosmos DB Blog feed entries and new or materially updated Microsoft Learn pages.
-2. **First-party adjacent:** Microsoft-authored articles that point to maintained samples in `AzureCosmosDB`, `Azure-Samples`, `microsoft`, or `Azure`.
-3. **Approved community:** Publisher feeds already represented in the catalog, filtered for direct Azure Cosmos DB coverage.
+1. **First-party current:** New repositories and videos plus new or materially updated Blog and Microsoft Learn content.
+2. **First-party adjacent:** Cosmos DB content from the approved Microsoft-operated GitHub organizations and YouTube channels.
+3. **Approved community:** SQLBits and Coffee with Azure Cosmos DB videos plus disabled publisher feeds already represented in the catalog.
 4. **Unlisted sources:** Never queried automatically; a maintainer must first review and add the exact feed or index.
 
 Each source definition contains:
 
 - stable source ID;
-- exact feed or sitemap URL;
+- source kind and exact feed, handle, or search URL;
 - allowed hostnames;
 - trust tier;
 - enabled flag;
 - lookback window;
 - include terms; and
-- exclude paths or terms.
+- content type, catalog defaults, and per-run candidate cap.
 
 The weekly run reads entries within a bounded lookback window, such as the previous 45 days. Re-scanning a small window avoids persistent cursors or a database.
 
 ### Candidate Filtering
 
-A discovered article reaches Copilot analysis only when:
+A discovered item reaches Copilot analysis only when:
 
 - its source is enabled and allowlisted;
-- its publication date is inside the configured lookback window;
+- its publication, creation, or update date is inside the configured lookback window;
 - its canonical URL is not already in `static/templates.json`;
 - its normalized URL is not duplicated elsewhere in the current run;
 - its page resolves successfully;
@@ -179,18 +180,11 @@ These deterministic checks prioritize recall and keep the model input small. Cop
 Run GitHub Copilot CLI programmatically after deterministic collection:
 
 ```shell
-copilot -p "$(cat .github/gallery-audit/relevance-prompt.md)" \
-    --agent=gallery-curator \
-    --attachment=output/gallery-content-review/article-candidates.json \
-    --attachment=output/gallery-content-review/audit-report.json \
-    --attachment=static/templates.json \
-    --silent \
-    --stream=off \
-    --no-ask-user \
-    --disable-builtin-mcps
+COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
+    node scripts/gallery-audit/index.mjs --classify-only --promote
 ```
 
-The `gallery-curator` custom agent declares `tools: []`, a required reviewed model, and low reasoning effort. The implementation passes bounded candidate and catalog metadata as attachments. Copilot receives only titles, canonical URLs, dates, tags, source-provided excerpts, deterministic audit evidence, and the current catalog comparison. It does not need shell, network, write, GitHub, or MCP tools. Never use `--allow-all-tools`, `--allow-all`, or `--yolo` in this workflow.
+The `gallery-curator` custom agent declares `tools: []`, a required reviewed model, and low reasoning effort. The implementation embeds bounded candidate and catalog metadata in a delimited prompt. Copilot receives only titles, content types, canonical URLs, dates, tags, source-provided excerpts, deterministic audit evidence, and the current catalog comparison. It does not need shell, network, write, GitHub, or MCP tools. Never use `--allow-all-tools`, `--allow-all`, or `--yolo` in this workflow.
 
 For new content, the model assigns exactly one verdict:
 
@@ -225,8 +219,9 @@ Copilot must analyze candidates as untrusted content. Source excerpts cannot alt
 ```json
 {
   "sourceId": "cosmos-devblog",
-  "title": "Article title from source",
-  "url": "https://example.com/canonical-article",
+    "contentType": "video",
+    "title": "Content title from source",
+    "url": "https://www.youtube.com/watch?v=example",
   "publishedAt": "2026-09-01T00:00:00Z",
   "author": "Source-provided author",
   "summary": "Source-provided excerpt only",
@@ -236,7 +231,7 @@ Copilot must analyze candidates as untrusted content. Source excerpts cannot alt
 }
 ```
 
-The workflow never generates replacement marketing copy. It preserves source-provided metadata and clearly labels missing fields.
+The workflow never generates replacement marketing copy. It preserves source-provided metadata, assigns catalog defaults from the reviewed source record, and clearly labels missing fields.
 
 ## 3. Stage Results
 
@@ -251,7 +246,7 @@ gallery-content-review/
     run-metadata.json
 ```
 
-The Markdown files provide concise tables for review. The JSON files preserve structured evidence for later tooling. `run-metadata.json` records the source commit, workflow run, timestamps, enabled sources, counts, and any partial-scan conditions.
+The Markdown files provide concise tables for review. The JSON files preserve structured evidence for later tooling. The `article-candidates.*` filenames are retained for workflow and artifact compatibility, but contain all supported content types. `run-metadata.json` records the source commit, workflow run, timestamps, enabled sources, counts, and any partial-scan conditions.
 
 Artifacts use a short retention period, such as 30 days. They contain only public source metadata and no credentials. A failed or partial scan still uploads diagnostics when possible but clearly marks its results incomplete.
 
@@ -259,7 +254,7 @@ Artifacts use a short retention period, such as 30 days. They contain only publi
 
 The workflow promotes only `include` candidates with `high` confidence and complete source-provided catalog metadata. It retires only `retire-proposed` entries with `high` confidence when deterministic evidence also shows a broken URL, an archived or disabled repository, or a known retired term.
 
-Promoted articles retain the source title, excerpt, author, canonical URL, and publication date. Retired entries move from `static/templates.json` to `static/retired-templates.json` with the original record, retirement reason, replacement URL, and deterministic evidence. `review`, low-confidence, medium-confidence, incomplete, and malformed results remain artifact-only.
+Promoted content retains the source title, excerpt, author, canonical URL, date, and source-approved content tags. Retired entries move from `static/templates.json` to `static/retired-templates.json` with the original record, retirement reason, replacement URL, and deterministic evidence. `review`, low-confidence, medium-confidence, incomplete, and malformed results remain artifact-only.
 
 The workflow accumulates validated changes on `automation/gallery-content-updates` and opens or refreshes one draft pull request. A maintainer reviews the actual catalog diff and evidence. Only a manual merge to `main` publishes the update.
 
@@ -277,7 +272,7 @@ The workflow accumulates validated changes on `automation/gallery-content-update
 scripts/
     gallery-audit/
         audit-catalog.mjs
-        discover-articles.mjs
+        core.mjs
         normalize-url.mjs
         write-reports.mjs
         index.mjs
@@ -308,7 +303,7 @@ The workflow should:
 2. install locked dependencies only if the scripts require them;
 3. run deterministic unit tests;
 4. run the catalog audit;
-5. run bounded article discovery;
+5. run bounded catalog-aligned content discovery;
 6. install a pinned GitHub Copilot CLI version on Node.js 22 or later;
 7. run bounded relevance and semantic-staleness analysis with no tools available;
 8. validate Copilot output and combine it with deterministic evidence;
@@ -364,12 +359,12 @@ Implementation is complete only when automated checks prove:
 
 - Every current catalog entry appears exactly once in each complete audit.
 - Every finding has a deterministic reason code and observable evidence.
-- Existing URLs are excluded from staged article candidates.
+- Existing URLs are excluded from staged content candidates.
 - A weekly run produces reviewable JSON and Markdown artifacts and updates one draft pull request only when eligible catalog changes exist.
 - Partial scans are clearly distinguishable from complete scans.
 - The workflow uses no Azure or persistent backend resources.
 - The workflow creates no direct `main` mutation and no automatic merge.
-- A maintainer can review a run in under 15 minutes and identify the highest-priority broken entries and article candidates.
+- A maintainer can review a run in under 15 minutes and identify the highest-priority broken entries and content candidates.
 
 ## Delivery Phases
 
@@ -377,9 +372,9 @@ Implementation is complete only when automated checks prove:
 
 Implement URL normalization, catalog parsing, duplicate detection, bounded link checks, report generation, and unit tests. Run manually with no repository write behavior.
 
-### Phase 2: Article Discovery and Relevance
+### Phase 2: Catalog-Aligned Discovery and Relevance
 
-Add the exact trusted-source registry and bounded RSS/index discovery. Add the fixed relevance rubric, bounded Copilot CLI invocation, strict output schema, and catalog deduplication.
+Add the exact trusted-source registry and bounded feed/search discovery for the catalog's established source families. Add the fixed relevance rubric, bounded Copilot CLI invocation, strict output schema, and catalog deduplication.
 
 ### Phase 3: Report-Only GitHub Action
 
@@ -397,7 +392,7 @@ Apply conservative promotion gates, validate the resulting static site, and main
 
 - Exact first-party feeds and sitemap URLs to enable initially.
 - Audit and discovery cadence.
-- Article lookback window.
+- Per-source lookback windows and candidate caps.
 - Artifact retention period.
 - Required catalog fields and review-age thresholds.
 - Known retired-term and redirect rules.

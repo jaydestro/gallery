@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { auditCatalog, discoverArticles } from './core.mjs';
+import { auditCatalog, discoverContent } from './core.mjs';
 import { runCopilotClassification } from './copilot.mjs';
 import { applyCatalogPromotion, strongRetirementEvidence } from './promotion.mjs';
 
@@ -34,11 +34,11 @@ function auditMarkdown(report) {
 
 function candidatesMarkdown(report) {
   return [
-    '# Article candidates', '',
+    '# Content candidates', '',
     `Generated: ${report.generatedAt}`, '',
     `Candidates: ${report.candidates.length}`, '',
-    '| Published | Source | Title | Classification | URL |', '| --- | --- | --- | --- | --- |',
-    ...report.candidates.map((candidate) => `| ${candidate.publishedAt.slice(0, 10)} | ${candidate.sourceId} | ${markdownCell(candidate.title)} | ${candidate.classification?.verdict ?? 'unclassified'} | ${markdownCell(candidate.url)} |`),
+    '| Published | Type | Source | Title | Classification | URL |', '| --- | --- | --- | --- | --- | --- |',
+    ...report.candidates.map((candidate) => `| ${candidate.publishedAt.slice(0, 10)} | ${candidate.contentType} | ${candidate.sourceId} | ${markdownCell(candidate.title)} | ${candidate.classification?.verdict ?? 'unclassified'} | ${markdownCell(candidate.url)} |`),
     '',
   ].join('\n');
 }
@@ -111,9 +111,16 @@ async function run() {
     ? async (url) => ({ status: 200, finalUrl: url, outcome: 'healthy', reason: 'fixture-http-ok' })
     : undefined;
   const auditEntries = await auditCatalog(catalog, policy, { checker, now });
-  const discovery = await discoverArticles(sourcesDocument.sources, policy, catalog, retiredCatalog, {
+  const fixtureSourceProvider = fixtures ? async (source, requestUrl) => {
+    if ((source.kind ?? 'feed') === 'feed') return fixtureFeed;
+    if (source.kind === 'youtube') return requestUrl.includes('/feeds/') ? '<feed></feed>' : '"channelId":"UC0000000000000000000000"';
+    if (source.kind === 'github-search') return '{"items":[]}';
+    if (source.kind === 'learn-search') return '{"results":[]}';
+    throw new Error('unsupported-fixture-source');
+  } : undefined;
+  const discovery = await discoverContent(sourcesDocument.sources, policy, catalog, retiredCatalog, {
     now,
-    feedProvider: fixtures ? async () => fixtureFeed : undefined,
+    sourceProvider: fixtureSourceProvider,
     checker,
   });
   const generatedAt = now.toISOString();
