@@ -23,9 +23,10 @@ function projectedDocuments({ candidatePath, auditPath, catalogPath, existingEnt
     ? auditEntries.filter((entry) => includedIndexes.has(entry.catalogIndex))
     : auditEntries;
   return [
-    ['ARTICLE CANDIDATES', { candidates: candidates.map((candidate, candidateIndex) => ({
+    ['CONTENT CANDIDATES', { candidates: candidates.map((candidate, candidateIndex) => ({
       candidateIndex,
       sourceId: candidate.sourceId,
+      contentType: candidate.contentType,
       title: boundedText(candidate.title, 240),
       url: candidate.url,
       publishedAt: candidate.publishedAt,
