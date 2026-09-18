@@ -368,6 +368,28 @@ test('shares the aggregate candidate budget fairly across configured sources', a
   assert.ok(discovery.sourceResults.every((result) => result.status === 'partial' && result.candidateCount === 1 && result.error === 'aggregate-candidate-limit'));
 });
 
+test('applies the aggregate budget before checks and enforces final GitHub owners', async () => {
+  const sources = ['first', 'second'].map((id) => ({ id, kind: 'feed', contentType: 'blog', url: `https://${id}.example.com/feed`, enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: [`${id}.example.com`] }));
+  let checks = 0;
+  const budgeted = await discoverContent(sources, { ...policy, discoveryCandidateLimit: 3 }, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async (source) => `<rss><channel>${[1, 2, 3].map((number) => `<item><title>Cosmos DB ${source.id} ${number}</title><link>https://${source.id}.example.com/${number}</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Guide</description></item>`).join('')}</channel></rss>`,
+    checker: async (url) => { checks += 1; return { outcome: 'healthy', finalUrl: url }; },
+  });
+  assert.equal(checks, 3);
+  assert.deepEqual(budgeted.candidates.map((candidate) => candidate.sourceId), ['first', 'second', 'first']);
+
+  const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
+  const repositories = { incomplete_results: false, items: [{ name: 'cosmosdb', html_url: 'https://github.com/AzureCosmosDB/cosmosdb', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } }, null, 'bad'] };
+  const escaped = await discoverContent([githubSource], policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => JSON.stringify(repositories),
+    checker: async () => ({ outcome: 'redirected', finalUrl: 'https://github.com/unapproved/cosmosdb' }),
+  });
+  assert.equal(escaped.sourceResults[0].status, 'complete');
+  assert.equal(escaped.candidates.length, 0);
+});
+
 test('authenticates GitHub source requests only to the API host', async () => {
   const source = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
   let request;

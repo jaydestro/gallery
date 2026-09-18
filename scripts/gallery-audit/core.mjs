@@ -356,6 +356,7 @@ export function discoverFromGithubSearch(value, source, policy, existingFingerpr
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
   const allowedOwners = new Set((source.allowedOwners ?? []).map((owner) => owner.toLowerCase()));
   return asArray(document.items).flatMap((repository) => {
+    if (!repository || typeof repository !== 'object' || Array.isArray(repository)) return [];
     const timestamp = repository.created_at;
     if (!repository?.name || !repository.html_url || !timestamp || Date.parse(timestamp) < earliest) return [];
     if (repository.private || repository.archived || repository.disabled || repository.fork || repository.size === 0) return [];
@@ -451,67 +452,40 @@ async function discoverSource(source, policy, existing, options) {
 
 export async function discoverContent(sources, policy, liveCatalog, retiredCatalog, options = {}) {
   const existing = new Set([...liveCatalog, ...retiredCatalog].map((entry) => urlFingerprint(entry.source, policy.trackingParameters)));
+  const enabledSources = sources.filter((item) => item.enabled);
+  const candidateLimit = policy.discoveryCandidateLimit ?? 40;
   const candidates = [];
-  const sourceResults = [];
+  const sourceStates = [];
   const seen = new Set();
-  for (const source of sources.filter((item) => item.enabled)) {
+  for (const source of enabledSources) {
     try {
       const sourceUrl = new URL(source.url);
       if (!source.allowedHostnames.includes(sourceUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
       const discovered = await discoverSource(source, policy, existing, options);
-      const candidateCountBefore = candidates.length;
       const sourceLimit = source.maxCandidates ?? 25;
       const sourceTruncated = discovered.length > sourceLimit;
-      const checkedCandidates = await mapWithConcurrency(
-        discovered.slice(0, sourceLimit),
-        policy.discoveryConcurrency ?? policy.auditConcurrency ?? 8,
-        async (candidate) => {
-        const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
-          allowedHostnames: source.allowedHostnames,
-          fetchImpl: options.fetchImpl,
-          githubToken: options.githubToken,
-        });
-        if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
-        const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
-        if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
-        if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => matchesPathPrefix(finalUrl.pathname, prefix))) return null;
-        const finalFingerprint = urlFingerprint(finalUrl.toString(), policy.trackingParameters);
-        if (existing.has(finalFingerprint)) return null;
-        candidate.url = finalUrl.toString();
-        return candidate;
-      });
-      for (const candidate of checkedCandidates) {
-        if (!candidate) continue;
-        const fingerprint = urlFingerprint(candidate.url, policy.trackingParameters);
-        if (seen.has(fingerprint)) continue;
-        candidate.candidateIndex = candidates.length;
-        seen.add(fingerprint);
-        candidates.push(candidate);
-      }
-      sourceResults.push({
-        sourceId: source.id,
+      sourceStates.push({
+        source,
+        discovered: discovered.slice(0, sourceLimit),
         status: sourceTruncated ? 'partial' : 'complete',
-        candidateCount: candidates.length - candidateCountBefore,
-        ...(sourceTruncated ? { error: 'source-candidate-limit' } : {}),
+        error: sourceTruncated ? 'source-candidate-limit' : null,
       });
     } catch (error) {
-      sourceResults.push({ sourceId: source.id, status: 'partial', candidateCount: 0, error: error?.message ?? 'source-error' });
+      sourceStates.push({ source, discovered: [], status: 'partial', error: error?.message ?? 'source-error' });
     }
   }
-  const candidateLimit = policy.discoveryCandidateLimit ?? 40;
-  if (candidates.length > candidateLimit) {
-    const candidatesBySource = new Map();
-    for (const candidate of candidates) {
-      candidatesBySource.set(candidate.sourceId, [...(candidatesBySource.get(candidate.sourceId) ?? []), candidate]);
-    }
-    const selected = [];
+
+  const discoveredCount = sourceStates.reduce((total, state) => total + state.discovered.length, 0);
+  let selected = sourceStates.flatMap((state) => state.discovered.map((candidate) => ({ candidate, source: state.source })));
+  if (discoveredCount > candidateLimit) {
+    selected = [];
     let round = 0;
     while (selected.length < candidateLimit) {
       let added = false;
-      for (const source of sources.filter((item) => item.enabled)) {
-        const candidate = candidatesBySource.get(source.id)?.[round];
+      for (const state of sourceStates) {
+        const candidate = state.discovered[round];
         if (!candidate) continue;
-        selected.push(candidate);
+        selected.push({ candidate, source: state.source });
         added = true;
         if (selected.length === candidateLimit) break;
       }
@@ -519,18 +493,50 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
       round += 1;
     }
     const selectedCounts = new Map();
-    for (const candidate of selected) selectedCounts.set(candidate.sourceId, (selectedCounts.get(candidate.sourceId) ?? 0) + 1);
-    candidates.splice(0, candidates.length, ...selected);
-    candidates.forEach((candidate, index) => { candidate.candidateIndex = index; });
-    for (const result of sourceResults) {
-      const discoveredCount = candidatesBySource.get(result.sourceId)?.length ?? 0;
-      const selectedCount = selectedCounts.get(result.sourceId) ?? 0;
-      if (selectedCount === discoveredCount) continue;
-      result.status = 'partial';
-      result.error = 'aggregate-candidate-limit';
-      result.candidateCount = selectedCount;
+    for (const item of selected) selectedCounts.set(item.source.id, (selectedCounts.get(item.source.id) ?? 0) + 1);
+    for (const state of sourceStates) {
+      if ((selectedCounts.get(state.source.id) ?? 0) === state.discovered.length) continue;
+      state.status = 'partial';
+      state.error = 'aggregate-candidate-limit';
     }
   }
+
+  const checkedCandidates = await mapWithConcurrency(selected, policy.discoveryConcurrency ?? policy.auditConcurrency ?? 8, async ({ candidate, source }) => {
+    const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
+      allowedHostnames: source.allowedHostnames,
+      fetchImpl: options.fetchImpl,
+      githubToken: options.githubToken,
+    });
+    if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
+    const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
+    if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
+    if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => matchesPathPrefix(finalUrl.pathname, prefix))) return null;
+    if (source.kind === 'github-search') {
+      const repository = githubRepository(finalUrl.toString());
+      const allowedOwners = new Set((source.allowedOwners ?? []).map((owner) => owner.toLowerCase()));
+      if (!repository || !allowedOwners.has(repository.owner.toLowerCase())) return null;
+    }
+    const finalFingerprint = urlFingerprint(finalUrl.toString(), policy.trackingParameters);
+    if (existing.has(finalFingerprint)) return null;
+    candidate.url = finalUrl.toString();
+    return candidate;
+  });
+  for (const candidate of checkedCandidates) {
+    if (!candidate) continue;
+    const fingerprint = urlFingerprint(candidate.url, policy.trackingParameters);
+    if (seen.has(fingerprint)) continue;
+    candidate.candidateIndex = candidates.length;
+    seen.add(fingerprint);
+    candidates.push(candidate);
+  }
+  const acceptedCounts = new Map();
+  for (const candidate of candidates) acceptedCounts.set(candidate.sourceId, (acceptedCounts.get(candidate.sourceId) ?? 0) + 1);
+  const sourceResults = sourceStates.map((state) => ({
+    sourceId: state.source.id,
+    status: state.status,
+    candidateCount: acceptedCounts.get(state.source.id) ?? 0,
+    ...(state.error ? { error: state.error } : {}),
+  }));
   return { candidates, sourceResults };
 }
 
