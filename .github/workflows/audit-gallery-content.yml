@@ -1,6 +1,8 @@
 name: Audit gallery content
 
 on:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:
@@ -14,7 +16,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test gallery audit
+        run: npm run test:gallery-audit
+
+      - name: Test configured discovery sources
+        run: npm run gallery:audit:fixtures
+
+      - name: Build static gallery
+        run: npm run build
+
   audit:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
