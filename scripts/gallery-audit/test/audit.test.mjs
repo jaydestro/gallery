@@ -293,7 +293,7 @@ test('skips malformed source dates and propagates GitHub tokens to candidate che
 });
 
 test('rejects Learn candidates redirected outside the approved product tree', async () => {
-  const source = { id: 'learn', kind: 'learn-search', contentType: 'documentation', url: 'https://learn.microsoft.com/api/search?search=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['learn.microsoft.com'], allowedPathPrefixes: ['/azure/cosmos-db/'] };
+  const source = { id: 'learn', kind: 'learn-search', contentType: 'documentation', url: 'https://learn.microsoft.com/api/search?search=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['learn.microsoft.com'] };
   const discovery = await discoverContent([source], policy, [], [], {
     now: new Date('2026-09-17T00:00:00Z'),
     sourceProvider: async () => JSON.stringify({ results: [{ title: 'Azure Cosmos DB guide', url: 'https://learn.microsoft.com/azure/cosmos-db/guide', lastUpdatedDate: '2026-09-10T00:00:00Z', description: 'Azure Cosmos DB guide.' }] }),
@@ -301,6 +301,13 @@ test('rejects Learn candidates redirected outside the approved product tree', as
   });
   assert.equal(discovery.candidates.length, 0);
   assert.equal(discovery.sourceResults[0].status, 'complete');
+
+  const accepted = await discoverContent([source], policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => JSON.stringify({ results: [{ title: 'Azure Cosmos DB guide', url: 'https://learn.microsoft.com/azure/cosmos-db/guide', lastUpdatedDate: '2026-09-10T00:00:00Z', description: 'Azure Cosmos DB guide.' }] }),
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.equal(accepted.candidates.length, 1);
 });
 
 test('restricts GitHub source redirects and records aggregate candidate truncation', async () => {

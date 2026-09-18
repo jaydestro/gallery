@@ -282,6 +282,10 @@ function sourceContentType(source) {
   return contentType;
 }
 
+function learnPathPrefixes(source) {
+  return source.allowedPathPrefixes ?? ['/azure/cosmos-db/'];
+}
+
 function candidateFromMetadata(source, policy, metadata, now) {
   const publishedTime = Date.parse(metadata.publishedAt);
   if (!Number.isFinite(publishedTime)) return null;
@@ -374,7 +378,7 @@ export function discoverFromLearnSearch(value, source, policy, existingFingerpri
   const document = typeof value === 'string' ? JSON.parse(value) : value;
   const now = options.now ?? new Date();
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
-  const prefixes = source.allowedPathPrefixes ?? ['/azure/cosmos-db/'];
+  const prefixes = learnPathPrefixes(source);
   return asArray(document.results).flatMap((result) => {
     if (!result?.title || !result.url || !result.lastUpdatedDate || Date.parse(result.lastUpdatedDate) < earliest) return [];
     let normalized;
@@ -463,7 +467,7 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
         if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
         const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
         if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
-        if (source.kind === 'learn-search' && !(source.allowedPathPrefixes ?? []).some((prefix) => finalUrl.pathname.startsWith(prefix))) return null;
+        if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => finalUrl.pathname.startsWith(prefix))) return null;
         const finalFingerprint = urlFingerprint(finalUrl.toString(), policy.trackingParameters);
         if (existing.has(finalFingerprint)) return null;
         candidate.url = finalUrl.toString();
