@@ -1,5 +1,213 @@
 [
   {
+    "title": "Azure Cosmos DB Indexing Policies Explained",
+    "description": "Which fields does your application actually query? Learn how to tune Azure Cosmos DB indexing policies around your workload. This short walkthrough covers automatic indexing, including and excluding property paths, composite indexes for multi-property sorting, and specialized index options. See how indexing choices affect write costs, storage, and query behavior—and why you should measure the results before making further changes. Learn more: https://learn.microsoft.com/azure/cosmos-db/index-policy #AzureCosmosDB #Azure #DatabasePerformance",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=sMLpszK94xU",
+    "date": "2026-09-18",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Why Build AI Apps with Azure Cosmos DB?",
+    "description": "Your AI application needs useful context and a database that handles everyday traffic. See how Azure Cosmos DB stores application data and vector embeddings together to support both. Follow a shopping assistant example to learn how vector search, full-text search, and filters retrieve relevant products for a language model. We also cover DiskANN, capacity options, multi-region replication for provisioned accounts, Azure integrations, and tenant isolation. Learn more: https://learn.microsoft.com/azure/cosmos-db/gen-ai/why-cosmos-ai #AzureCosmosDB #GenerativeAI #VectorSearch",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=embY5yxjCoU",
+    "date": "2026-09-18",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Azure Cosmos DB Capacity Modes Explained: Provisioned vs Serverless",
+    "description": "Learn how Azure Cosmos DB capacity modes work in this practical comparison of provisioned throughput vs. serverless. Discover how each model handles request units (RU/s), performance, scalability, regional availability, and billing—and find out which Azure Cosmos DB option is best for production applications, development environments, prototypes, intermittent workloads, and unpredictable traffic. In this video: 🔹 Provisioned throughput vs. serverless: when to use each 🔹 How billing works in both models 🔹 Request units (RU/s) explained 🔹 Best practices for production, development, and intermittent workloads 🔹 Cost predictability and scaling considerations 0:00 – Introduction to Capacity Modes 0:11 – Provisioned Throughput Explained 0:26 – Autoscaling &amp; Predictable Performance 0:33 – When to Use Provisioned Throughput 0:51 – Serverless Model Overview 1:02 – No Minimum Charges, Pay-Per-Use 1:15 – Serverless Use Cases 1:51 – Tradeoffs &amp; Regional Limitations 2:02 – Decision Fra",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=FgIS96IfKjU",
+    "date": "2026-09-10",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Emulator (Docker/local) - Azure Cosmos DB",
+    "description": "What is the Azure Cosmos DB emulator. Summarize this article for me In this article The Azure Cosmos DB emulator provides a local environment that emulates the Azure Cosmos DB service and is designed for development purposes. You can use it for local development and offline testing without creating an Azure subscription or incurring any service.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/emulator",
+    "date": "2026-09-01",
+    "tags": [
+      "documentation",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Databases, containers, and items - Azure Cosmos DB",
+    "description": "Databases, containers, and items in Azure Cosmos DB Summarize this article for me In this article Azure Cosmos DB is a fully managed platform as a service (PaaS). To begin using Azure Cosmos DB, create an Azure Cosmos DB account in an Azure resource group in your subscription. Then, create databases and containers within the account. Azure Cosmos.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/resource-model",
+    "date": "2026-08-25",
+    "tags": [
+      "documentation",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Service Quotas and Default Limits - Azure Cosmos DB",
+    "description": "Resource Limit Maximum RUs per container (dedicated throughput provisioned mode) 1,000,000 ¹ Maximum RUs per database (shared throughput provisioned mode) 1,000,000 ¹ Maximum RUs per partition (logical & physical) 10,000 Maximum storage across all items per (logical) partition 20 GB ² Maximum number of distinct (logical) partition keys Unlimited.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/concepts-limits",
+    "date": "2026-08-25",
+    "tags": [
+      "documentation",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "foundry-cosmos-memory",
+    "description": "Deployable Microsoft Foundry Agent Service sample with long-term, user-scoped memory powered by Azure Cosmos DB and Microsoft Agent Framework.",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/foundry-cosmos-memory",
+    "date": "2026-08-19",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Stale Embeddings Hurt Search Quality in RAG: How to Fix It",
+    "description": "Application data changes, but its vector embeddings do not update by themselves. Stale embeddings can reduce semantic-search relevance and hurt the quality of results returned by RAG applications. Some techniques include: - Generate embeddings in the application's write path - Regenerate them asynchronously using a change feed and background worker - Let the data platform manage updates (for instance, with Integrated Embeddings in Azure Cosmos DB) Learn more: https://aka.ms/embeddings-cosmosdb 00:00 Why embeddings need to stay synchronized 00:27 Option 1: Generate embeddings on write 00:45 Option 2: Update embeddings asynchronously 01:29 Option 3: Managed updates with Azure Cosmos DB 02:28 Choosing the right approach #RAG #VectorSearch #AzureCosmosDB",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=ad9XIL0YzkU",
+    "date": "2026-08-18",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Let the Agent Write It—But Can It Scale?",
+    "description": "Part of the Modern AI Apps with Azure Cosmos DB Series. AI coding agents can generate working code quickly, but working code isn't always production-ready code. This session focuses on reviewing agent-generated Azure Cosmos DB code for scalability, RU efficiency, indexing strategy, and long-term maintainability. Presenters: Sajeetharan Sinnathurai - Azure Cosmos DB Principal Program Manager - https://www.linkedin.com/in/sajeetharan/ Jay Gordon - Azure Cosmos DB Senior Program Manager https://www.linkedin.com/in/jaygordon0042/ • Start with the Agent Kit — Give your coding agent the context it needs to build Cosmos DB apps the right way - https://aka.ms/CosmosDB-agentkit • Subscribe to Azure Cosmos DB on YouTube - https://youtube.com/AzureCosmosDB • Follow Azure Cosmos DB on X - https://twitter.com/AzureCosmosDB • Follow Azure Cosmos DB on LinkedIn - https://www.linkedin.com/company/azure-cosmos-db/ #azurecosmosdb #aicoding",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=RhS3ICyn3pc",
+    "date": "2026-08-14",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "cosmos-garnet-cache-samples",
+    "description": "Cosmos DB Managed Garnet Samples",
+    "preview": "coming soon",
+    "website": "https://github.com/Azure-Samples",
+    "author": "Azure Samples",
+    "source": "https://github.com/Azure-Samples/cosmos-garnet-cache-samples",
+    "date": "2026-08-07",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "spec-kit-cosmosdb",
+    "description": "Best-practice Azure Cosmos DB code generation, review, and design guidance for any AI coding agent.",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/spec-kit-cosmosdb",
+    "date": "2026-08-07",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "azure-cosmos-driver",
+    "description": "Distribution repository holding prebuilt Azure Cosmos DB driver binaries (built from the Cosmos DB Rust driver core for clients) for each supported platform/architecture. These artifacts are consumed by the next-generation Cosmos DB SDKs, which link against the native driver rather than reimplementing it.",
+    "preview": "coming soon",
+    "website": "https://github.com/Azure",
+    "author": "Microsoft Azure",
+    "source": "https://github.com/Azure/azure-cosmos-driver",
+    "date": "2026-07-30",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "haystack-azure-cosmosdb",
+    "description": "Azure CosmosDB Integrations for Haystack",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/haystack-azure-cosmosdb",
+    "date": "2026-07-20",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "eve-cosmos-memory",
+    "description": "An eve AI agent that authors a Next.js/Vercel blog and remembers across conversations using Azure Cosmos DB vector search as its semantic memory store",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/eve-cosmos-memory",
+    "date": "2026-07-07",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "langchainjs-cosmosdb-rag-quickstart",
+    "description": "Get started with RAG and vector search using LangChain.js and Azure Cosmos DB",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/langchainjs-cosmosdb-rag-quickstart",
+    "date": "2026-06-16",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "cosmos-vector-bench",
+    "description": "Sample code for benchmarking vector embedding operations on Azure Cosmos DB collections.",
+    "preview": "coming soon",
+    "website": "https://github.com/AzureCosmosDB",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://github.com/AzureCosmosDB/cosmos-vector-bench",
+    "date": "2026-05-23",
+    "tags": [
+      "example",
+      "microsoft"
+    ]
+  },
+  {
     "title": "MulticloudDB SDK: Cross-cloud portability in the coding agent era",
     "description": "Building cross-cloud solutions with best-of-breed cloud-native databases means learning multiple SDKs, translating queries, handling different errors, and testing across providers. The Multicloud DB SDK for Java lets you share that work across Azure Cosmos DB, Amazon DynamoDB, and Google Cloud Spanner. You (or your coding agent) write CRUD and query logic against one Java API, with provider selection [&#8230;] The post MulticloudDB SDK: Cross-cloud portability in the coding agent era appeared first on Azure Cosmos DB Blog .",
     "preview": "coming soon",
