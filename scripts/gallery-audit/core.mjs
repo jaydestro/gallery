@@ -286,9 +286,14 @@ function learnPathPrefixes(source) {
   return source.allowedPathPrefixes ?? ['/azure/cosmos-db/'];
 }
 
+function matchesPathPrefix(pathname, prefix) {
+  const root = prefix.replace(/\/$/, '');
+  return pathname === root || pathname.startsWith(`${root}/`);
+}
+
 function candidateFromMetadata(source, policy, metadata, now) {
   const publishedTime = Date.parse(metadata.publishedAt);
-  if (!Number.isFinite(publishedTime)) return null;
+  if (!Number.isFinite(publishedTime) || publishedTime > now.getTime()) return null;
   const contentType = sourceContentType(source);
   const matchedTerms = inclusionSignals(source, policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []));
   if (matchedTerms.length === 0) return null;
@@ -388,7 +393,7 @@ export function discoverFromLearnSearch(value, source, policy, existingFingerpri
       return [];
     }
     const url = new URL(normalized);
-    if (url.hostname !== 'learn.microsoft.com' || !prefixes.some((prefix) => url.pathname.startsWith(prefix))) return [];
+    if (url.hostname !== 'learn.microsoft.com' || !prefixes.some((prefix) => matchesPathPrefix(url.pathname, prefix))) return [];
     const fingerprint = urlFingerprint(normalized, policy.trackingParameters);
     if (existingFingerprints.has(fingerprint)) return [];
     const candidate = candidateFromMetadata(source, policy, {
@@ -455,8 +460,10 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
       if (!source.allowedHostnames.includes(sourceUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
       const discovered = await discoverSource(source, policy, existing, options);
       const candidateCountBefore = candidates.length;
+      const sourceLimit = source.maxCandidates ?? 25;
+      const sourceTruncated = discovered.length > sourceLimit;
       const checkedCandidates = await mapWithConcurrency(
-        discovered.slice(0, source.maxCandidates ?? 25),
+        discovered.slice(0, sourceLimit),
         policy.discoveryConcurrency ?? policy.auditConcurrency ?? 8,
         async (candidate) => {
         const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
@@ -467,7 +474,7 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
         if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
         const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
         if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
-        if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => finalUrl.pathname.startsWith(prefix))) return null;
+        if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => matchesPathPrefix(finalUrl.pathname, prefix))) return null;
         const finalFingerprint = urlFingerprint(finalUrl.toString(), policy.trackingParameters);
         if (existing.has(finalFingerprint)) return null;
         candidate.url = finalUrl.toString();
@@ -481,7 +488,12 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
         seen.add(fingerprint);
         candidates.push(candidate);
       }
-      sourceResults.push({ sourceId: source.id, status: 'complete', candidateCount: candidates.length - candidateCountBefore });
+      sourceResults.push({
+        sourceId: source.id,
+        status: sourceTruncated ? 'partial' : 'complete',
+        candidateCount: candidates.length - candidateCountBefore,
+        ...(sourceTruncated ? { error: 'source-candidate-limit' } : {}),
+      });
     } catch (error) {
       sourceResults.push({ sourceId: source.id, status: 'partial', candidateCount: 0, error: error?.message ?? 'source-error' });
     }

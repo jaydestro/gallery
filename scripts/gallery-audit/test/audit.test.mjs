@@ -310,6 +310,28 @@ test('rejects Learn candidates redirected outside the approved product tree', as
   assert.equal(accepted.candidates.length, 1);
 });
 
+test('accepts the Learn root, rejects future dates, and records source truncation', async () => {
+  const learnSource = { id: 'learn', kind: 'learn-search', contentType: 'documentation', url: 'https://learn.microsoft.com/api/search?search=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['learn.microsoft.com'] };
+  const learn = await discoverContent([learnSource], policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => JSON.stringify({ results: [
+      { title: 'Azure Cosmos DB documentation', url: 'https://learn.microsoft.com/en-us/azure/cosmos-db/', lastUpdatedDate: '2026-09-10T00:00:00Z', description: 'Azure Cosmos DB documentation.' },
+      { title: 'Future Azure Cosmos DB guide', url: 'https://learn.microsoft.com/azure/cosmos-db/future', lastUpdatedDate: '2026-09-18T00:00:00Z', description: 'Azure Cosmos DB guide.' },
+    ] }),
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.deepEqual(learn.candidates.map((candidate) => candidate.url), ['https://learn.microsoft.com/azure/cosmos-db']);
+
+  const feedSource = { id: 'feed', kind: 'feed', contentType: 'blog', url: 'https://example.com/feed', enabled: true, trustTier: 'first-party', lookbackDays: 45, maxCandidates: 1, allowedHostnames: ['example.com'] };
+  const xml = '<rss><channel><item><title>Cosmos DB one</title><link>https://example.com/one</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>One</description></item><item><title>Cosmos DB two</title><link>https://example.com/two</link><pubDate>2026-09-11T00:00:00Z</pubDate><description>Two</description></item></channel></rss>';
+  const truncated = await discoverContent([feedSource], policy, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => xml,
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.deepEqual(truncated.sourceResults, [{ sourceId: 'feed', status: 'partial', candidateCount: 1, error: 'source-candidate-limit' }]);
+});
+
 test('restricts GitHub source redirects and records aggregate candidate truncation', async () => {
   const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
   let redirectedFetch = false;
