@@ -351,6 +351,7 @@ export function discoverFromFeed(xml, source, policy, existingFingerprints, opti
 
 export function discoverFromGithubSearch(value, source, policy, existingFingerprints, options = {}) {
   const document = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!document || typeof document !== 'object' || !Array.isArray(document.items)) throw new Error('github-search-invalid');
   if (document.incomplete_results === true) throw new Error('github-search-incomplete');
   const now = options.now ?? new Date();
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
@@ -382,6 +383,7 @@ export function discoverFromGithubSearch(value, source, policy, existingFingerpr
 
 export function discoverFromLearnSearch(value, source, policy, existingFingerprints, options = {}) {
   const document = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!document || typeof document !== 'object' || !Array.isArray(document.results)) throw new Error('learn-search-invalid');
   const now = options.now ?? new Date();
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
   const prefixes = learnPathPrefixes(source);

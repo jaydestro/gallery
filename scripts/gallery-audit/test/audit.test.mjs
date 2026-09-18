@@ -249,6 +249,11 @@ test('marks incomplete GitHub searches partial and bounds ordered candidate chec
   });
   assert.deepEqual(incomplete.sourceResults, [{ sourceId: 'github', status: 'partial', candidateCount: 0, error: 'github-search-incomplete' }]);
 
+  const invalid = await discoverContent([source], policy, [], [], {
+    sourceProvider: async () => JSON.stringify({ incomplete_results: false }),
+  });
+  assert.deepEqual(invalid.sourceResults, [{ sourceId: 'github', status: 'partial', candidateCount: 0, error: 'github-search-invalid' }]);
+
   const feedSource = { id: 'feed', kind: 'feed', contentType: 'blog', url: 'https://example.com/feed', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] };
   const xml = `<rss><channel>${[1, 2, 3].map((number) => `<item><title>Cosmos DB guide ${number}</title><link>https://example.com/${number}</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Guide ${number}</description></item>`).join('')}</channel></rss>`;
   let active = 0;
@@ -309,6 +314,11 @@ test('rejects Learn candidates redirected outside the approved product tree', as
     checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
   });
   assert.equal(accepted.candidates.length, 1);
+
+  const invalid = await discoverContent([source], policy, [], [], {
+    sourceProvider: async () => JSON.stringify({ count: 0 }),
+  });
+  assert.deepEqual(invalid.sourceResults, [{ sourceId: 'learn', status: 'partial', candidateCount: 0, error: 'learn-search-invalid' }]);
 });
 
 test('accepts the Learn root, rejects future dates, and records source truncation', async () => {
