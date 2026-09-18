@@ -332,6 +332,7 @@ export function discoverFromFeed(xml, source, policy, existingFingerprints, opti
 
 export function discoverFromGithubSearch(value, source, policy, existingFingerprints, options = {}) {
   const document = typeof value === 'string' ? JSON.parse(value) : value;
+  if (document.incomplete_results === true) throw new Error('github-search-incomplete');
   const now = options.now ?? new Date();
   const earliest = now.getTime() - source.lookbackDays * 86_400_000;
   const allowedOwners = new Set((source.allowedOwners ?? []).map((owner) => owner.toLowerCase()));
@@ -346,7 +347,7 @@ export function discoverFromGithubSearch(value, source, policy, existingFingerpr
       title: repository.name,
       url: repository.html_url,
       publishedAt: timestamp,
-      author: repository.owner.login,
+      author: null,
       summary: repository.description ?? '',
       topics: repository.topics,
     }, now);
@@ -434,14 +435,22 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
       if (!source.allowedHostnames.includes(sourceUrl.hostname.toLowerCase())) throw new Error('source-hostname-not-allowlisted');
       const discovered = await discoverSource(source, policy, existing, options);
       const candidateCountBefore = candidates.length;
-      for (const candidate of discovered.slice(0, source.maxCandidates ?? 25)) {
+      const checkedCandidates = await mapWithConcurrency(
+        discovered.slice(0, source.maxCandidates ?? 25),
+        policy.discoveryConcurrency ?? policy.auditConcurrency ?? 8,
+        async (candidate) => {
         const checked = await (options.checker ?? ((url, checkOptions) => checkUrl(url, policy, checkOptions)))(candidate.url, {
           allowedHostnames: source.allowedHostnames,
           fetchImpl: options.fetchImpl,
         });
-        if (!['healthy', 'redirected'].includes(checked.outcome)) continue;
-        const finalHostname = new URL(checked.finalUrl ?? candidate.url).hostname.toLowerCase();
-        if (!source.allowedHostnames.includes(finalHostname)) continue;
+        if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
+        const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
+        if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
+        if (source.kind === 'learn-search' && !(source.allowedPathPrefixes ?? []).some((prefix) => finalUrl.pathname.startsWith(prefix))) return null;
+        return candidate;
+      });
+      for (const candidate of checkedCandidates) {
+        if (!candidate) continue;
         const fingerprint = urlFingerprint(candidate.url, policy.trackingParameters);
         if (seen.has(fingerprint)) continue;
         candidate.candidateIndex = candidates.length;
