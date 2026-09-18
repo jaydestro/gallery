@@ -6,6 +6,7 @@ import { normalizeUrl, urlFingerprint } from './normalize.mjs';
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const REQUIRED_STRING_FIELDS = ['title', 'description', 'preview', 'website', 'source', 'date'];
 const NON_EMPTY_FIELDS = new Set(['title', 'description', 'source', 'date']);
+const CONTENT_TYPES = new Set(['example', 'blog', 'video', 'documentation']);
 
 function asArray(value) {
   if (value === undefined || value === null) return [];
@@ -275,21 +276,28 @@ function inclusionSignals(source, policy, ...values) {
   return terms.filter((term) => haystack.includes(term.toLowerCase()));
 }
 
+function sourceContentType(source) {
+  const contentType = source.contentType ?? ((source.kind ?? 'feed') === 'feed' ? 'blog' : null);
+  if (!CONTENT_TYPES.has(contentType)) throw new Error('invalid-content-type');
+  return contentType;
+}
+
 function candidateFromMetadata(source, policy, metadata, now) {
   const publishedTime = Date.parse(metadata.publishedAt);
   if (!Number.isFinite(publishedTime)) return null;
+  const contentType = sourceContentType(source);
   const matchedTerms = inclusionSignals(source, policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []));
   if (matchedTerms.length === 0) return null;
   return {
     candidateIndex: 0,
     sourceId: source.id,
-    contentType: source.contentType ?? 'article',
+    contentType,
     title: metadata.title.trim(),
     url: normalizeUrl(metadata.url, policy.trackingParameters),
     publishedAt: new Date(publishedTime).toISOString(),
     author: metadata.author?.trim() || null,
     summary: metadata.summary.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000),
-    signals: [`trust:${source.trustTier}`, `type:${source.contentType ?? 'article'}`, ...matchedTerms.map((term) => `term:${term.toLowerCase()}`)],
+    signals: [`trust:${source.trustTier}`, `type:${contentType}`, ...matchedTerms.map((term) => `term:${term.toLowerCase()}`)],
     discoveredAt: now.toISOString(),
     classification: null,
   };

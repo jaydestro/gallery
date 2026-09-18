@@ -206,6 +206,7 @@ test('rejects failed feeds and unresolved or off-host article candidates', async
     },
   });
   assert.deepEqual(discovery.candidates.map((candidate) => candidate.url), ['https://example.com/healthy']);
+  assert.equal(discovery.candidates[0].contentType, 'blog');
   assert.equal(discovery.sourceResults[0].candidateCount, 1);
 });
 
