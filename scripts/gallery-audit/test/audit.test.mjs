@@ -189,7 +189,7 @@ test('rejects failed feeds and unresolved or off-host article candidates', async
     feedProvider: async () => ({ status: 500, body: '<rss><channel></channel></rss>' }),
   });
   assert.equal(failed.sourceResults[0].status, 'partial');
-  assert.equal(failed.sourceResults[0].error, 'feed-http-500');
+  assert.equal(failed.sourceResults[0].error, 'source-http-500');
 
   const xml = `<?xml version="1.0"?><rss><channel>
     <item><title>Healthy Cosmos DB guide</title><link>https://example.com/healthy</link><pubDate>2026-09-10T00:00:00Z</pubDate></item>
@@ -326,6 +326,22 @@ test('restricts GitHub source redirects and records aggregate candidate truncati
   assert.equal(truncated.candidates.length, 2);
   assert.deepEqual(truncated.candidates.map((candidate) => candidate.candidateIndex), [0, 1]);
   assert.deepEqual(truncated.sourceResults, [{ sourceId: 'feed', status: 'partial', candidateCount: 2, error: 'aggregate-candidate-limit' }]);
+});
+
+test('skips malformed GitHub results and deduplicates canonical redirect destinations', async () => {
+  const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
+  const repositories = { incomplete_results: false, items: [
+    { name: 'malformed', html_url: 'not-a-url', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+    { name: 'valid-cosmosdb', html_url: 'https://github.com/AzureCosmosDB/alias', created_at: '2026-09-12T00:00:00Z', size: 10, description: 'Azure Cosmos DB sample.', owner: { login: 'AzureCosmosDB' } },
+  ] };
+  const existing = [catalogEntry({ source: 'https://github.com/AzureCosmosDB/canonical' })];
+  const discovery = await discoverContent([githubSource], policy, existing, [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async () => JSON.stringify(repositories),
+    checker: async () => ({ outcome: 'redirected', finalUrl: 'https://github.com/AzureCosmosDB/canonical' }),
+  });
+  assert.equal(discovery.sourceResults[0].status, 'complete');
+  assert.equal(discovery.candidates.length, 0);
 });
 
 test('retries malformed Copilot output once and returns an incomplete fallback', () => {

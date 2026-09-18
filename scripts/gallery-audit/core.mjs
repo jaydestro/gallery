@@ -351,7 +351,12 @@ export function discoverFromGithubSearch(value, source, policy, existingFingerpr
     if (!repository?.name || !repository.html_url || !timestamp || Date.parse(timestamp) < earliest) return [];
     if (repository.private || repository.archived || repository.disabled || repository.fork || repository.size === 0) return [];
     if (!allowedOwners.has(String(repository.owner?.login).toLowerCase())) return [];
-    const fingerprint = urlFingerprint(repository.html_url, policy.trackingParameters);
+    let fingerprint;
+    try {
+      fingerprint = urlFingerprint(repository.html_url, policy.trackingParameters);
+    } catch {
+      return [];
+    }
     if (existingFingerprints.has(fingerprint)) return [];
     const candidate = candidateFromMetadata(source, policy, {
       title: repository.name,
@@ -402,7 +407,7 @@ async function sourceBody(source, requestUrl, policy, options, allowedHostnames 
       : null;
   if (provided !== null) {
     if (typeof provided === 'string') return provided;
-    if (provided.status < 200 || provided.status >= 300) throw new Error(`feed-http-${provided.status}`);
+    if (provided.status < 200 || provided.status >= 300) throw new Error(`source-http-${provided.status}`);
     return provided.body;
   }
   const headers = { 'User-Agent': 'gallery-content-discovery' };
@@ -459,6 +464,9 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
         const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
         if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
         if (source.kind === 'learn-search' && !(source.allowedPathPrefixes ?? []).some((prefix) => finalUrl.pathname.startsWith(prefix))) return null;
+        const finalFingerprint = urlFingerprint(finalUrl.toString(), policy.trackingParameters);
+        if (existing.has(finalFingerprint)) return null;
+        candidate.url = finalUrl.toString();
         return candidate;
       });
       for (const candidate of checkedCandidates) {
