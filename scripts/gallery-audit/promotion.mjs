@@ -82,16 +82,17 @@ export function planCatalogPromotion({ catalog, retiredCatalog, candidateReport,
   };
 }
 
-function promotionMarkdown(result, generatedAt) {
+export function promotionMarkdown(result, generatedAt) {
   return [
     '# Automated gallery content update', '',
     `Generated: ${generatedAt}`, '',
+    'Comment with item IDs to request changes, for example: `include A1; exclude A2; keep R1`.', '',
     `Additions: ${result.additions.length}`, '',
-    ...result.additions.map((entry) => `- Add [${entry.title}](${entry.source})`),
+    ...result.additions.map((entry, index) => `- **A${index + 1}** Add [${entry.title}](${entry.source})`),
     '', `Retirements: ${result.retirements.length}`, '',
-    ...result.retirements.map((entry) => `- Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`),
+    ...result.retirements.map((entry, index) => `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`),
     '', `Skipped high-confidence additions: ${result.skippedAdditions.length}`, '',
-    ...result.skippedAdditions.map((entry) => `- ${entry.url}: ${entry.reason}`),
+    ...result.skippedAdditions.map((entry, index) => `- **S${index + 1}** ${entry.url}: ${entry.reason}`),
     '', 'This pull request is generated as a draft and requires human approval before merge.', '',
   ].join('\n');
 }
