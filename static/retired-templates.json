@@ -1,1 +1,242 @@
-[]
+[
+  {
+    "title": "Understanding Vector Store capabilities in Azure Cosmos DB for MongoDB",
+    "description": "Learn what a vector store is and how to configure vector indexing and search in Azure Cosmos DB for MongoDB",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/mongodb/vcore/vector-search",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; content is inaccessible. Microsoft Learn documentation that has\nbeen removed or reorganized.",
+    "replacementUrl": "https://learn.microsoft.com/en-us/azure/cosmos-db/mongodb/vcore/vector-search",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404",
+        "age-review"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Build RAG applications with Azure Cosmos DB for MongoDB and Langchain",
+    "description": "This tutorial explores how to use Azure Cosmos DB for MongoDB (vCore), LangChain, and OpenAI to implement Retrieval-Augmented Generation (RAG) applications.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/mongodb/vcore/rag",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; content is inaccessible. Microsoft Learn documentation that has\nbeen removed or reorganized.",
+    "replacementUrl": "https://learn.microsoft.com/en-us/azure/cosmos-db/mongodb/vcore/rag",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404",
+        "age-review"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Semantic Kernel Connector for Azure Cosmos DB for NoSQL (.NET)",
+    "description": "Documentation and samples in C# for the Semantic Kernel Connector with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/semantic-kernel/",
+    "author": "Semantic Kernel Team",
+    "source": "https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector&pivots=programming-language-csharp",
+    "date": "2024-09-25",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "csharp",
+      "vectorcosmosnosql",
+      "semantickernel",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; Semantic Kernel connector documentation is inaccessible.",
+    "replacementUrl": "https://learn.microsoft.com/en-us/semantic-kernel/concepts/vector-store-connec\ntors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector&pivots=programming-language-csharp",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Semantic Kernel Connector for Azure Cosmos DB for NoSQL (Python)",
+    "description": "Documentation and samples in Python for the Semantic Kernel Connector with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/semantic-kernel/",
+    "author": "Semantic Kernel Team",
+    "source": "https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector&pivots=programming-language-python",
+    "date": "2024-09-25",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "vectorcosmosnosql",
+      "semantickernel",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; Semantic Kernel connector documentation is inaccessible.",
+    "replacementUrl": "https://learn.microsoft.com/en-us/semantic-kernel/concepts/vector-store-connec\ntors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector&pivots=programming-language-python",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "LlamaIndex Vector Store integration for Azure Cosmos DB for NoSQL for Python",
+    "description": "Documentation and samples in Python for the LlamaIndex Vector Store integration with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://docs.llamaindex.ai/",
+    "author": "LlamaIndex Team",
+    "source": "https://docs.llamaindex.ai/en/stable/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
+    "date": "2024-09-01",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "vectorcosmosnosql",
+      "llamaindex",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; LlamaIndex vector store documentation is inaccessible.",
+    "replacementUrl": "https://developers.llamaindex.ai/python/framework/integrations/vector_stores/A\nzureCosmosDBNoSqlDemo/",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404",
+        "age-review"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Promptflow RAG Project template for Azure Databases",
+    "description": "An end-to-end sample of RAG showcasing development, evaluation, experimentation, and deployment using Promptflow, search products like CosmosDB, PostgresSQL, and Azure AI Search.",
+    "preview": "coming soon",
+    "website": "https://microsoft.github.io/promptflow/index.html",
+    "author": "Promotflow Team",
+    "source": "https://docs.llamaindex.ai/en/stable/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
+    "date": "2024-09-01",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "jupyternotebook",
+      "vectorcosmosnosql",
+      "promptflow",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "URL returns 404; Promptflow template documentation is inaccessible.",
+    "replacementUrl": "https://developers.llamaindex.ai/python/framework/integrations/vector_stores/A\nzureCosmosDBNoSqlDemo/",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "http-404",
+        "age-review"
+      ],
+      "criteria": [
+        "broken link (http-404)",
+        "documentation unavailable"
+      ]
+    }
+  },
+  {
+    "title": "CosmicWorks command-line tool and libraries for .NET",
+    "description": "This repository is an open source set of tools and libraries to generate data quickly for your proof of concept or sample applications.",
+    "preview": "coming soon",
+    "website": "https://github.com/seesharprun",
+    "author": "Sidney Andrews",
+    "source": "https://github.com/azure-samples/cosmicworks",
+    "date": "2024-03-01",
+    "tags": [
+      "architecturedesign",
+      "tools",
+      "csharp",
+      "microsoft",
+      "example"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "Repository has been deleted or made private; code samples are inaccessible.\nRelated but distinct repo exists at https://github.com/AzureCosmosDB/cosmicworks (catalogIndex \n58-59).",
+    "replacementUrl": "https://github.com/AzureCosmosDB/cosmicworks",
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "github-missing",
+        "age-review"
+      ],
+      "criteria": [
+        "github-missing",
+        "repository unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Samples for using REST calls against CosmosDB",
+    "description": "REST API samples for Azure Cosmos DB for NoSQL. Samples cover most database, container and item examples including example of how to generate a master key authorization signature.",
+    "preview": "coming soon",
+    "website": "https://github.com/alexdrenea",
+    "author": "Alex Drenea",
+    "source": "https://github.com/Azure-Samples/cosmos-db-rest-samples",
+    "date": "2023-09-01",
+    "tags": [
+      "architecturedesign",
+      "csharp",
+      "community",
+      "example"
+    ],
+    "retiredAt": "2026-09-17T20:12:32.056Z",
+    "retirementReason": "Repository has been deleted or made private; REST API samples are inaccessible.\nNo equivalent REST guidance in current catalog.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "github-missing",
+        "age-review"
+      ],
+      "criteria": [
+        "github-missing",
+        "repository unavailable"
+      ]
+    }
+  }
+]
