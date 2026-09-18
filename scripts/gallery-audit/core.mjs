@@ -500,14 +500,35 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
   }
   const candidateLimit = policy.discoveryCandidateLimit ?? 40;
   if (candidates.length > candidateLimit) {
-    const removedSourceIds = new Set(candidates.slice(candidateLimit).map((candidate) => candidate.sourceId));
-    candidates.length = candidateLimit;
+    const candidatesBySource = new Map();
+    for (const candidate of candidates) {
+      candidatesBySource.set(candidate.sourceId, [...(candidatesBySource.get(candidate.sourceId) ?? []), candidate]);
+    }
+    const selected = [];
+    let round = 0;
+    while (selected.length < candidateLimit) {
+      let added = false;
+      for (const source of sources.filter((item) => item.enabled)) {
+        const candidate = candidatesBySource.get(source.id)?.[round];
+        if (!candidate) continue;
+        selected.push(candidate);
+        added = true;
+        if (selected.length === candidateLimit) break;
+      }
+      if (!added) break;
+      round += 1;
+    }
+    const selectedCounts = new Map();
+    for (const candidate of selected) selectedCounts.set(candidate.sourceId, (selectedCounts.get(candidate.sourceId) ?? 0) + 1);
+    candidates.splice(0, candidates.length, ...selected);
     candidates.forEach((candidate, index) => { candidate.candidateIndex = index; });
     for (const result of sourceResults) {
-      if (!removedSourceIds.has(result.sourceId)) continue;
+      const discoveredCount = candidatesBySource.get(result.sourceId)?.length ?? 0;
+      const selectedCount = selectedCounts.get(result.sourceId) ?? 0;
+      if (selectedCount === discoveredCount) continue;
       result.status = 'partial';
       result.error = 'aggregate-candidate-limit';
-      result.candidateCount = candidates.filter((candidate) => candidate.sourceId === result.sourceId).length;
+      result.candidateCount = selectedCount;
     }
   }
   return { candidates, sourceResults };

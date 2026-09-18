@@ -357,6 +357,31 @@ test('restricts GitHub source redirects and records aggregate candidate truncati
   assert.deepEqual(truncated.sourceResults, [{ sourceId: 'feed', status: 'partial', candidateCount: 2, error: 'aggregate-candidate-limit' }]);
 });
 
+test('shares the aggregate candidate budget fairly across configured sources', async () => {
+  const sources = ['first', 'second'].map((id) => ({ id, kind: 'feed', contentType: 'blog', url: `https://${id}.example.com/feed`, enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: [`${id}.example.com`] }));
+  const discovery = await discoverContent(sources, { ...policy, discoveryCandidateLimit: 2 }, [], [], {
+    now: new Date('2026-09-17T00:00:00Z'),
+    sourceProvider: async (source) => `<rss><channel>${[1, 2].map((number) => `<item><title>Cosmos DB ${source.id} ${number}</title><link>https://${source.id}.example.com/${number}</link><pubDate>2026-09-10T00:00:00Z</pubDate><description>Guide</description></item>`).join('')}</channel></rss>`,
+    checker: async (url) => ({ outcome: 'healthy', finalUrl: url }),
+  });
+  assert.deepEqual(discovery.candidates.map((candidate) => candidate.sourceId), ['first', 'second']);
+  assert.ok(discovery.sourceResults.every((result) => result.status === 'partial' && result.candidateCount === 1 && result.error === 'aggregate-candidate-limit'));
+});
+
+test('authenticates GitHub source requests only to the API host', async () => {
+  const source = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
+  let request;
+  const discovery = await discoverContent([source], policy, [], [], {
+    githubToken: 'source-token',
+    fetchImpl: async (url, options) => {
+      request = { hostname: url.hostname, authorization: options.headers.Authorization };
+      return new Response('{"incomplete_results":false,"items":[]}', { status: 200 });
+    },
+  });
+  assert.deepEqual(request, { hostname: 'api.github.com', authorization: 'Bearer source-token' });
+  assert.equal(discovery.sourceResults[0].status, 'complete');
+});
+
 test('skips malformed GitHub results and deduplicates canonical redirect destinations', async () => {
   const githubSource = { id: 'github', kind: 'github-search', contentType: 'example', url: 'https://api.github.com/search/repositories?q=cosmosdb', enabled: true, trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['api.github.com', 'github.com'], allowedOwners: ['AzureCosmosDB'] };
   const repositories = { incomplete_results: false, items: [
