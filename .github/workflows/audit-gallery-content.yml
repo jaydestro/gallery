@@ -108,7 +108,7 @@ jobs:
           fi
 
       - name: Publish or refresh draft pull request
-        if: always()
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GALLERY_UPDATE_TOKEN }}
           UPDATE_BRANCH: automation/gallery-content-updates
