@@ -54,7 +54,6 @@ jobs:
 
       - name: Prepare stable automation branch
         env:
-          GH_TOKEN: ${{ github.token }}
           UPDATE_BRANCH: automation/gallery-content-updates
         run: |
           git config user.name "gallery-content-automation"
@@ -62,16 +61,8 @@ jobs:
           git fetch origin main
           if git ls-remote --exit-code --heads origin "$UPDATE_BRANCH" > /dev/null; then
             git fetch origin "$UPDATE_BRANCH"
-            pr_number=$(gh pr list --head "$UPDATE_BRANCH" --base main --state open --json number --jq '.[0].number')
-            if [ -n "$pr_number" ]; then
-              git checkout -B "$UPDATE_BRANCH" "origin/$UPDATE_BRANCH"
-              git rebase origin/main
-            else
-              git checkout -B "$UPDATE_BRANCH" origin/main
-            fi
-          else
-            git checkout -b "$UPDATE_BRANCH" origin/main
           fi
+          git checkout -B "$UPDATE_BRANCH" origin/main
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
