@@ -46,4 +46,8 @@ test('regenerates numbered summary from the actual catalog diff', () => {
   assert.match(summary, /\*\*U1\*\* Update \[Updated\]/);
   assert.match(summary, /\*\*R1\*\* Retire \[Retired\]/);
   assert.match(summary, /`Reject: A1, U1, R1`/);
+  assert.match(summary, /Description: Added/);
+  assert.match(summary, /Author: Author/);
+  assert.match(summary, /Tags: example/);
+  assert.match(summary, /Preview: coming soon/);
 });

@@ -75,13 +75,25 @@ export function summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog,
   const retirements = retiredCatalog.filter((entry) => !baseRetiredSources.has(entry.source));
   const removedWithoutRetirement = baseCatalog.filter((entry) => !catalogByTitle.has(entry.title) && !retirements.some((retired) => retired.title === entry.title));
   if (removedWithoutRetirement.length > 0) throw new Error(`Catalog entries were removed without retirement records: ${removedWithoutRetirement.map((entry) => entry.title).join(', ')}`);
+  const cardDetails = (entry) => [
+    `  - Description: ${entry.description?.trim() || '**MISSING**'}`,
+    `  - Author: ${Array.isArray(entry.author) ? entry.author.join(', ') : (entry.author?.trim() || '**MISSING**')}`,
+    `  - Date: ${entry.date?.trim() || '**MISSING**'}`,
+    `  - Tags: ${entry.tags?.length ? entry.tags.join(', ') : '**MISSING**'}`,
+    `  - Website: ${entry.website?.trim() || '**MISSING**'}`,
+    `  - Preview: ${entry.preview?.trim() || '**MISSING**'}`,
+    `  - Source: ${entry.source?.trim() || '**MISSING**'}`,
+  ];
 
   return [
     '# Automated gallery content update', '',
     `Generated: ${generatedAt}`, '',
     'Comment with item IDs to request changes, for example: `Reject: A1, U1, R1`.', '',
     `Additions: ${additions.length}`, '',
-    ...additions.map((entry, index) => `- **A${index + 1}** Add [${entry.title}](${entry.source})`),
+    ...additions.flatMap((entry, index) => [
+      `- **A${index + 1}** Add [${entry.title}](${entry.source})`,
+      ...cardDetails(entry),
+    ]),
     '', `URL updates: ${updates.length}`, '',
     ...updates.map((entry, index) => `- **U${index + 1}** Update [${entry.title}](${entry.url}) from ${entry.previousUrl}`),
     '', `Retirements: ${retirements.length}`, '',
