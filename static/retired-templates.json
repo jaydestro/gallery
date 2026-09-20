@@ -112,7 +112,8 @@
       "httpStatus": 200,
       "finalUrl": "https://learn.microsoft.com/azure/documentdb/vector-search",
       "reasonCodes": [
-        "http-redirect",
+        "http-ok",
+        "review",
         "excluded-product"
       ],
       "criteria": [
@@ -143,7 +144,8 @@
       "httpStatus": 200,
       "finalUrl": "https://learn.microsoft.com/azure/documentdb/rag",
       "reasonCodes": [
-        "http-redirect",
+        "http-ok",
+        "review",
         "excluded-product"
       ],
       "criteria": [

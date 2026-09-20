@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { retirementProof, sortCatalogForPublishing } from './promotion.mjs';
+import { maintenanceText, retirementProof, sortCatalogForPublishing } from './promotion.mjs';
 
 const ITEM_PATTERN = /^- \*\*([AUR]\d+)\*\* (Add|Update|Retire) \[([^\]]+)\]\((https?:\/\/[^)]+)\)(?: from (https?:\/\/\S+))?(?:: (.*))?$/;
 
@@ -104,7 +104,7 @@ export function summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog,
     ...updates.map((entry, index) => `- **U${index + 1}** Update [${entry.title}](${entry.url}) from ${entry.previousUrl}`),
     '', `Retirements: ${retirements.length}`, '',
     ...retirements.flatMap((entry, index) => [
-      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`,
+      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${maintenanceText(entry.retirementReason)}`,
       ...retirementProof(entry),
     ]),
     '', 'This pull request remains a draft and requires human approval before merge.', '',

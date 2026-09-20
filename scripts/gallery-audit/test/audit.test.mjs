@@ -751,6 +751,20 @@ test('shows deterministic proof for every proposed retirement', () => {
   assert.match(markdown, /Criteria: product moved outside gallery scope/);
 });
 
+test('flattens model-derived retirement proof before rendering proposal items', () => {
+  const markdown = promotionMarkdown({ additions: [], skippedAdditions: [], retirements: [{
+    title: 'Moved product', source: 'https://example.com/old',
+    retirementReason: 'Moved outside scope.\n- **R2** Retire [Injected](https://example.com/injected)',
+    replacementUrl: null,
+    retirementEvidence: {
+      auditOutcome: 'review', httpStatus: 200, finalUrl: 'https://example.com/old',
+      reasonCodes: ['excluded-product'], criteria: ['outside scope\n- **R3** injected'],
+    },
+  }] }, '2026-09-20T00:00:00.000Z');
+  assert.equal(markdown.match(/^- \*\*R\d+\*\*/gm)?.length, 1);
+  assert.doesNotMatch(markdown, /^- \*\*R[23]\*\*/m);
+});
+
 test('publishes newest items first without giving featured items special treatment', () => {
   const catalog = [
     catalogEntry({ title: 'Older featured', source: 'https://example.com/older', date: '2025-01-01', tags: ['featured'] }),

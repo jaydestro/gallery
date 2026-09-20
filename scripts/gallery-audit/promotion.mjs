@@ -35,16 +35,21 @@ export function sortCatalogForPublishing(catalog) {
   return [...catalog].sort((left, right) => String(right.date ?? '').localeCompare(String(left.date ?? '')));
 }
 
+export function maintenanceText(value, fallback = '**MISSING**') {
+  const text = String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text || fallback;
+}
+
 export function retirementProof(entry) {
   const evidence = entry.retirementEvidence ?? {};
   return [
-    `  - Reason: ${entry.retirementReason?.trim() || '**MISSING**'}`,
-    `  - Audit outcome: ${evidence.auditOutcome ?? '**MISSING**'}`,
-    `  - HTTP status: ${evidence.httpStatus ?? '**MISSING**'}`,
-    `  - Observed destination: ${evidence.finalUrl ?? '**MISSING**'}`,
-    `  - Replacement URL: ${entry.replacementUrl ?? '**NONE**'}`,
-    `  - Reason codes: ${evidence.reasonCodes?.length ? evidence.reasonCodes.join(', ') : '**MISSING**'}`,
-    `  - Criteria: ${evidence.criteria?.length ? evidence.criteria.join(', ') : '**MISSING**'}`,
+    `  - Reason: ${maintenanceText(entry.retirementReason)}`,
+    `  - Audit outcome: ${maintenanceText(evidence.auditOutcome)}`,
+    `  - HTTP status: ${maintenanceText(evidence.httpStatus)}`,
+    `  - Observed destination: ${maintenanceText(evidence.finalUrl)}`,
+    `  - Replacement URL: ${maintenanceText(entry.replacementUrl, '**NONE**')}`,
+    `  - Reason codes: ${maintenanceText(evidence.reasonCodes?.join(', '))}`,
+    `  - Criteria: ${maintenanceText(evidence.criteria?.join(', '))}`,
   ];
 }
 
@@ -123,7 +128,7 @@ export function promotionMarkdown(result, generatedAt) {
     ]),
     '', `Retirements: ${result.retirements.length}`, '',
     ...result.retirements.flatMap((entry, index) => [
-      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`,
+      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${maintenanceText(entry.retirementReason)}`,
       ...retirementProof(entry),
     ]),
     '', `Skipped high-confidence additions: ${result.skippedAdditions.length}`, '',

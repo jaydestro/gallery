@@ -48,11 +48,11 @@ export type UserState = {
 };
 
 function readSortChoice(rule: string): User[] {
+  const usersByDate = unsortedUsers.slice().sort((left, right) => left.date.localeCompare(right.date));
   if (rule == SORT_BY_OPTIONS[0]) {
-    const copyUnsortedUser = unsortedUsers.slice();
-    return copyUnsortedUser.reverse();
+    return usersByDate.reverse();
   } else if (rule == SORT_BY_OPTIONS[1]) {
-    return unsortedUsers;
+    return usersByDate;
   } else if (rule == SORT_BY_OPTIONS[2]) {
     return sortedUsers;
   } else if (rule == SORT_BY_OPTIONS[3]) {
