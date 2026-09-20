@@ -1,1 +1,93 @@
-[]
+[
+  {
+    "title": "Promptflow RAG Project template for Azure Databases",
+    "description": "An end-to-end sample of RAG showcasing development, evaluation, experimentation, and deployment using Promptflow, search products like CosmosDB, PostgresSQL, and Azure AI Search.",
+    "preview": "coming soon",
+    "website": "https://microsoft.github.io/promptflow/index.html",
+    "author": "Promotflow Team",
+    "source": "https://docs.llamaindex.ai/en/stable/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
+    "date": "2024-09-01",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "jupyternotebook",
+      "vectorcosmosnosql",
+      "promptflow",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-20T00:00:00.000Z",
+    "retirementReason": "The source resolves to the LlamaIndex Azure Cosmos DB vector store example and does not match this Promptflow title or description. The correct LlamaIndex resource remains in the live catalog.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "duplicate",
+      "reasonCodes": [
+        "duplicate-source",
+        "source-metadata-mismatch"
+      ],
+      "criteria": [
+        "duplicate source",
+        "source does not match catalog metadata"
+      ]
+    }
+  },
+  {
+    "title": "CosmicWorks command-line tool and libraries for .NET",
+    "description": "This repository is an open source set of tools and libraries to generate data quickly for your proof of concept or sample applications.",
+    "preview": "coming soon",
+    "website": "https://github.com/seesharprun",
+    "author": "Sidney Andrews",
+    "source": "https://github.com/azure-samples/cosmicworks",
+    "date": "2024-03-01",
+    "tags": [
+      "architecturedesign",
+      "tools",
+      "csharp",
+      "microsoft",
+      "example"
+    ],
+    "retiredAt": "2026-09-20T00:00:00.000Z",
+    "retirementReason": "The original Azure-Samples repository is unavailable. The active AzureCosmosDB/CosmicWorks repository is already represented by separate catalog entries and is not a like-for-like replacement for this record.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "github-missing",
+        "age-review"
+      ],
+      "criteria": [
+        "github-missing",
+        "repository unavailable"
+      ]
+    }
+  },
+  {
+    "title": "Samples for using REST calls against CosmosDB",
+    "description": "REST API samples for Azure Cosmos DB for NoSQL. Samples cover most database, container and item examples including example of how to generate a master key authorization signature.",
+    "preview": "coming soon",
+    "website": "https://github.com/alexdrenea",
+    "author": "Alex Drenea",
+    "source": "https://github.com/Azure-Samples/cosmos-db-rest-samples",
+    "date": "2023-09-01",
+    "tags": [
+      "architecturedesign",
+      "csharp",
+      "community",
+      "example"
+    ],
+    "retiredAt": "2026-09-20T00:00:00.000Z",
+    "retirementReason": "The repository is unavailable and no equivalent REST sample is present in the current catalog.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "broken",
+      "reasonCodes": [
+        "github-missing",
+        "age-review"
+      ],
+      "criteria": [
+        "github-missing",
+        "repository unavailable"
+      ]
+    }
+  }
+]
