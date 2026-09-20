@@ -8,7 +8,7 @@ import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverContent, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
 import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
-import { planCatalogPromotion, promotionMarkdown, sortCatalogForPublishing } from '../promotion.mjs';
+import { planCatalogPromotion, promotionMarkdown, sortCatalogForPublishing, strongRetirementEvidence } from '../promotion.mjs';
 
 const policy = {
   requestTimeoutMs: 250,
@@ -83,6 +83,7 @@ test('flags DocumentDB destinations as excluded product retirement evidence', as
   });
   assert.equal(entry.outcome, 'review');
   assert.ok(entry.reasonCodes.includes('excluded-product'));
+  assert.equal(strongRetirementEvidence(entry), true);
 });
 
 test('excludes DocumentDB content from discovery', () => {
