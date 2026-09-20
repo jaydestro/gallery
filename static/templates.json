@@ -27,7 +27,7 @@
   },
   {
     "title": "Azure Cosmos DB Capacity Modes Explained: Provisioned vs Serverless",
-    "description": "Learn how Azure Cosmos DB capacity modes work in this practical comparison of provisioned throughput vs. serverless. Discover how each model handles request units (RU/s), performance, scalability, regional availability, and billing—and find out which Azure Cosmos DB option is best for production applications, development environments, prototypes, intermittent workloads, and unpredictable traffic. In this video: 🔹 Provisioned throughput vs. serverless: when to use each 🔹 How billing works in both models 🔹 Request units (RU/s) explained 🔹 Best practices for production, development, and intermittent workloads 🔹 Cost predictability and scaling considerations 0:00 – Introduction to Capacity Modes 0:11 – Provisioned Throughput Explained 0:26 – Autoscaling &amp; Predictable Performance 0:33 – When to Use Provisioned Throughput 0:51 – Serverless Model Overview 1:02 – No Minimum Charges, Pay-Per-Use 1:15 – Serverless Use Cases 1:51 – Tradeoffs &amp; Regional Limitations 2:02 – Decision Fra",
+    "description": "Learn how provisioned throughput and serverless capacity modes differ in request-unit billing, scaling, regional availability, and suitability for production, development, intermittent, and unpredictable workloads.",
     "preview": "coming soon",
     "website": "https://www.youtube.com/@AzureCosmosDB",
     "author": "Azure Cosmos DB",
@@ -209,7 +209,7 @@
   },
   {
     "title": "MulticloudDB SDK: Cross-cloud portability in the coding agent era",
-    "description": "Building cross-cloud solutions with best-of-breed cloud-native databases means learning multiple SDKs, translating queries, handling different errors, and testing across providers. The Multicloud DB SDK for Java lets you share that work across Azure Cosmos DB, Amazon DynamoDB, and Google Cloud Spanner. You (or your coding agent) write CRUD and query logic against one Java API, with provider selection [&#8230;] The post MulticloudDB SDK: Cross-cloud portability in the coding agent era appeared first on Azure Cosmos DB Blog .",
+    "description": "Building cross-cloud solutions with cloud-native databases means learning multiple SDKs, translating queries, handling different errors, and testing across providers. The Multicloud DB SDK for Java lets you share that work across Azure Cosmos DB, Amazon DynamoDB, and Google Cloud Spanner.",
     "preview": "coming soon",
     "website": "https://devblogs.microsoft.com/cosmosdb/",
     "author": "Theo van Kraay",
@@ -222,7 +222,7 @@
   },
   {
     "title": "I Need My CI/CD Pipeline to Access Cosmos DB Without Using a Secret",
-    "description": "In the last post we walked through why RBAC broke your app and how to fix it. Your app is now running on a managed identity, keys are off, and everything is green. Then your build pipeline runs, and it needs to seed test data. Suddenly you&#8217;re staring at a secret in your CI settings [&#8230;] The post I Need My CI/CD Pipeline to Access Cosmos DB Without Using a Secret appeared first on Azure Cosmos DB Blog .",
+    "description": "Learn how to let a CI/CD pipeline seed Azure Cosmos DB test data without storing account keys or other secrets after an application moves to managed identity and role-based access control.",
     "preview": "coming soon",
     "website": "https://devblogs.microsoft.com/cosmosdb/",
     "author": "Iria Osara, Sudhanshu Khera",
@@ -235,7 +235,7 @@
   },
   {
     "title": "Powering Memory in Foundry Agent Service, with Azure Cosmos DB",
-    "description": "Move from a locally composed memory-enabled agent to a deployed Foundry Agent Service agent, with keyless Azure infrastructure and an interactive browser sample. In Native Agent Memory for Microsoft Agent Framework, Powered by Azure Cosmos DB, we introduced CosmosMemoryContextProvider: a Microsoft Agent Framework context provider that extracts useful information from conversations, stores it in Azure Cosmos DB, [&#8230;] The post Powering Memory in Foundry Agent Service, with Azure Cosmos DB appeared first on Azure Cosmos DB Blog .",
+    "description": "Move from a locally composed memory-enabled agent to a deployed Foundry Agent Service agent with keyless Azure infrastructure, an interactive browser sample, and long-term memory stored in Azure Cosmos DB.",
     "preview": "coming soon",
     "website": "https://devblogs.microsoft.com/cosmosdb/",
     "author": "Theo van Kraay",
@@ -248,7 +248,7 @@
   },
   {
     "title": "I Enabled RBAC and Everything Broke. What Did I Do Wrong?",
-    "description": "We covered the roles your Azure Cosmos DB app needs in our previous post. Now let’s look at what happens after you’ve assigned those roles, switched identities, disabled keys and suddenly staring at a 403. As we continue this security series, we’ll walk through the most common causes, how to diagnose them, and how to [&#8230;] The post I Enabled RBAC and Everything Broke. What Did I Do Wrong? appeared first on Azure Cosmos DB Blog .",
+    "description": "Learn how to diagnose common Azure Cosmos DB authorization failures after assigning roles, switching identities, and disabling account keys, including the causes of HTTP 403 responses.",
     "preview": "coming soon",
     "website": "https://devblogs.microsoft.com/cosmosdb/",
     "author": "Sudhanshu Khera, Iria Osara",
@@ -315,6 +315,87 @@
       "microsoft",
       "vectorcosmosnosql",
       "example"
+    ]
+  },
+  {
+    "title": "Understanding Vector Store capabilities in Azure Cosmos DB for MongoDB",
+    "description": "Learn what a vector store is and how to configure vector indexing and search in Azure DocumentDB.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/documentdb",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/documentdb/vector-search",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Build RAG applications with Azure Cosmos DB for MongoDB and Langchain",
+    "description": "Learn how to use Azure DocumentDB, LangChain, and OpenAI to implement retrieval-augmented generation applications.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/documentdb",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/documentdb/rag",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Semantic Kernel Connector for Azure Cosmos DB for NoSQL (.NET)",
+    "description": "Documentation and samples in C# for the Semantic Kernel connector with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/semantic-kernel/",
+    "author": "Semantic Kernel Team",
+    "source": "https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector?pivots=programming-language-csharp",
+    "date": "2024-09-25",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "csharp",
+      "vectorcosmosnosql",
+      "semantickernel",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Semantic Kernel Connector for Azure Cosmos DB for NoSQL (Python)",
+    "description": "Documentation and samples in Python for the Semantic Kernel connector with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/semantic-kernel/",
+    "author": "Semantic Kernel Team",
+    "source": "https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/out-of-the-box-connectors/azure-cosmosdb-nosql-connector?pivots=programming-language-python",
+    "date": "2024-09-25",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "vectorcosmosnosql",
+      "semantickernel",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "LlamaIndex Vector Store integration for Azure Cosmos DB for NoSQL for Python",
+    "description": "Documentation and samples in Python for the LlamaIndex vector store integration with Azure Cosmos DB for NoSQL.",
+    "preview": "coming soon",
+    "website": "https://developers.llamaindex.ai/",
+    "author": "LlamaIndex Team",
+    "source": "https://developers.llamaindex.ai/python/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
+    "date": "2024-09-01",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "python",
+      "vectorcosmosnosql",
+      "llamaindex",
+      "microsoft"
     ]
   },
   {
