@@ -258,6 +258,14 @@ Promoted content retains the source title, excerpt, author, canonical URL, date,
 
 The workflow accumulates validated changes on `automation/gallery-content-updates` and opens or refreshes one draft pull request. A maintainer reviews the actual catalog diff and evidence. Only a manual merge to `main` publishes the update.
 
+Each proposed addition, URL update, and retirement has an `A<n>`, `U<n>`, or `R<n>` identifier. A repository owner, member, or collaborator can reject proposals by commenting on the maintenance pull request:
+
+```text
+Reject: A1, U1, R1
+```
+
+The comment workflow removes the addition, restores the previous URL, or cancels the retirement respectively. It accepts only IDs in the current pull request body, validates that the pull request uses the maintenance branch and targets `main`, then runs the audit tests and static build before pushing the revision. Invalid or stale IDs fail without changing the proposal. After a successful command, the pull request body is regenerated from the actual base-to-head catalog diff, so operators must use the refreshed IDs for later comments. Comment commands never approve or merge the pull request.
+
 ## Proposed Repository Structure
 
 ```text

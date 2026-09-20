@@ -83,12 +83,24 @@ export function planCatalogPromotion({ catalog, retiredCatalog, candidateReport,
 }
 
 export function promotionMarkdown(result, generatedAt) {
+  const cardDetails = (entry) => [
+    `  - Description: ${entry.description?.trim() || '**MISSING**'}`,
+    `  - Author: ${Array.isArray(entry.author) ? entry.author.join(', ') : (entry.author?.trim() || '**MISSING**')}`,
+    `  - Date: ${entry.date?.trim() || '**MISSING**'}`,
+    `  - Tags: ${entry.tags?.length ? entry.tags.join(', ') : '**MISSING**'}`,
+    `  - Website: ${entry.website?.trim() || '**MISSING**'}`,
+    `  - Preview: ${entry.preview?.trim() || '**MISSING**'}`,
+    `  - Source: ${entry.source?.trim() || '**MISSING**'}`,
+  ];
   return [
     '# Automated gallery content update', '',
     `Generated: ${generatedAt}`, '',
     'Comment with item IDs to request changes, for example: `include A1; exclude A2; keep R1`.', '',
     `Additions: ${result.additions.length}`, '',
-    ...result.additions.map((entry, index) => `- **A${index + 1}** Add [${entry.title}](${entry.source})`),
+    ...result.additions.flatMap((entry, index) => [
+      `- **A${index + 1}** Add [${entry.title}](${entry.source})`,
+      ...cardDetails(entry),
+    ]),
     '', `Retirements: ${result.retirements.length}`, '',
     ...result.retirements.map((entry, index) => `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`),
     '', `Skipped high-confidence additions: ${result.skippedAdditions.length}`, '',

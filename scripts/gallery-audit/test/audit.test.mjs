@@ -564,6 +564,23 @@ test('numbers every maintenance PR item for unambiguous review comments', () => 
   assert.match(markdown, /include A1; exclude A2; keep R1/);
 });
 
+test('shows complete card metadata and flags missing fields in maintenance PR additions', () => {
+  const markdown = promotionMarkdown({
+    additions: [{
+      title: 'Card', description: 'Card description.', preview: '', website: 'https://example.com',
+      author: ['One', 'Two'], source: 'https://example.com/card', date: '2026-09-20', tags: ['video', 'microsoft'],
+    }],
+    retirements: [], skippedAdditions: [],
+  }, '2026-09-20T00:00:00.000Z');
+  assert.match(markdown, /Description: Card description\./);
+  assert.match(markdown, /Author: One, Two/);
+  assert.match(markdown, /Date: 2026-09-20/);
+  assert.match(markdown, /Tags: video, microsoft/);
+  assert.match(markdown, /Website: https:\/\/example\.com/);
+  assert.match(markdown, /Preview: \*\*MISSING\*\*/);
+  assert.match(markdown, /Source: https:\/\/example\.com\/card/);
+});
+
 test('retires only high-confidence classifications backed by strong deterministic evidence', () => {
   const catalog = [catalogEntry(), catalogEntry({ title: 'Old', source: 'https://example.com/old' })];
   const classifications = [
