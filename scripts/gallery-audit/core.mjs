@@ -227,6 +227,19 @@ function reviewSignals(entry, policy, now) {
   return signals;
 }
 
+function isExcludedCatalogContent(policy, ...values) {
+  const text = values.filter(Boolean).join(' ').toLowerCase();
+  if ((policy.excludedCatalogTerms ?? []).some((term) => text.includes(term.toLowerCase()))) return true;
+  return values.some((value) => {
+    try {
+      const normalized = normalizeUrl(String(value), policy.trackingParameters);
+      return (policy.excludedCatalogUrlPrefixes ?? []).some((prefix) => normalized.startsWith(prefix));
+    } catch {
+      return false;
+    }
+  });
+}
+
 export async function auditCatalog(catalog, policy, options = {}) {
   validateCatalog(catalog);
   const duplicates = findDuplicates(catalog, policy.trackingParameters);
@@ -235,10 +248,11 @@ export async function auditCatalog(catalog, policy, options = {}) {
   return mapWithConcurrency(catalog, policy.auditConcurrency ?? 8, async (item, index) => {
     const checked = await checker(item.source);
     const signals = reviewSignals(item, policy, options.now ?? new Date());
+    if (isExcludedCatalogContent(policy, checked.finalUrl)) signals.push('excluded-product');
     let outcome = checked.outcome;
     const duplicate = duplicates[index];
     if (!['broken', 'indeterminate'].includes(outcome) && (duplicate.exact.length > 0 || duplicate.normalized.length > 0)) outcome = 'duplicate';
-    else if (outcome === 'healthy' && signals.length > 0) outcome = 'review';
+    else if (['healthy', 'redirected'].includes(outcome) && signals.length > 0) outcome = 'review';
     return {
       catalogIndex: index,
       title: item.title,
@@ -295,6 +309,7 @@ function candidateFromMetadata(source, policy, metadata, now) {
   const publishedTime = Date.parse(metadata.publishedAt);
   if (!Number.isFinite(publishedTime) || publishedTime > now.getTime()) return null;
   const contentType = sourceContentType(source);
+  if (isExcludedCatalogContent(policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []))) return null;
   const matchedTerms = inclusionSignals(source, policy, metadata.title, metadata.summary, metadata.url, ...(metadata.topics ?? []));
   if (matchedTerms.length === 0) return null;
   return {
@@ -511,6 +526,7 @@ export async function discoverContent(sources, policy, liveCatalog, retiredCatal
     });
     if (!['healthy', 'redirected'].includes(checked.outcome)) return null;
     const finalUrl = new URL(normalizeUrl(checked.finalUrl ?? candidate.url, policy.trackingParameters));
+    if (isExcludedCatalogContent(policy, finalUrl.toString())) return null;
     if (!source.allowedHostnames.includes(finalUrl.hostname.toLowerCase())) return null;
     if (source.kind === 'learn-search' && !learnPathPrefixes(source).some((prefix) => matchesPathPrefix(finalUrl.pathname, prefix))) return null;
     if (source.kind === 'github-search') {

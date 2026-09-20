@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { retirementProof, sortCatalogForPublishing } from './promotion.mjs';
 
 const ITEM_PATTERN = /^- \*\*([AUR]\d+)\*\* (Add|Update|Retire) \[([^\]]+)\]\((https?:\/\/[^)]+)\)(?: from (https?:\/\/\S+))?(?:: (.*))?$/;
 
@@ -63,7 +64,7 @@ export function applyRejections({ baseCatalog, liveCatalog, retiredCatalog, prop
   const existing = live
     .filter((entry) => baseOrder.has(entry.title))
     .sort((left, right) => baseOrder.get(left.title) - baseOrder.get(right.title));
-  return { liveCatalog: [...additions, ...existing], retiredCatalog: retired };
+  return { liveCatalog: sortCatalogForPublishing([...additions, ...existing]), retiredCatalog: retired };
 }
 
 export function summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog, retiredCatalog, generatedAt }) {
@@ -102,7 +103,10 @@ export function summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog,
     '', `URL updates: ${updates.length}`, '',
     ...updates.map((entry, index) => `- **U${index + 1}** Update [${entry.title}](${entry.url}) from ${entry.previousUrl}`),
     '', `Retirements: ${retirements.length}`, '',
-    ...retirements.map((entry, index) => `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`),
+    ...retirements.flatMap((entry, index) => [
+      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`,
+      ...retirementProof(entry),
+    ]),
     '', 'This pull request remains a draft and requires human approval before merge.', '',
   ].join('\n');
 }

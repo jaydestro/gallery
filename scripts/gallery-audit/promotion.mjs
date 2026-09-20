@@ -6,6 +6,7 @@ const STRONG_RETIREMENT_REASONS = new Set([
   'github-archived',
   'github-disabled',
   'known-retired-term',
+  'excluded-product',
 ]);
 
 export function strongRetirementEvidence(entry) {
@@ -28,6 +29,23 @@ function buildCatalogEntry(candidate, source) {
     date: candidate.publishedAt.slice(0, 10),
     tags: [...defaults.tags],
   };
+}
+
+export function sortCatalogForPublishing(catalog) {
+  return [...catalog].sort((left, right) => String(right.date ?? '').localeCompare(String(left.date ?? '')));
+}
+
+export function retirementProof(entry) {
+  const evidence = entry.retirementEvidence ?? {};
+  return [
+    `  - Reason: ${entry.retirementReason?.trim() || '**MISSING**'}`,
+    `  - Audit outcome: ${evidence.auditOutcome ?? '**MISSING**'}`,
+    `  - HTTP status: ${evidence.httpStatus ?? '**MISSING**'}`,
+    `  - Observed destination: ${evidence.finalUrl ?? '**MISSING**'}`,
+    `  - Replacement URL: ${entry.replacementUrl ?? '**NONE**'}`,
+    `  - Reason codes: ${evidence.reasonCodes?.length ? evidence.reasonCodes.join(', ') : '**MISSING**'}`,
+    `  - Criteria: ${evidence.criteria?.length ? evidence.criteria.join(', ') : '**MISSING**'}`,
+  ];
 }
 
 export function planCatalogPromotion({ catalog, retiredCatalog, candidateReport, auditReport, sourcesDocument, policy, now = new Date() }) {
@@ -66,6 +84,8 @@ export function planCatalogPromotion({ catalog, retiredCatalog, candidateReport,
       replacementUrl: classification.relatedUrl,
       retirementEvidence: {
         auditOutcome: auditEntry.outcome,
+        httpStatus: auditEntry.httpStatus,
+        finalUrl: auditEntry.finalUrl,
         reasonCodes: [...auditEntry.reasonCodes],
         criteria: [...classification.criteria],
       },
@@ -74,7 +94,7 @@ export function planCatalogPromotion({ catalog, retiredCatalog, candidateReport,
 
   additions.sort((left, right) => right.date.localeCompare(left.date) || left.title.localeCompare(right.title));
   return {
-    catalog: [...additions, ...catalog.filter((_, index) => !retirementIndexes.has(index))],
+    catalog: sortCatalogForPublishing([...additions, ...catalog.filter((_, index) => !retirementIndexes.has(index))]),
     retiredCatalog: [...retiredCatalog, ...retirements],
     additions,
     retirements,
@@ -102,7 +122,10 @@ export function promotionMarkdown(result, generatedAt) {
       ...cardDetails(entry),
     ]),
     '', `Retirements: ${result.retirements.length}`, '',
-    ...result.retirements.map((entry, index) => `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`),
+    ...result.retirements.flatMap((entry, index) => [
+      `- **R${index + 1}** Retire [${entry.title}](${entry.source}): ${entry.retirementReason}`,
+      ...retirementProof(entry),
+    ]),
     '', `Skipped high-confidence additions: ${result.skippedAdditions.length}`, '',
     ...result.skippedAdditions.map((entry, index) => `- **S${index + 1}** ${entry.url}: ${entry.reason}`),
     '', 'This pull request is generated as a draft and requires human approval before merge.', '',
