@@ -51,10 +51,13 @@ test('restores a cancelled retirement to its original base position', () => {
   assert.deepEqual(result.liveCatalog.map((item) => item.title), ['Added', 'First', 'Restored', 'Last']);
 });
 
-test('regenerates numbered summary from the actual catalog diff', () => {
+test('regenerates numbered summary from the actual catalog diff with retirement proof', () => {
   const baseCatalog = [entry('Updated', 'https://example.com/old'), entry('Retired', 'https://example.com/retired')];
   const catalog = [entry('Added', 'https://example.com/added'), entry('Updated', 'https://example.com/new')];
-  const retiredCatalog = [entry('Retired', 'https://example.com/retired', { retirementReason: 'Missing.' })];
+  const retiredCatalog = [entry('Retired', 'https://example.com/retired', {
+    retirementReason: 'Missing.', replacementUrl: null,
+    retirementEvidence: { auditOutcome: 'broken', httpStatus: 404, finalUrl: 'https://example.com/retired', reasonCodes: ['http-404'], criteria: ['source missing'] },
+  })];
   const summary = summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog: [], retiredCatalog, generatedAt: '2026-09-20T00:00:00.000Z' });
   assert.match(summary, /\*\*A1\*\* Add \[Added\]/);
   assert.match(summary, /\*\*U1\*\* Update \[Updated\]/);
@@ -64,4 +67,7 @@ test('regenerates numbered summary from the actual catalog diff', () => {
   assert.match(summary, /Author: Author/);
   assert.match(summary, /Tags: example/);
   assert.match(summary, /Preview: coming soon/);
+  assert.match(summary, /Audit outcome: broken/);
+  assert.match(summary, /HTTP status: 404/);
+  assert.match(summary, /Reason codes: http-404/);
 });

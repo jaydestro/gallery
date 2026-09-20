@@ -89,5 +89,69 @@
         "repository unavailable"
       ]
     }
+  },
+  {
+    "title": "Understanding Vector Store capabilities in Azure Cosmos DB for MongoDB",
+    "description": "Learn what a vector store is and how to configure vector indexing and search in Azure DocumentDB.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/documentdb",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/documentdb/vector-search",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-20T00:00:00.000Z",
+    "retirementReason": "The original Azure Cosmos DB for MongoDB (vCore) content moved to Azure DocumentDB. DocumentDB content is outside the scope of this Azure Cosmos DB gallery.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "review",
+      "httpStatus": 200,
+      "finalUrl": "https://learn.microsoft.com/azure/documentdb/vector-search",
+      "reasonCodes": [
+        "http-ok",
+        "review",
+        "excluded-product"
+      ],
+      "criteria": [
+        "product moved to Azure DocumentDB",
+        "destination is outside gallery scope"
+      ]
+    }
+  },
+  {
+    "title": "Build RAG applications with Azure Cosmos DB for MongoDB and Langchain",
+    "description": "Learn how to use Azure DocumentDB, LangChain, and OpenAI to implement retrieval-augmented generation applications.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/documentdb",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/documentdb/rag",
+    "date": "2024-08-14",
+    "tags": [
+      "documentation",
+      "generativeai",
+      "vectorcosmosmongo",
+      "microsoft"
+    ],
+    "retiredAt": "2026-09-20T00:00:00.000Z",
+    "retirementReason": "The original Azure Cosmos DB for MongoDB (vCore) content moved to Azure DocumentDB. DocumentDB content is outside the scope of this Azure Cosmos DB gallery.",
+    "replacementUrl": null,
+    "retirementEvidence": {
+      "auditOutcome": "review",
+      "httpStatus": 200,
+      "finalUrl": "https://learn.microsoft.com/azure/documentdb/rag",
+      "reasonCodes": [
+        "http-ok",
+        "review",
+        "excluded-product"
+      ],
+      "criteria": [
+        "product moved to Azure DocumentDB",
+        "destination is outside gallery scope"
+      ]
+    }
   }
 ]

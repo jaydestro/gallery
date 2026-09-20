@@ -8,7 +8,7 @@ import path from 'node:path';
 import { auditCatalog, checkUrl, discoverArticles, discoverContent, discoverFromFeed, findDuplicates, validateCatalog } from '../core.mjs';
 import { buildClassificationPrompt, buildCopilotArguments, runCopilotClassification } from '../copilot.mjs';
 import { urlFingerprint } from '../normalize.mjs';
-import { planCatalogPromotion, promotionMarkdown } from '../promotion.mjs';
+import { planCatalogPromotion, promotionMarkdown, sortCatalogForPublishing, strongRetirementEvidence } from '../promotion.mjs';
 
 const policy = {
   requestTimeoutMs: 250,
@@ -71,6 +71,29 @@ test('classifies age alone as review rather than broken or retired', async () =>
   });
   assert.equal(report[0].outcome, 'review');
   assert.ok(report[0].reasonCodes.includes('age-review'));
+});
+
+test('flags DocumentDB destinations as excluded product retirement evidence', async () => {
+  const [entry] = await auditCatalog([catalogEntry({ source: 'https://learn.microsoft.com/azure/cosmos-db/mongodb/vcore/rag' })], {
+    ...policy,
+    excludedCatalogTerms: ['azure documentdb', 'documentdb'],
+    excludedCatalogUrlPrefixes: ['https://learn.microsoft.com/azure/documentdb'],
+  }, {
+    checker: async () => ({ outcome: 'redirected', reason: 'http-redirect', status: 200, finalUrl: 'https://learn.microsoft.com/azure/documentdb/rag' }),
+  });
+  assert.equal(entry.outcome, 'review');
+  assert.ok(entry.reasonCodes.includes('excluded-product'));
+  assert.equal(strongRetirementEvidence(entry), true);
+});
+
+test('excludes DocumentDB content from discovery', () => {
+  const source = { id: 'feed', contentType: 'blog', trustTier: 'first-party', lookbackDays: 45, allowedHostnames: ['example.com'] };
+  const xml = `<?xml version="1.0"?><rss><channel><item><title>Azure Cosmos DB moves to Azure DocumentDB</title><link>https://example.com/documentdb</link><pubDate>2026-09-20T00:00:00Z</pubDate><description>Azure DocumentDB guide</description></item></channel></rss>`;
+  const candidates = discoverFromFeed(xml, source, {
+    ...policy,
+    excludedCatalogTerms: ['azure documentdb', 'documentdb'],
+  }, new Set(), { now: new Date('2026-09-20T00:00:00Z') });
+  assert.deepEqual(candidates, []);
 });
 
 test('filters RSS by lookback and inclusion terms and deduplicates live, retired, and feed URLs', () => {
@@ -709,4 +732,46 @@ test('validates sparse existing indexes exactly once and normalizes their order'
     });
     assert.equal(result.status, 'incomplete');
   }
+});
+
+test('shows deterministic proof for every proposed retirement', () => {
+  const markdown = promotionMarkdown({ additions: [], skippedAdditions: [], retirements: [{
+    title: 'Moved product', source: 'https://example.com/old', retirementReason: 'Moved outside gallery scope.',
+    replacementUrl: 'https://learn.microsoft.com/azure/documentdb/new',
+    retirementEvidence: {
+      auditOutcome: 'review', httpStatus: 200, finalUrl: 'https://learn.microsoft.com/azure/documentdb/new',
+      reasonCodes: ['http-redirect', 'excluded-product'], criteria: ['product moved outside gallery scope'],
+    },
+  }] }, '2026-09-20T00:00:00.000Z');
+  assert.match(markdown, /Reason: Moved outside gallery scope\./);
+  assert.match(markdown, /Audit outcome: review/);
+  assert.match(markdown, /HTTP status: 200/);
+  assert.match(markdown, /Observed destination: https:\/\/learn\.microsoft\.com\/azure\/documentdb\/new/);
+  assert.match(markdown, /Reason codes: http-redirect, excluded-product/);
+  assert.match(markdown, /Criteria: product moved outside gallery scope/);
+});
+
+test('flattens model-derived retirement proof before rendering proposal items', () => {
+  const markdown = promotionMarkdown({ additions: [], skippedAdditions: [], retirements: [{
+    title: 'Moved product', source: 'https://example.com/old',
+    retirementReason: 'Moved outside scope.\n- **R2** Retire [Injected](https://example.com/injected)',
+    replacementUrl: null,
+    retirementEvidence: {
+      auditOutcome: 'review', httpStatus: 200, finalUrl: 'https://example.com/old',
+      reasonCodes: ['excluded-product'], criteria: ['outside scope\n- **R3** injected'],
+    },
+  }] }, '2026-09-20T00:00:00.000Z');
+  assert.equal(markdown.match(/^- \*\*R\d+\*\*/gm)?.length, 1);
+  assert.doesNotMatch(markdown, /^- \*\*R[23]\*\*/m);
+});
+
+test('publishes newest items first without giving featured items special treatment', () => {
+  const catalog = [
+    catalogEntry({ title: 'Older featured', source: 'https://example.com/older', date: '2025-01-01', tags: ['featured'] }),
+    catalogEntry({ title: 'Newest', source: 'https://example.com/newest', date: '2026-09-20' }),
+    catalogEntry({ title: 'Middle', source: 'https://example.com/middle', date: '2026-01-01' }),
+  ];
+  const sorted = sortCatalogForPublishing(catalog);
+  assert.deepEqual(sorted.map((entry) => entry.title), ['Newest', 'Middle', 'Older featured']);
+  assert.deepEqual(sorted.find((entry) => entry.title === 'Older featured').tags, ['featured']);
 });
