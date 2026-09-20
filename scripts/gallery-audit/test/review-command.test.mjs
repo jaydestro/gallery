@@ -18,6 +18,7 @@ test('applies addition, update, and retirement rejections by current PR IDs', ()
   ].join('\n');
   const proposal = parseProposal(body);
   const result = applyRejections({
+    baseCatalog: [entry('Updated', 'https://example.com/old'), entry('Retired', 'https://example.com/retired')],
     liveCatalog: [entry('Added', 'https://example.com/added'), entry('Updated', 'https://example.com/new')],
     retiredCatalog: [entry('Retired', 'https://example.com/retired', { retiredAt: '2026-01-02', retirementReason: 'Missing.', replacementUrl: null, retirementEvidence: {} })],
     proposal,
@@ -33,8 +34,21 @@ test('applies addition, update, and retirement rejections by current PR IDs', ()
 
 test('rejects unknown stale IDs without changing catalogs', () => {
   const liveCatalog = [entry('Added', 'https://example.com/added')];
-  assert.throws(() => applyRejections({ liveCatalog, retiredCatalog: [], proposal: new Map(), rejectedIds: ['A1'] }), /Unknown or stale/);
+  assert.throws(() => applyRejections({ baseCatalog: [], liveCatalog, retiredCatalog: [], proposal: new Map(), rejectedIds: ['A1'] }), /Unknown or stale/);
   assert.equal(liveCatalog.length, 1);
+});
+
+test('restores a cancelled retirement to its original base position', () => {
+  const baseCatalog = [entry('First', 'https://example.com/first'), entry('Restored', 'https://example.com/restored'), entry('Last', 'https://example.com/last')];
+  const proposal = parseProposal('- **R1** Retire [Restored](https://example.com/restored): Missing.');
+  const result = applyRejections({
+    baseCatalog,
+    liveCatalog: [entry('Added', 'https://example.com/added'), baseCatalog[0], baseCatalog[2]],
+    retiredCatalog: [entry('Restored', 'https://example.com/restored', { retiredAt: '2026-01-02', retirementReason: 'Missing.', retirementEvidence: {} })],
+    proposal,
+    rejectedIds: ['R1'],
+  });
+  assert.deepEqual(result.liveCatalog.map((item) => item.title), ['Added', 'First', 'Restored', 'Last']);
 });
 
 test('regenerates numbered summary from the actual catalog diff', () => {

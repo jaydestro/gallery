@@ -32,7 +32,7 @@ function stripRetirementMetadata(entry) {
   return liveEntry;
 }
 
-export function applyRejections({ liveCatalog, retiredCatalog, proposal, rejectedIds }) {
+export function applyRejections({ baseCatalog, liveCatalog, retiredCatalog, proposal, rejectedIds }) {
   const live = liveCatalog.map((entry) => ({ ...entry }));
   const retired = retiredCatalog.map((entry) => ({ ...entry }));
   const unknown = rejectedIds.filter((id) => !proposal.has(id));
@@ -58,7 +58,12 @@ export function applyRejections({ liveCatalog, retiredCatalog, proposal, rejecte
       }
     }
   }
-  return { liveCatalog: live, retiredCatalog: retired };
+  const baseOrder = new Map(baseCatalog.map((entry, index) => [entry.title, index]));
+  const additions = live.filter((entry) => !baseOrder.has(entry.title));
+  const existing = live
+    .filter((entry) => baseOrder.has(entry.title))
+    .sort((left, right) => baseOrder.get(left.title) - baseOrder.get(right.title));
+  return { liveCatalog: [...additions, ...existing], retiredCatalog: retired };
 }
 
 export function summarizeCatalogDiff({ baseCatalog, catalog, baseRetiredCatalog, retiredCatalog, generatedAt }) {
@@ -112,7 +117,7 @@ function run() {
     const liveCatalog = JSON.parse(fs.readFileSync(process.env.CATALOG_PATH, 'utf8'));
     const baseRetiredCatalog = JSON.parse(fs.readFileSync(process.env.BASE_RETIRED_PATH, 'utf8'));
     const retiredCatalog = JSON.parse(fs.readFileSync(process.env.RETIRED_PATH, 'utf8'));
-    const applied = applyRejections({ liveCatalog, retiredCatalog, proposal, rejectedIds });
+    const applied = applyRejections({ baseCatalog, liveCatalog, retiredCatalog, proposal, rejectedIds });
     fs.writeFileSync(process.env.CATALOG_PATH, `${JSON.stringify(applied.liveCatalog, null, 2)}\n`);
     fs.writeFileSync(process.env.RETIRED_PATH, `${JSON.stringify(applied.retiredCatalog, null, 2)}\n`);
     fs.writeFileSync(process.env.SUMMARY_PATH, summarizeCatalogDiff({
