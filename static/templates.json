@@ -1,5 +1,18 @@
 [
   {
+    "title": "Spec-Driven Development comes to Azure Cosmos DB: The First Database Extension for GitHub Spec Kit",
+    "description": "AI coding agents can write much of an application&#8217;s code, but developers still need to review the decisions behind it. For a Cosmos DB application, that includes choosing partition keys, modeling access patterns, and configuring the client. Those decisions affect cost, performance, and reliability long after the code compiles. We&#8217;ve written before about how Azure [&#8230;] The post Spec-Driven Development comes to Azure Cosmos DB: The First Database Extension for GitHub Spec Kit appeared first on Azure Cosmos DB Blog .",
+    "preview": "coming soon",
+    "website": "https://devblogs.microsoft.com/cosmosdb/",
+    "author": "Theo van Kraay",
+    "source": "https://devblogs.microsoft.com/cosmosdb/spec-driven-development-comes-to-azure-cosmos-db-the-first-database-extension-for-github-spec-kit",
+    "date": "2026-09-21",
+    "tags": [
+      "blog",
+      "microsoft"
+    ]
+  },
+  {
     "title": "Azure Cosmos DB Indexing Policies Explained",
     "description": "Which fields does your application actually query? Learn how to tune Azure Cosmos DB indexing policies around your workload. This short walkthrough covers automatic indexing, including and excluding property paths, composite indexes for multi-property sorting, and specialized index options. See how indexing choices affect write costs, storage, and query behavior—and why you should measure the results before making further changes. Learn more: https://learn.microsoft.com/azure/cosmos-db/index-policy #AzureCosmosDB #Azure #DatabasePerformance",
     "preview": "coming soon",
@@ -20,6 +33,19 @@
     "author": "Azure Cosmos DB",
     "source": "https://www.youtube.com/watch?v=embY5yxjCoU",
     "date": "2026-09-18",
+    "tags": [
+      "video",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Building AI Apps Faster with Agentic Coding and Azure Cosmos DB",
+    "description": "Part of the Modern AI Apps with Azure Cosmos DB Series. Modern AI apps need chat history, vector search, state management, and low-latency data access. This session explores how coding agents can help developers scaffold AI application patterns while Azure Cosmos DB handles memory, retrieval, and scale. Presenters: Sajeetharan Sinnathurai - Azure Cosmos DB Principal Program Manager - https://www.linkedin.com/in/sajeetharan/ Jay Gordon - Azure Cosmos DB Senior Program Manager https://www.linkedin.com/in/jaygordon0042/ • Start with the Agent Kit — Give your coding agent the context it needs to build Cosmos DB apps the right way - https://aka.ms/CosmosDB-agentkit • Subscribe to Azure Cosmos DB on YouTube - https://youtube.com/AzureCosmosDB • Follow Azure Cosmos DB on X - https://twitter.com/AzureCosmosDB • Follow Azure Cosmos DB on LinkedIn - https://www.linkedin.com/company/azure-cosmos-db/ #azurecosmosdb #aicoding",
+    "preview": "coming soon",
+    "website": "https://www.youtube.com/@AzureCosmosDB",
+    "author": "Azure Cosmos DB",
+    "source": "https://www.youtube.com/watch?v=c1QQp9KrRSY",
+    "date": "2026-09-16",
     "tags": [
       "video",
       "microsoft"
@@ -126,6 +152,19 @@
     "date": "2026-08-19",
     "tags": [
       "example",
+      "microsoft"
+    ]
+  },
+  {
+    "title": "Azure Cosmos DB in the Agentic Era: Data Tools for Developers and AI Agents",
+    "description": "Anthropic&#8217;s 2026 Agentic Coding Trends Report captures an important tension in how developers use AI. Engineers report using AI in roughly 60% of their work, yet say they can fully delegate only 0–20% of their tasks. AI is becoming a constant collaborator, but it still needs setup, supervision, validation, and human judgment. That gap is [&#8230;] The post Azure Cosmos DB in the Agentic Era: Data Tools for Developers and AI Agents appeared first on Azure Cosmos DB Blog .",
+    "preview": "coming soon",
+    "website": "https://devblogs.microsoft.com/cosmosdb/",
+    "author": "Sajeetharan Sinnathurai",
+    "source": "https://devblogs.microsoft.com/cosmosdb/azure-cosmos-db-in-the-agentic-era-data-tools-for-developers-and-ai-agents",
+    "date": "2026-08-18",
+    "tags": [
+      "blog",
       "microsoft"
     ]
   },
@@ -813,26 +852,6 @@
     ]
   },
   {
-    "title": "Analyze chat history in RAG Pattern App with Azure Cosmos DB and Microsoft Fabric",
-    "description": "This project is a demo from Fabric Conference Europe 2024 and demonstrates how to do a deep analysis of chat history in a RAG Pattern application using Azure Cosmos DB and Microsoft Fabric. The project includes a sample dataset of chat history from a RAG Pattern application for a retail store application. The chat history is stored in AzureCosmos DB and is replicated to Microsoft Fabric One Lake using Fabric Mirroring. Microsoft Fabric is used for analyzing the chat data to provide insights and recommendations.",
-    "preview": "coming soon",
-    "website": "https://github.com/HosseinHeris",
-    "author": "Hossein Heris",
-    "source": "https://github.com/microsoft/fabric-cosmosdb-chat-analytics",
-    "date": "2024-10-02",
-    "tags": [
-      "generativeai",
-      "python",
-      "jupyternotebook",
-      "analytics",
-      "embedding-text-3",
-      "openai",
-      "Microsoft",
-      "vectorcosmosnosql",
-      "example"
-    ]
-  },
-  {
     "title": "Durable Multi-Agents using Semantic Kernel with Azure Durable Functions",
     "description": "This sample, demonstrates Durable Multi Agents using Azure Durable Functions with Semantic Kernel to build Multi-Agents workflows. This is a fully functional end-to-end sample with an ASP.NET Blazor travel website as the front end.",
     "preview": "coming soon",
@@ -1094,23 +1113,6 @@
       "vectorcosmosnosql",
       "openai",
       "video"
-    ]
-  },
-  {
-    "title": "LlamaIndex Vector Store integration for Azure Cosmos DB for NoSQL for Python",
-    "description": "Documentation and samples in Python for the LlamaIndex vector store integration with Azure Cosmos DB for NoSQL.",
-    "preview": "coming soon",
-    "website": "https://developers.llamaindex.ai/",
-    "author": "LlamaIndex Team",
-    "source": "https://developers.llamaindex.ai/python/examples/vector_stores/AzureCosmosDBNoSqlDemo/",
-    "date": "2024-09-01",
-    "tags": [
-      "documentation",
-      "generativeai",
-      "python",
-      "vectorcosmosnosql",
-      "llamaindex",
-      "microsoft"
     ]
   },
   {
@@ -1991,30 +1993,6 @@
       "blog",
       "vectorcosmosmongo",
       "microsoft"
-    ]
-  },
-  {
-    "title": "Azure Cosmos DB NoSQL API & Azure OpenAI Service - Payment & Transaction Processing",
-    "description": "This repository provides a code sample in .NET on how you might use a combination of Azure Functions, Azure Cosmos DB, Azure OpenAI Service and Azure Event Hubs to implement a payment tracking process.",
-    "preview": "coming soon",
-    "website": "https://github.com/fonsecamar",
-    "author": "Marcelo Fonseca",
-    "source": "https://github.com/Azure/Real-time-Payment-Transaction-Processing-at-Scale",
-    "date": "2023-09-25",
-    "tags": [
-      "generativeai",
-      "csharp",
-      "gpt35",
-      "embedding-ada",
-      "ragPattern",
-      "aks",
-      "eventhub",
-      "swa",
-      "openai",
-      "microsoft",
-      "appinsights",
-      "vectorcosmosnosql",
-      "example"
     ]
   },
   {
