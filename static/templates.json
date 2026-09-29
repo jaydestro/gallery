@@ -1,5 +1,18 @@
 [
   {
+    "title": "Partitioning and horizontal scaling - Azure Cosmos DB",
+    "description": "Azure Cosmos DB uses partitioning to scale containers to meet application performance needs. Learn how partition keys distribute and locate data, and how partitioning supports horizontal scaling.",
+    "preview": "coming soon",
+    "website": "https://learn.microsoft.com/azure/cosmos-db",
+    "author": "Azure Cosmos DB Team",
+    "source": "https://learn.microsoft.com/azure/cosmos-db/partitioning",
+    "date": "2026-09-29",
+    "tags": [
+      "documentation",
+      "microsoft"
+    ]
+  },
+  {
     "title": "Azure Cosmos DB Agent Kit",
     "description": "A collection of skills for AI coding agents working with Azure Cosmos DB. Skills are packaged instructions and scripts that extend agent capabilities with 45+ best practices rules across 8 categories including data modeling, partition key design, query optimization, and SDK best practices.",
     "preview": "coming soon",
